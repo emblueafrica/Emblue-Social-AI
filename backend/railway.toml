@@ -1,0 +1,45 @@
+# railway.toml — Social Emblue AI (TypeScript)
+# Docs: https://docs.railway.app/reference/config-as-code
+
+[build]
+builder      = "NIXPACKS"
+buildCommand = "npm install --legacy-peer-deps && npm run build"
+
+[deploy]
+startCommand        = "npm start"
+healthcheckPath     = "/"
+healthcheckTimeout  = 30
+restartPolicyType   = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+[[services]]
+name = "social-emblue-api"
+
+# ── ENVIRONMENT VARIABLES (set in Railway dashboard) ─────────────────────────
+# Do NOT put actual values here — set them in Railway → Variables tab
+#
+# Required at launch:
+#   PORT                       (Railway sets this automatically)
+#   NODE_ENV                   = production
+#   FRONTEND_URL               = https://your-vercel-app.vercel.app
+#   ANTHROPIC_API_KEY          = sk-ant-...
+#   DATABASE_URL               = postgresql://...supabase.co:5432/postgres
+#   SUPABASE_URL               = https://xxx.supabase.co
+#   SUPABASE_ANON_KEY          = eyJ...
+#   SUPABASE_SERVICE_ROLE_KEY  = eyJ...
+#   SUPABASE_JWT_SECRET        = your-jwt-secret
+#
+# Add as you connect each platform:
+#   META_APP_ID, META_APP_SECRET, META_REDIRECT_URI, META_VERIFY_TOKEN
+#   X_CLIENT_ID, X_CLIENT_SECRET, X_REDIRECT_URI, X_BEARER_TOKEN
+#   TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI
+#
+# Add in Month 2:
+#   REDIS_URL          (Upstash — activates BullMQ queue)
+#   APIFY_API_TOKEN    (activates social scraper)
+#
+# Add when ready:
+#   RESEND_API_KEY, EMAIL_FROM
+#   CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
+#   OPENAI_API_KEY     (activates semantic deduplication)
+#   LINK_BASE_URL      = https://seai.link

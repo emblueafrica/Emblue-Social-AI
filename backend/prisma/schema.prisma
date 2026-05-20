@@ -1,0 +1,698 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Platform {
+  instagram
+  facebook
+  x
+  tiktok
+  youtube
+  reddit
+  whatsapp
+
+  @@map("platform_enum")
+}
+
+enum Sentiment {
+  positive
+  neutral
+  negative
+
+  @@map("sentiment_enum")
+}
+
+enum Intent {
+  inquiry
+  complaint
+  praise
+  purchase_intent
+  objection
+  neutral
+
+  @@map("intent_enum")
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  posted
+  escalated
+
+  @@map("approval_status")
+}
+
+enum PlatformRole {
+  super_admin
+  platform_admin
+
+  @@map("platform_role")
+}
+
+enum BrandRole {
+  client_owner
+  client_member
+  client_viewer
+  client_approver
+
+  @@map("brand_role")
+}
+
+enum BrandAccountType {
+  b2b_licensed
+  b2c_managed
+  internal
+
+  @@map("brand_account_type")
+}
+
+enum AppUserStatus {
+  pending
+  active
+  suspended
+  rejected
+
+  @@map("app_user_status")
+}
+
+enum SignupStatus {
+  pending
+  approved
+  rejected
+
+  @@map("signup_status")
+}
+
+enum TeamInvitationStatus {
+  pending
+  accepted
+  revoked
+  expired
+
+  @@map("team_invitation_status")
+}
+
+model Brand {
+  brandId           Int              @id @default(autoincrement()) @map("brand_id")
+  name              String
+  slug              String           @unique
+  accountType       BrandAccountType @default(b2b_licensed) @map("account_type")
+  campaignObjective String?          @map("campaign_objective")
+  tone              String?
+  watchlistKeywords String[]         @default([]) @map("watchlist_keywords")
+  ownerUserId       String?          @map("owner_user_id") @db.Uuid
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("brands")
+}
+
+model AppUser {
+  userId    String        @id @map("user_id") @db.Uuid
+  email     String        @unique
+  fullName  String?       @map("full_name")
+  phone     String?
+  status    AppUserStatus @default(active)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("app_users")
+}
+
+model PlatformUser {
+  platformUserId BigInt       @id @default(autoincrement()) @map("platform_user_id")
+  userId         String       @map("user_id") @db.Uuid
+  role           PlatformRole
+  isActive       Boolean      @default(true) @map("is_active")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy      String?      @map("created_by") @db.Uuid
+
+  @@unique([userId, role])
+  @@index([userId, isActive], map: "idx_platform_users_user")
+  @@map("platform_users")
+}
+
+model BrandMembership {
+  membershipId BigInt    @id @default(autoincrement()) @map("membership_id")
+  brandId      Int       @map("brand_id")
+  userId       String    @map("user_id") @db.Uuid
+  role         BrandRole @default(client_owner)
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy    String?   @map("created_by") @db.Uuid
+
+  @@unique([brandId, userId])
+  @@index([userId, isActive], map: "idx_brand_memberships_user")
+  @@index([brandId, isActive], map: "idx_brand_memberships_brand")
+  @@map("brand_memberships")
+}
+
+model ClientSignupRequest {
+  requestId            BigInt           @id @default(autoincrement()) @map("request_id")
+  userId               String           @map("user_id") @db.Uuid
+  email                String
+  contactName          String           @map("contact_name")
+  companyName          String           @map("company_name")
+  website              String?
+  industry             String?
+  teamSize             String?          @map("team_size")
+  socialHandles        Json             @default("{}") @map("social_handles")
+  goals                Json             @default("[]")
+  requestedPlan        String?          @map("requested_plan")
+  requestedAccountType BrandAccountType @default(b2b_licensed) @map("requested_account_type")
+  requestedPlatforms   String[]         @default([]) @map("requested_platforms")
+  billingNotes         String?          @map("billing_notes")
+  status               SignupStatus     @default(pending)
+  reviewedBy           String?          @map("reviewed_by") @db.Uuid
+  reviewedAt           DateTime?        @map("reviewed_at") @db.Timestamptz(6)
+  rejectionReason      String?          @map("rejection_reason")
+  brandId              Int?             @map("brand_id")
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, createdAt], map: "idx_client_signup_requests_status")
+  @@index([userId, status], map: "idx_client_signup_requests_user")
+  @@map("client_signup_requests")
+}
+
+model AuditLog {
+  auditId           BigInt        @id @default(autoincrement()) @map("audit_id")
+  actorUserId       String?       @map("actor_user_id") @db.Uuid
+  actorPlatformRole PlatformRole? @map("actor_platform_role")
+  action            String
+  resourceType      String        @map("resource_type")
+  resourceId        String?       @map("resource_id")
+  brandId           Int?          @map("brand_id")
+  targetUserId      String?       @map("target_user_id") @db.Uuid
+  metadata          Json          @default("{}")
+  ipAddress         String?       @map("ip_address")
+  userAgent         String?       @map("user_agent")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([actorUserId, createdAt], map: "idx_audit_logs_actor")
+  @@index([brandId, createdAt], map: "idx_audit_logs_brand")
+  @@index([targetUserId, createdAt], map: "idx_audit_logs_target_user")
+  @@index([action, createdAt], map: "idx_audit_logs_action")
+  @@map("audit_logs")
+}
+
+model TeamInvitation {
+  invitationId BigInt               @id @default(autoincrement()) @map("invitation_id")
+  brandId      Int                  @map("brand_id")
+  email        String
+  fullName     String?              @map("full_name")
+  role         String               @default("client_member")
+  tokenHash    String               @unique @map("token_hash")
+  status       TeamInvitationStatus @default(pending)
+  invitedBy    String               @map("invited_by") @db.Uuid
+  acceptedBy   String?              @map("accepted_by") @db.Uuid
+  acceptedAt   DateTime?            @map("accepted_at") @db.Timestamptz(6)
+  expiresAt    DateTime             @map("expires_at") @db.Timestamptz(6)
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([brandId, status], map: "idx_team_invitations_brand")
+  @@index([email, status], map: "idx_team_invitations_email")
+  @@map("team_invitations")
+}
+
+model BrandToolAccess {
+  accessId    BigInt    @id @default(autoincrement()) @map("access_id")
+  brandId     Int       @map("brand_id")
+  toolId      String    @map("tool_id")
+  isActive    Boolean   @default(true) @map("is_active")
+  planName    String?   @map("plan_name")
+  activatedAt DateTime  @default(now()) @map("activated_at") @db.Timestamptz(6)
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz(6)
+
+  @@unique([brandId, toolId])
+  @@index([brandId, isActive], map: "idx_brand_tool_access_brand")
+  @@map("brand_tool_access")
+}
+
+model SocialMessage {
+  messageId    BigInt                       @id @default(autoincrement()) @map("message_id")
+  brandId      Int                          @map("brand_id")
+  platform     Platform
+  kind         String?                      @default("comment")
+  externalId   String?                      @map("external_id")
+  text         String
+  authorHandle String?                      @map("author_handle")
+  authorIdHash String?                      @map("author_id_hash")
+  url          String?
+  sentiment    Sentiment?
+  intent       Intent?
+  urgencyScore Int?                         @map("urgency_score")
+  topics       String[]                     @default([])
+  embedding    Unsupported("vector(1536)")?
+  rawMetrics   Json                         @default("{}") @map("raw_metrics")
+  raw          Json                         @default("{}")
+  capturedAt   DateTime                     @default(now()) @map("captured_at") @db.Timestamptz(6)
+
+  @@unique([brandId, platform, externalId])
+  @@index([brandId, capturedAt], map: "idx_msgs_brand")
+  @@index([brandId, sentiment], map: "idx_msgs_sentiment")
+  @@index([brandId, intent], map: "idx_msgs_intent")
+  @@map("social_messages")
+}
+
+model KeywordGroup {
+  groupId               BigInt    @id @default(autoincrement()) @map("group_id")
+  brandId               Int       @map("brand_id")
+  name                  String
+  keywords              String[]  @default([])
+  platforms             String[]  @default([])
+  mode                  String    @default("realtime")
+  dateFrom              DateTime? @map("date_from") @db.Date
+  dateTo                DateTime? @map("date_to") @db.Date
+  alertUrgencyThreshold Int?      @default(4) @map("alert_urgency_threshold")
+  alertIntents          String[]  @default([]) @map("alert_intents")
+  isActive              Boolean?  @default(true) @map("is_active")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastRunAt             DateTime? @map("last_run_at") @db.Timestamptz(6)
+
+  @@index([brandId, isActive], map: "idx_keyword_groups_brand")
+  @@map("keyword_groups")
+}
+
+model SearchRun {
+  runId           BigInt    @id @default(autoincrement()) @map("run_id")
+  brandId         Int       @map("brand_id")
+  groupId         BigInt?   @map("group_id")
+  keywords        String[]  @default([])
+  platforms       String[]  @default([])
+  dateFrom        DateTime? @map("date_from") @db.Date
+  dateTo          DateTime? @map("date_to") @db.Date
+  mode            String    @default("historical")
+  status          String    @default("pending")
+  totalResults    Int?      @default(0) @map("total_results")
+  positiveCount   Int?      @default(0) @map("positive_count")
+  negativeCount   Int?      @default(0) @map("negative_count")
+  neutralCount    Int?      @default(0) @map("neutral_count")
+  peakDate        DateTime? @map("peak_date") @db.Date
+  peakCount       Int?      @default(0) @map("peak_count")
+  insightsSummary String?   @map("insights_summary")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz(6)
+  errorMsg        String?   @map("error_msg")
+
+  @@index([brandId, createdAt], map: "idx_search_runs_brand")
+  @@index([status], map: "idx_search_runs_status")
+  @@map("search_runs")
+}
+
+model SearchResult {
+  resultId       BigInt     @id @default(autoincrement()) @map("result_id")
+  runId          BigInt     @map("run_id")
+  brandId        Int        @map("brand_id")
+  groupId        BigInt?    @map("group_id")
+  matchedKeyword String?    @map("matched_keyword")
+  platform       Platform
+  text           String
+  authorHandle   String?    @map("author_handle")
+  authorIdExt    String?    @map("author_id_ext")
+  url            String?
+  postedAt       DateTime?  @map("posted_at") @db.Timestamptz(6)
+  sentiment      Sentiment?
+  intent         Intent?
+  urgencyScore   Int?       @map("urgency_score")
+  topics         String[]   @default([])
+  likes          Int?       @default(0)
+  repliesCount   Int?       @default(0) @map("replies_count")
+  shares         Int?       @default(0)
+  views          Int?       @default(0)
+  engaged        Boolean?   @default(false)
+  raw            Json       @default("{}")
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([runId, urgencyScore, postedAt], map: "idx_search_results_run")
+  @@index([brandId, createdAt], map: "idx_search_results_brand")
+  @@index([brandId, engaged, urgencyScore], map: "idx_search_results_feed")
+  @@map("search_results")
+}
+
+model SearchVolume {
+  volumeId      BigInt   @id @default(autoincrement()) @map("volume_id")
+  runId         BigInt   @map("run_id")
+  periodStart   DateTime @map("period_start") @db.Date
+  periodEnd     DateTime @map("period_end") @db.Date
+  periodType    String   @default("day") @map("period_type")
+  mentionCount  Int?     @default(0) @map("mention_count")
+  positiveCount Int?     @default(0) @map("positive_count")
+  negativeCount Int?     @default(0) @map("negative_count")
+  neutralCount  Int?     @default(0) @map("neutral_count")
+
+  @@index([runId, periodStart], map: "idx_search_volume_run")
+  @@map("search_volume")
+}
+
+model Cluster {
+  clusterId        BigInt   @id @default(autoincrement()) @map("cluster_id")
+  brandId          Int      @map("brand_id")
+  label            String
+  opportunityScore Int?     @default(0) @map("opportunity_score")
+  messageCount     Int?     @default(0) @map("message_count")
+  topPhrases       String[] @default([]) @map("top_phrases")
+  recommendations  Json     @default("[]")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("clusters")
+}
+
+model ClusterItem {
+  id        BigInt  @id @default(autoincrement())
+  clusterId BigInt? @map("cluster_id")
+  messageId BigInt? @map("message_id")
+
+  @@map("cluster_items")
+}
+
+model ContentRecommendation {
+  recId     BigInt    @id @default(autoincrement()) @map("rec_id")
+  brandId   Int?      @map("brand_id")
+  clusterId BigInt?   @map("cluster_id")
+  platform  Platform?
+  format    String?
+  headline  String?
+  brief     String?
+  status    String?   @default("idea")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("content_recommendations")
+}
+
+model ReplySuggestion {
+  suggestionId BigInt          @id @default(autoincrement()) @map("suggestion_id")
+  brandId      Int?            @map("brand_id")
+  messageId    BigInt?         @map("message_id")
+  text         String
+  tone         String?
+  confidence   Int?
+  riskFlags    Json            @default("[]") @map("risk_flags")
+  status       ApprovalStatus? @default(pending)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("reply_suggestions")
+}
+
+model Funnel {
+  funnelId   BigInt    @id @default(autoincrement()) @map("funnel_id")
+  brandId    Int?      @map("brand_id")
+  platform   Platform?
+  keywords   String[]  @default([])
+  maxPerHour Int?      @default(20) @map("max_per_hour")
+  delaySec   Int?      @default(30) @map("delay_sec")
+  destUrl    String?   @map("dest_url")
+  isActive   Boolean?  @default(false) @map("is_active")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("funnels")
+}
+
+model DmEvent {
+  eventId      BigInt    @id @default(autoincrement()) @map("event_id")
+  brandId      Int?      @map("brand_id")
+  funnelId     BigInt?   @map("funnel_id")
+  messageId    BigInt?   @map("message_id")
+  authorHandle String?   @map("author_handle")
+  dmSentAt     DateTime? @map("dm_sent_at") @db.Timestamptz(6)
+  openedAt     DateTime? @map("opened_at") @db.Timestamptz(6)
+  clickedAt    DateTime? @map("clicked_at") @db.Timestamptz(6)
+  converted    Boolean?  @default(false)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("dm_events")
+}
+
+model KpiSnapshot {
+  snapshotId   BigInt    @id @default(autoincrement()) @map("snapshot_id")
+  brandId      Int?      @map("brand_id")
+  periodStart  DateTime? @map("period_start") @db.Date
+  periodEnd    DateTime? @map("period_end") @db.Date
+  listeningKpi Decimal?  @map("listening_kpi") @db.Decimal(5, 2)
+  replyKpi     Decimal?  @map("reply_kpi") @db.Decimal(5, 2)
+  funnelKpi    Decimal?  @map("funnel_kpi") @db.Decimal(5, 2)
+  riskEvents   Int?      @default(0) @map("risk_events")
+  kpis         Json      @default("[]")
+  alerts       Json      @default("[]")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("kpi_snapshots")
+}
+
+model TrackedLink {
+  linkId      BigInt    @id @default(autoincrement()) @map("link_id")
+  brandId     Int?      @map("brand_id")
+  shortCode   String    @unique @map("short_code")
+  destUrl     String    @map("dest_url")
+  campaign    String?
+  platform    Platform?
+  contentType String?   @map("content_type")
+  clicks      Int       @default(0)
+  conversions Int       @default(0)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("tracked_links")
+}
+
+model LinkEvent {
+  eventId   BigInt   @id @default(autoincrement()) @map("event_id")
+  linkId    BigInt?  @map("link_id")
+  brandId   Int?     @map("brand_id")
+  eventType String?  @default("click") @map("event_type")
+  ipHash    String?  @map("ip_hash")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("link_events")
+}
+
+model CreativeScore {
+  scoreId   BigInt    @id @default(autoincrement()) @map("score_id")
+  brandId   Int?      @map("brand_id")
+  platform  Platform?
+  caption   String
+  grade     String?
+  score     Int?
+  analysis  Json      @default("{}")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("creative_scores")
+}
+
+model InsightRun {
+  runId             BigInt   @id @default(autoincrement()) @map("run_id")
+  brandId           Int?     @map("brand_id")
+  messagesProcessed Int?     @default(0) @map("messages_processed")
+  faqsFound         Int?     @default(0) @map("faqs_found")
+  painPoints        Int?     @default(0) @map("pain_points")
+  summary           String?
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("insight_runs")
+}
+
+model FaqItem {
+  faqId     BigInt   @id @default(autoincrement()) @map("faq_id")
+  brandId   Int?     @map("brand_id")
+  runId     BigInt?  @map("run_id")
+  question  String
+  frequency Int?     @default(1)
+  platforms String[] @default([])
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("faq_items")
+}
+
+model PainPoint {
+  ppId      BigInt   @id @default(autoincrement()) @map("pp_id")
+  brandId   Int?     @map("brand_id")
+  runId     BigInt?  @map("run_id")
+  text      String
+  severity  String?
+  frequency Int?     @default(1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("pain_points")
+}
+
+model WarRoom {
+  roomId    BigInt   @id @default(autoincrement()) @map("room_id")
+  brandId   Int?     @map("brand_id")
+  health    String?
+  summary   String?
+  alerts    Json     @default("[]")
+  metrics   Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("war_rooms")
+}
+
+model ConnectedAccount {
+  accountId      BigInt    @id @default(autoincrement()) @map("account_id")
+  brandId        Int       @map("brand_id")
+  platform       Platform
+  accessToken    String    @map("access_token")
+  refreshToken   String?   @map("refresh_token")
+  tokenExpiresAt DateTime? @map("token_expires_at") @db.Timestamptz(6)
+  accountHandle  String?   @map("account_handle")
+  accountIdExt   String?   @map("account_id_ext")
+  scope          String?
+  isActive       Boolean   @default(true) @map("is_active")
+  connectedAt    DateTime  @default(now()) @map("connected_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([brandId, platform])
+  @@map("connected_accounts")
+}
+
+model CampaignMetric {
+  metricId  BigInt    @id @default(autoincrement()) @map("metric_id")
+  brandId   Int?      @map("brand_id")
+  campaign  String?
+  platform  Platform?
+  metric    String
+  value     Decimal?  @db.Decimal
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("campaign_metrics")
+}
+
+model TriggerRule {
+  ruleId     BigInt   @id @default(autoincrement()) @map("rule_id")
+  brandId    Int?     @map("brand_id")
+  keyword    String
+  action     String
+  confidence Int?     @default(80)
+  isActive   Boolean? @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("trigger_rules")
+}
+
+model ApprovalQueue {
+  queueId    BigInt          @id @default(autoincrement()) @map("queue_id")
+  brandId    Int?            @map("brand_id")
+  platform   Platform?
+  replyText  String?         @map("reply_text")
+  confidence Int?
+  status     ApprovalStatus? @default(pending)
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("approval_queue")
+}
+
+model ReplyTemplate {
+  templateId      BigInt    @id @default(autoincrement()) @map("template_id")
+  brandId         Int?      @map("brand_id")
+  name            String    @default("Default template")
+  platform        Platform?
+  triggerKeywords String[]  @default([]) @map("trigger_keywords")
+  templateText    String?   @map("template_text")
+  isActive        Boolean?  @default(true) @map("is_active")
+  useCount        Int?      @default(0) @map("use_count")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("reply_templates")
+}
+
+model EngageCampaign {
+  campaignId         BigInt    @id @default(autoincrement()) @map("campaign_id")
+  brandId            Int       @map("brand_id")
+  name               String
+  platform           Platform?
+  postIds            String[]  @default([]) @map("post_ids")
+  keywords           String[]  @default([])
+  engageAll          Boolean?  @default(true) @map("engage_all")
+  engageNegative     Boolean?  @default(false) @map("engage_negative")
+  tone               String?   @default("warm and enthusiastic")
+  replyTemplate      String?   @map("reply_template")
+  fallbackTemplate   String?   @map("fallback_template")
+  ctaLink            String?   @map("cta_link")
+  imageUrl           String?   @map("image_url")
+  trackedLinkCode    String?   @map("tracked_link_code")
+  autoFireThreshold  Int?      @default(85) @map("auto_fire_threshold")
+  maxPerHour         Int?      @default(50) @map("max_per_hour")
+  isActive           Boolean?  @default(true) @map("is_active")
+  totalSent          Int?      @default(0) @map("total_sent")
+  platformAllocation Json      @default("{\"instagram\":34,\"facebook\":33,\"tiktok\":33}") @map("platform_allocation")
+  includeLikers      Boolean?  @default(true) @map("include_likers")
+  includeCommenters  Boolean?  @default(true) @map("include_commenters")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("engage_campaigns")
+}
+
+model AutoEngagement {
+  engagementId BigInt    @id @default(autoincrement()) @map("engagement_id")
+  brandId      Int?      @map("brand_id")
+  campaignId   BigInt?   @map("campaign_id")
+  platform     Platform?
+  authorHandle String?   @map("author_handle")
+  originalText String?   @map("original_text")
+  replyText    String?   @map("reply_text")
+  imageUrl     String?   @map("image_url")
+  trackedLink  String?   @map("tracked_link")
+  status       String?
+  firedAt      DateTime? @map("fired_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("auto_engagements")
+}
+
+model CampaignAsset {
+  assetId    BigInt   @id @default(autoincrement()) @map("asset_id")
+  brandId    Int?     @map("brand_id")
+  campaignId String?  @map("campaign_id")
+  imageUrl   String   @map("image_url")
+  isActive   Boolean? @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("campaign_assets")
+}
+
+model CampaignPostUrl {
+  urlId             BigInt    @id @default(autoincrement()) @map("url_id")
+  brandId           Int       @map("brand_id")
+  campaignId        BigInt?   @map("campaign_id")
+  platform          Platform
+  postUrl           String    @map("post_url")
+  postIdExt         String?   @map("post_id_ext")
+  includeCommenters Boolean?  @default(true) @map("include_commenters")
+  includeLikers     Boolean?  @default(true) @map("include_likers")
+  status            String?   @default("pending")
+  totalFetched      Int?      @default(0) @map("total_fetched")
+  errorMsg          String?   @map("error_msg")
+  submittedAt       DateTime  @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  completedAt       DateTime? @map("completed_at") @db.Timestamptz(6)
+
+  @@index([brandId, status], map: "idx_post_urls_brand")
+  @@map("campaign_post_urls")
+}
+
+model CampaignPostEngager {
+  engagerId    BigInt    @id @default(autoincrement()) @map("engager_id")
+  brandId      Int?      @map("brand_id")
+  campaignId   String    @map("campaign_id")
+  platform     Platform
+  action       String
+  authorId     String    @map("author_id")
+  authorHandle String?   @map("author_handle")
+  originalText String?   @map("original_text")
+  status       String?   @default("pending")
+  processedAt  DateTime? @map("processed_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([brandId, campaignId, platform, authorId])
+  @@index([brandId, campaignId, status], map: "idx_post_engagers_campaign")
+  @@map("campaign_post_engagers")
+}

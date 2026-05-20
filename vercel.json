@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "name": "social-emblue-ai-frontend",
+  "builds": [
+    { "src": "frontend/app.html",              "use": "@vercel/static" },
+    { "src": "frontend/client-dashboard.html", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/",        "dest": "/frontend/app.html" },
+    { "src": "/client",  "dest": "/frontend/client-dashboard.html" },
+    { "src": "/app",     "dest": "/frontend/app.html" },
+    { "src": "/(.*)",    "dest": "/frontend/$1" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options",        "value": "DENY" },
+        { "key": "X-XSS-Protection",       "value": "1; mode=block" },
+        { "key": "Referrer-Policy",        "value": "strict-origin-when-cross-origin" }
+      ]
+    }
+  ]
+}

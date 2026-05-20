@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Social Emblue — Client Portal</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--blue:#0A83FF;--blue-l:#E6F3FF;--blue-d:#005BB5;--green:#27AE60;--green-l:#E8F8F0;--amber:#FEA802;--amber-l:#FFF5E0;--red:#E74C3C;--red-l:#FDEDEC;--bg:#F5F7FA;--white:#fff;--border:#E8ECF0;--text:#1A202C;--text2:#6B7280;--text3:#9CA3AF;--font:'Inter',sans-serif}
+html,body{height:100%;font-family:var(--font);font-size:14px;color:var(--text);background:var(--bg)}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.login{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0A83FF,#005BB5)}
+.lbox{background:#fff;border-radius:16px;padding:48px 40px;width:400px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.llogo{text-align:center;margin-bottom:32px}
+.llogo-i{width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#0A83FF,#005BB5);display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:18px;margin-bottom:12px}
+.llogo h1{font-size:20px;font-weight:700}.llogo p{font-size:13px;color:var(--text2);margin-top:4px}
+.fld{margin-bottom:14px}.fld label{display:block;font-size:12px;font-weight:600;margin-bottom:5px}
+.fi{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:15px;font-family:var(--font);outline:none;transition:.15s}
+.fi:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(10,131,255,.12)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 16px;border-radius:6px;font-size:14px;font-weight:600;font-family:var(--font);cursor:pointer;border:none;transition:.15s;text-decoration:none;white-space:nowrap}
+.bp{background:var(--blue);color:#fff;width:100%;padding:12px}.bp:hover{background:var(--blue-d)}
+.bs{background:transparent;color:var(--blue);border:1.5px solid var(--blue)}.bs:hover{background:var(--blue-l)}
+.bg{background:transparent;color:var(--text2);border:1px solid var(--border)}.bg:hover{background:var(--bg)}
+.bsm{padding:5px 12px;font-size:12px}.bd{background:var(--red);color:#fff}
+.app{display:none;min-height:100vh;flex-direction:column}.app.on{display:flex}
+.hdr{background:var(--white);border-bottom:1px solid var(--border);padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 3px rgba(0,0,0,.10);flex-shrink:0}
+.hdr-b{display:flex;align-items:center;gap:10px}
+.hdr-l{width:32px;height:32px;border-radius:8px;background:var(--blue);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px}
+.hdr-n{font-weight:700;font-size:15px}.hdr-bn{font-size:12px;color:var(--text2)}
+.hdr-r{display:flex;align-items:center;gap:10px}
+.live{display:flex;align-items:center;gap:6px;background:var(--green-l);color:var(--green);font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:bl 2s infinite}
+@keyframes bl{0%,100%{opacity:1}50%{opacity:.3}}
+.nav-t{background:var(--white);border-bottom:1px solid var(--border);padding:0 24px;display:flex;gap:4px;overflow-x:auto}
+.nt{padding:14px 16px;font-size:13px;font-weight:600;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;transition:.15s;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.nt:hover{color:var(--blue)}.nt.on{color:var(--blue);border-bottom-color:var(--blue)}
+.main{flex:1;overflow-y:auto;padding:24px}
+.vw{display:none}.vw.on{display:block;animation:fi .15s ease}
+@keyframes fi{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.ph{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px}
+.pt{font-size:22px;font-weight:800}.ps{font-size:13px;color:var(--text2);margin-top:4px}
+.pa{display:flex;gap:10px}
+.card{background:var(--white);border-radius:12px;border:1px solid var(--border);box-shadow:0 1px 3px rgba(0,0,0,.10);overflow:hidden}
+.ch{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.ct{font-size:14px;font-weight:700}.cb{padding:20px}
+.kg{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+.kc{background:var(--white);border-radius:12px;border:1px solid var(--border);box-shadow:0 1px 3px rgba(0,0,0,.10);padding:18px;position:relative;overflow:hidden}
+.kc::after{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.kc.bl::after{background:var(--blue)}.kc.gr::after{background:var(--green)}.kc.am::after{background:var(--amber)}.kc.rd::after{background:var(--red)}
+.kl{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.kv{font-size:30px;font-weight:800;line-height:1}.kd{font-size:12px;margin-top:6px}.kd.up{color:var(--green)}.kd.dn{color:var(--red)}
+.chip{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap}
+.cs{background:var(--green-l);color:var(--green)}.cd{background:var(--red-l);color:var(--red)}.cw{background:var(--amber-l);color:#7A4D00}.cp{background:var(--blue-l);color:var(--blue-d)}.cn{background:var(--bg);color:var(--text2);border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse}
+thead th{padding:10px 16px;text-align:left;font-size:12px;font-weight:600;color:var(--text2);background:var(--bg);border-bottom:1px solid var(--border);white-space:nowrap}
+tbody tr{border-bottom:1px solid var(--border);transition:background .1s}
+tbody tr:last-child{border-bottom:none}
+tbody tr:nth-child(even){background:#FAFBFC}
+tbody td{padding:12px 16px;font-size:13px;vertical-align:middle}
+.al{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-radius:6px;font-size:12px;margin-bottom:10px;border:1px solid}
+.al-i{background:var(--blue-l);border-color:#B3D8FF;color:var(--blue-d)}.al-s{background:var(--green-l);border-color:#A9DFBF;color:#1A5C38}.al-w{background:var(--amber-l);border-color:#FAE57E;color:#7A5900}
+.ri{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:12px}
+.ri:last-child{border-bottom:none}
+.ri-av{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;background:var(--blue-l);color:var(--blue-d)}
+.ri-meta{flex:1;min-width:0}.ri-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.ri-au{font-size:13px;font-weight:700}.ri-t{font-size:11px;color:var(--text3);margin-left:auto}
+.ri-orig{font-size:12px;color:var(--text2);background:var(--bg);padding:8px 10px;border-radius:6px;margin-bottom:6px}
+.ri-rep{font-size:12px;color:var(--text);padding:8px 10px;border-radius:6px;background:#EBF8FF;border-left:3px solid var(--blue)}
+.pc{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid var(--border)}
+.pc:last-child{border-bottom:none}
+.pi{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;color:#fff}
+.tpl{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:12px}
+.tpl:last-child{border-bottom:none}.tpl-b{flex:1}
+.kw-t{background:var(--blue-l);color:var(--blue-d);font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px}
+.faq-r{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
+.faq-r:last-child{border-bottom:none}.faq-n{font-size:16px;font-weight:800;color:var(--blue);width:24px;flex-shrink:0}
+.pp-r{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
+.pp-r:last-child{border-bottom:none}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px}
+.cc{height:220px;position:relative}
+.eta{width:100%;min-height:80px;border:1.5px solid var(--border);border-radius:6px;padding:10px;font-size:14px;font-family:var(--font);resize:vertical;outline:none}
+.eta:focus{border-color:var(--blue)}
+.fls{display:flex;flex-direction:column;gap:12px}
+.fl{display:flex;flex-direction:column;gap:4px}.fl label{font-size:12px;font-weight:600}
+@media(max-width:768px){.kg{grid-template-columns:1fr 1fr}.g2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div id="ls" class="login">
+  <div class="lbox">
+    <div class="llogo"><div class="llogo-i">SE</div><h1>Client Portal</h1><p>Sign in to view your campaign</p></div>
+    <div class="fld"><label>Email</label><input class="fi" type="email" id="em" value="client@brand.com"></div>
+    <div class="fld"><label>Password</label><input class="fi" type="password" id="pw" value="password"></div>
+    <button class="btn bp" onclick="login()" style="margin-top:4px">Sign In</button>
+    <p style="font-size:11px;color:var(--text3);text-align:center;margin-top:14px">Need access? Contact your account manager</p>
+  </div>
+</div>
+
+<div id="app" class="app">
+  <div class="hdr">
+    <div class="hdr-b">
+      <div class="hdr-l">SE</div>
+      <div><div class="hdr-n">Social Emblue</div><div class="hdr-bn" id="hbn">—</div></div>
+    </div>
+    <div class="hdr-r">
+      <div class="live" id="live-pill"><div class="dot"></div>Active</div>
+      <span style="font-size:12px;color:var(--text2)" id="hun">—</span>
+      <button class="btn bg bsm" onclick="logout()">Sign out</button>
+    </div>
+  </div>
+
+  <div class="nav-t">
+    <div class="nt on"  onclick="goTab('overview',this)">📊 Overview</div>
+    <div class="nt"     onclick="goTab('replies',this)">↩ Reply Activity</div>
+    <div class="nt"     onclick="goTab('insights',this)">🔬 Audience Insights</div>
+    <div class="nt"     onclick="goTab('connect',this)">🔗 Connected Accounts</div>
+    <div class="nt"     onclick="goTab('templates',this)">✏️ Reply Templates</div>
+    <div class="nt"     onclick="goTab('settings',this)">⚙ Settings</div>
+  </div>
+
+  <div class="main">
+
+    <!-- OVERVIEW -->
+    <div class="vw on" id="v-overview">
+      <div class="ph"><div><div class="pt">Campaign Overview</div><div class="ps">Your performance this week</div></div></div>
+      <div class="kg">
+        <div class="kc bl"><div class="kl">Messages Seen</div><div class="kv" id="k1">247</div><div class="kd up">+18% vs last week</div></div>
+        <div class="kc gr"><div class="kl">Replies Sent</div><div class="kv" id="k2">184</div><div class="kd up">+12% vs last week</div></div>
+        <div class="kc am"><div class="kl">Avg Response Time</div><div class="kv" id="k3">6 min</div><div class="kd">Target: under 30 min</div></div>
+        <div class="kc rd"><div class="kl">Open Enquiries</div><div class="kv" id="k4">14</div><div class="kd">Need follow-up</div></div>
+      </div>
+      <div class="g2">
+        <div class="card"><div class="ch"><span class="ct">📈 Weekly Activity</span></div><div class="cb"><div class="cc"><canvas id="c1"></canvas></div></div></div>
+        <div class="card"><div class="ch"><span class="ct">🌐 By Platform</span></div><div class="cb"><div class="cc"><canvas id="c2"></canvas></div></div></div>
+      </div>
+      <div class="g2">
+        <div class="card"><div class="ch"><span class="ct">🔥 Top Topics from Your Audience</span></div>
+          <table><thead><tr><th>Topic</th><th>Volume</th><th>Trend</th></tr></thead><tbody>
+            <tr><td style="font-weight:600">Health checkup pricing</td><td><span class="chip cp">89×</span></td><td style="color:var(--green)">↑</td></tr>
+            <tr><td style="font-weight:600">HMO insurance questions</td><td><span class="chip cp">74×</span></td><td style="color:var(--green)">↑</td></tr>
+            <tr><td style="font-weight:600">Weekend appointments</td><td><span class="chip cn">52×</span></td><td>→</td></tr>
+            <tr><td style="font-weight:600">Diabetes screening</td><td><span class="chip cn">38×</span></td><td style="color:var(--green)">↑</td></tr>
+          </tbody></table>
+        </div>
+        <div class="card"><div class="ch"><span class="ct">😊 Audience Sentiment</span></div><div class="cb">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;width:70px;color:var(--text2)">Positive</span><div style="flex:1;height:10px;background:var(--bg);border-radius:5px;overflow:hidden"><div style="height:100%;background:var(--green);border-radius:5px;width:62%"></div></div><span style="font-size:12px;font-weight:700;color:var(--green);width:30px">62%</span></div>
+            <div style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;width:70px;color:var(--text2)">Neutral</span><div style="flex:1;height:10px;background:var(--bg);border-radius:5px;overflow:hidden"><div style="height:100%;background:var(--text3);border-radius:5px;width:28%"></div></div><span style="font-size:12px;font-weight:700;width:30px">28%</span></div>
+            <div style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;width:70px;color:var(--text2)">Negative</span><div style="flex:1;height:10px;background:var(--bg);border-radius:5px;overflow:hidden"><div style="height:100%;background:var(--red);border-radius:5px;width:10%"></div></div><span style="font-size:12px;font-weight:700;color:var(--red);width:30px">10%</span></div>
+          </div>
+          <div style="margin-top:12px;padding:10px;background:var(--green-l);border-radius:6px;font-size:12px;color:#1A5C38">✓ Audience sentiment is positive — your community is engaged.</div>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- REPLIES -->
+    <div class="vw" id="v-replies">
+      <div class="ph"><div><div class="pt">Reply Activity</div><div class="ps">All replies sent on your behalf — reviewed before posting</div></div></div>
+      <div class="card"><div class="ch" style="background:var(--bg)"><span style="font-size:12px;font-weight:700;color:var(--text2)">Original Comment → Reply Sent</span></div><div id="rlist"></div></div>
+    </div>
+
+    <!-- INSIGHTS -->
+    <div class="vw" id="v-insights">
+      <div class="ph"><div><div class="pt">Audience Insights</div><div class="ps">What your audience is asking and feeling — updated every 24 hours</div></div>
+        <div class="pa"><button class="btn bs bsm" onclick="alert('Report will be emailed to you')">📄 Email Report</button></div>
+      </div>
+      <div class="g3">
+        <div class="kc bl"><div class="kl">FAQs Found</div><div class="kv">24</div></div>
+        <div class="kc rd"><div class="kl">Pain Points</div><div class="kv">11</div><div class="kd dn">Need attention</div></div>
+        <div class="kc gr"><div class="kl">Positive Signals</div><div class="kv">38</div><div class="kd up">Strong</div></div>
+      </div>
+      <div class="g2">
+        <div class="card"><div class="ch"><span class="ct">❓ Top Questions from Your Audience</span></div><div class="cb" style="padding:12px 20px" id="faqlist"></div></div>
+        <div class="card"><div class="ch"><span class="ct">⚡ Pain Points to Address</span></div><div class="cb" style="padding:12px 20px" id="painlist"></div></div>
+      </div>
+      <div class="card"><div class="ch"><span class="ct">📋 What This Means for You</span></div>
+        <div class="cb" style="font-size:13px;line-height:1.8;color:var(--text2)">
+          <p style="margin-bottom:10px">Your audience is <strong style="color:var(--text)">highly interested in pricing transparency</strong>. The top two questions (pricing + HMO) account for 60%+ of all enquiries. A single pinned FAQ post addressing both could reduce enquiry volume significantly and free up reply bandwidth.</p>
+          <p style="margin-bottom:10px">The <strong style="color:var(--red)">phone line complaint (47 mentions)</strong> is actively preventing conversions. Adding a WhatsApp booking option or a prominent "Book Online" button would likely have the biggest immediate impact on your conversion rate.</p>
+          <p>Positive sentiment is strong at 62%. Your audience trusts your brand — lean into patient stories and testimonials to amplify this further.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONNECT -->
+    <div class="vw" id="v-connect">
+      <div class="ph"><div><div class="pt">Connected Accounts</div><div class="ps">Connect your platforms so we can monitor and reply to your comments in real time</div></div></div>
+      <div class="al al-i">ℹ️ Connecting grants read access to comments and the ability to reply on your behalf. We never access your password. Disconnect any time.</div>
+      <div class="card" id="clist"></div>
+      <div class="card" style="margin-top:16px"><div class="ch"><span class="ct">What Each Connection Enables</span></div>
+        <table><thead><tr><th>Platform</th><th>We Can Do</th><th>We Cannot Do</th></tr></thead><tbody>
+          <tr><td style="font-weight:600">Instagram</td><td>Read comments, post replies, pull insights</td><td>Access DMs without approval, post original content</td></tr>
+          <tr><td style="font-weight:600">Facebook</td><td>Read Page comments, post replies</td><td>Access personal profile or manage ads</td></tr>
+          <tr><td style="font-weight:600">X</td><td>Read mentions, post replies</td><td>Access DMs without approval</td></tr>
+          <tr><td style="font-weight:600">TikTok</td><td>Read comments, pull analytics</td><td>Automated reply posting (manual copy only)</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+
+    <!-- TEMPLATES -->
+    <div class="vw" id="v-templates">
+      <div class="ph"><div><div class="pt">Reply Templates</div><div class="ps">Your keywords get this exact reply — takes priority over AI responses</div></div>
+        <div class="pa"><button class="btn bp bsm" onclick="showAddTpl()">+ Add Template</button></div>
+      </div>
+      <div class="al al-s">✓ Use {{handle}} for the commenter username and {{link}} for your booking link.</div>
+      <div class="card" id="tpllist"></div>
+      <div class="card" id="add-tpl" style="display:none;margin-top:16px">
+        <div class="ch"><span class="ct">+ New Template</span></div>
+        <div class="cb fls">
+          <div class="fl"><label>Trigger Keywords (comma-separated)</label><input class="fi" id="tk" placeholder="how much, price, cost, package"></div>
+          <div class="fl"><label>Platform</label><select class="fi" id="tp" style="padding:8px 10px"><option value="">All platforms</option><option value="instagram">Instagram</option><option value="x">X</option><option value="tiktok">TikTok</option><option value="facebook">Facebook</option></select></div>
+          <div class="fl"><label>Reply Template</label><textarea class="eta" id="tt" placeholder="Hi {{handle}}! Our packages start from ₦15,000. Book here: {{link}} 😊"></textarea></div>
+          <div style="display:flex;gap:10px">
+            <button class="btn bp" onclick="saveTpl()">Save Template</button>
+            <button class="btn bg" onclick="document.getElementById('add-tpl').style.display='none'">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="vw" id="v-settings">
+      <div class="ph"><div><div class="pt">Settings</div><div class="ps">Brand preferences and notification settings</div></div>
+        <div class="pa"><button class="btn bp bsm" onclick="alert('Settings saved!')">💾 Save</button></div>
+      </div>
+      <div class="g2">
+        <div class="card"><div class="ch"><span class="ct">Brand Preferences</span></div>
+          <div class="cb fls">
+            <div class="fl"><label>Brand Name</label><input class="fi" value="VMC Family Health Centre"></div>
+            <div class="fl"><label>Preferred Tone</label><select class="fi"><option>Friendly and professional</option><option>Formal</option><option>Warm and conversational</option></select></div>
+            <div class="fl"><label>Booking Link</label><input class="fi" placeholder="https://yourbrand.com/book"></div>
+            <div class="fl"><label>WhatsApp Number</label><input class="fi" placeholder="+234 800 000 0000"></div>
+          </div>
+        </div>
+        <div class="card"><div class="ch"><span class="ct">Notifications</span></div>
+          <div class="cb fls">
+            <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer"><input type="checkbox" checked> Weekly performance report (email)</label>
+            <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer"><input type="checkbox" checked> Urgent enquiry alerts</label>
+            <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer"><input type="checkbox"> Negative sentiment spike alerts</label>
+            <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer"><input type="checkbox"> Monthly insights report</label>
+            <div class="fl" style="margin-top:6px"><label>Report Email</label><input class="fi" type="email" value="client@brand.com"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px"><div class="ch"><span class="ct">⚡ Automation Status</span></div>
+        <div style="padding:16px 20px;display:flex;align-items:center;gap:14px">
+          <div style="font-size:28px">▶</div>
+          <div style="flex:1">
+            <div style="font-size:14px;font-weight:700">Active — your campaign is running</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:2px">Comments and mentions are being monitored and replied to automatically</div>
+          </div>
+          <span class="chip cs">● Running</span>
+        </div>
+        <div style="padding:10px 20px;background:var(--bg);border-top:1px solid var(--border);font-size:12px;color:var(--text2)">To change automation settings, contact your account manager.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:3001/api/v1';
+const BID = 1;
+let CHS = {};
+let TPLS = [
+  {id:1,kw:['how much','price','cost'],plat:'instagram',txt:'Hi {{handle}}! Our checkup packages start from \u20a615,000. We accept HMOs. Book at {{link}} \uD83D\uDE0A',on:true},
+  {id:2,kw:['weekend','saturday','walk-in'],plat:'',txt:'Hi {{handle}}! Yes we are open Saturdays 8am-4pm. Walk-ins welcome! Book ahead at {{link}} \uD83C\uDFE5',on:true},
+];
+const PL = {instagram:{bg:'#E1306C',icon:'\uD83D\uDCF7'},x:{bg:'#1a1a1a',icon:'\uD835\uDD4F'},facebook:{bg:'#1877F2',icon:'f'},tiktok:{bg:'#010101',icon:'\u266A'},youtube:{bg:'#FF0000',icon:'\u25B6'}};
+const PLATS = [
+  {id:'instagram',n:'Instagram',icon:'\uD83D\uDCF7',bg:'#E1306C',d:'Comments, mentions, story replies',conn:true,h:'@vmchealth_ng'},
+  {id:'facebook',n:'Facebook',icon:'f',bg:'#1877F2',d:'Page comments and Messenger',conn:true,h:'VMC Family Health'},
+  {id:'x',n:'X (Twitter)',icon:'\uD835\uDD4F',bg:'#1a1a1a',d:'Mentions and replies',conn:false},
+  {id:'tiktok',n:'TikTok',icon:'\u266A',bg:'#010101',d:'Video comments and analytics',conn:false},
+];
+const REPLIES = [
+  {au:'@adenike_health',pl:'instagram',orig:'How much does a full body checkup cost? Do you accept HMO?',rep:'Hi @adenike_health! \uD83D\uDC4B Our packages start from \u20a615,000. We accept HMOs. Book via link in bio!',t:'2h ago'},
+  {au:'@kola_tweets',pl:'x',orig:"I have been trying to book for weeks. Nobody picks up!",rep:'Hi @kola_tweets, we sincerely apologise. DM us and we will prioritise your booking today.',t:'3h ago'},
+  {au:'@temi.vibes',pl:'tiktok',orig:'This is exactly what Lagos needs! Love you guys',rep:'Thank you so much @temi.vibes! Your support means everything to us \uD83D\uDC99',t:'5h ago'},
+  {au:'u/lagosnative',pl:'x',orig:'Walk-in appointments available on weekends?',rep:'Yes! Open Saturdays 8am-4pm. Walk-ins welcome. vmchealth.com',t:'8h ago'},
+];
+const FAQS = [
+  {q:'How much does a full body checkup cost?',f:89,p:'TikTok, IG'},
+  {q:'Do you accept HMO insurance?',f:74,p:'IG, FB'},
+  {q:'Are walk-in appointments available on weekends?',f:52,p:'IG, Reddit'},
+  {q:'How long does a full checkup take?',f:41,p:'TikTok'},
+  {q:'Do you offer diabetes testing?',f:38,p:'FB, IG'},
+];
+const PAINS = [
+  {t:'Phone lines are always busy',s:'cd',f:47},
+  {t:'No clear pricing on website',s:'cd',f:38},
+  {t:'Long wait times after arriving',s:'cw',f:29},
+  {t:'Hard to find exact location',s:'cw',f:18},
+];
+
+function login(){
+  const e=document.getElementById('em').value;if(!e)return;
+  const n=e.split('@')[0].replace(/\./g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+  document.getElementById('ls').style.display='none';
+  document.getElementById('app').classList.add('on');
+  document.getElementById('hun').textContent=n;
+  document.getElementById('hbn').textContent='VMC Family Health Centre';
+  checkOAuth();loadAll();
+}
+function logout(){document.getElementById('app').classList.remove('on');document.getElementById('ls').style.display='flex';}
+
+function goTab(n,el){
+  document.querySelectorAll('.vw').forEach(v=>v.classList.remove('on'));
+  document.getElementById('v-'+n)?.classList.add('on');
+  document.querySelectorAll('.nt').forEach(t=>t.classList.remove('on'));
+  el.classList.add('on');
+  if(n==='connect')renderConnect();
+  if(n==='templates')renderTpls();
+  if(n==='replies')renderReplies();
+  if(n==='insights')renderInsights();
+  if(n==='overview'){setTimeout(()=>initCharts(),60);}
+}
+
+function loadAll(){renderReplies();renderInsights();renderConnect();renderTpls();setTimeout(()=>initCharts(),100);}
+
+Chart.defaults.font.family="'Inter',sans-serif";Chart.defaults.font.size=11;Chart.defaults.color='#6B7280';
+function mkC(id,type,labels,datasets,leg=false){
+  const ctx=document.getElementById(id)?.getContext('2d');if(!ctx)return;
+  if(CHS[id])CHS[id].destroy();
+  CHS[id]=new Chart(ctx,{type,data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:leg,position:'bottom',labels:{usePointStyle:true,padding:14}},tooltip:{mode:'index',intersect:false}},scales:type!=='doughnut'?{x:{grid:{color:'#F1F3F9'},ticks:{maxTicksLimit:8}},y:{grid:{color:'#F1F3F9'},beginAtZero:true}}:undefined}});
+}
+function gD(n,b,v,t=1.01){let x=b;return Array.from({length:n},()=>{x=x*t+(Math.random()-.4)*v;return Math.max(0,Math.round(x));});}
+function gL(n){const a=[];const s=new Date('2024-12-15');for(let i=0;i<n;i++){const d=new Date(s);d.setDate(d.getDate()+i);a.push(d.toLocaleDateString('en-US',{month:'short',day:'2-digit'}));}return a;}
+function initCharts(){
+  mkC('c1','line',gL(7),[{label:'Messages',data:gD(7,35,10),borderColor:'#0A83FF',tension:.4,pointRadius:4,fill:true,backgroundColor:'rgba(10,131,255,.06)'},{label:'Replies',data:gD(7,25,8),borderColor:'#27AE60',tension:.4,pointRadius:4}],true);
+  mkC('c2','doughnut',['Instagram','X','TikTok','Facebook'],[{data:[45,25,20,10],backgroundColor:['#E1306C','#1a1a1a','#010101','#1877F2'],borderWidth:3,borderColor:'#fff',hoverOffset:6}],true);
+}
+
+function renderReplies(){
+  document.getElementById('rlist').innerHTML=REPLIES.map(r=>{
+    const p=PL[r.pl]||{bg:'#666',icon:'?'};
+    const ini=r.au.replace('@','').replace('u/','').slice(0,2).toUpperCase();
+    return`<div class="ri"><div class="ri-av" style="background:${p.bg}22;color:${p.bg}">${ini}</div><div class="ri-meta"><div class="ri-head"><span class="ri-au">${r.au}</span><span style="background:${p.bg};color:#fff;font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px">${p.icon} ${r.pl}</span><span class="chip cs" style="font-size:10px">posted</span><span class="ri-t">${r.t}</span></div><div class="ri-orig">"${r.orig}"</div><div class="ri-rep">&#x21A9; "${r.rep}"</div></div></div>`;
+  }).join('');
+}
+
+function renderInsights(){
+  document.getElementById('faqlist').innerHTML=FAQS.map((f,i)=>`<div class="faq-r"><div class="faq-n">${i+1}</div><div style="flex:1"><div style="font-size:13px;font-weight:600">${f.q}</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Platforms: ${f.p}</div></div><span class="chip cs">${f.f}&times;</span></div>`).join('');
+  document.getElementById('painlist').innerHTML=PAINS.map(p=>`<div class="pp-r"><span class="chip ${p.s}" style="flex-shrink:0">${p.s==='cd'?'Critical':'High'}</span><span style="flex:1;font-size:13px">${p.t}</span><span style="font-size:11px;color:var(--text3)">${p.f}&times;</span></div>`).join('');
+}
+
+function renderConnect(){
+  document.getElementById('clist').innerHTML=PLATS.map(p=>`<div class="pc"><div class="pi" style="background:${p.bg}">${p.icon}</div><div style="flex:1"><div style="font-size:14px;font-weight:600">${p.n}</div><div style="font-size:12px;color:var(--text2)">${p.d}</div>${p.conn?`<div style="font-size:11px;color:var(--green);font-weight:600;margin-top:2px">Connected as ${p.h}</div>`:''}</div>${p.conn?`<div style="display:flex;gap:8px;align-items:center"><span class="chip cs">Connected</span><button class="btn bg bsm" onclick="alert('Contact your account manager to disconnect.')">Disconnect</button></div>`:`<a href="${API}/auth/${p.id==='instagram'||p.id==='facebook'?'meta':p.id}/connect?brand_id=${BID}" class="btn bp bsm">Connect</a>`}</div>`).join('');
+}
+
+function renderTpls(){
+  const el=document.getElementById('tpllist');
+  if(!TPLS.length){el.innerHTML='<div style="text-align:center;padding:40px;color:var(--text3)"><div style="font-size:32px;margin-bottom:10px">✏️</div><div style="font-weight:700">No templates yet</div><div style="font-size:13px;margin-top:6px">Add your first keyword reply template above</div></div>';return;}
+  el.innerHTML=TPLS.map(t=>`<div class="tpl"><div class="tpl-b"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${t.kw.map(k=>`<span class="kw-t">${k}</span>`).join('')}<span class="chip cn" style="font-size:10px">${t.plat||'all platforms'}</span></div><div style="font-size:13px">"${t.txt}"</div></div><div style="display:flex;gap:8px;align-items:center;flex-shrink:0"><span class="chip ${t.on?'cs':'cn'}">${t.on?'Active':'Off'}</span><button class="btn bg bsm" onclick="toggleTpl(${t.id})">${t.on?'Pause':'Enable'}</button><button class="btn bd bsm" onclick="deleteTpl(${t.id})">Remove</button></div></div>`).join('');
+}
+
+function showAddTpl(){document.getElementById('add-tpl').style.display='block';document.getElementById('add-tpl').scrollIntoView({behavior:'smooth'});}
+function saveTpl(){
+  const kw=document.getElementById('tk').value.split(',').map(k=>k.trim()).filter(Boolean);
+  const txt=document.getElementById('tt').value;
+  const plat=document.getElementById('tp').value;
+  if(!kw.length||!txt.trim()){alert('Please enter keywords and reply text');return;}
+  TPLS.push({id:Date.now(),kw,plat,txt:txt.trim(),on:true});
+  document.getElementById('tk').value='';document.getElementById('tt').value='';
+  document.getElementById('add-tpl').style.display='none';
+  renderTpls();
+}
+function toggleTpl(id){const t=TPLS.find(t=>t.id===id);if(t)t.on=!t.on;renderTpls();}
+function deleteTpl(id){if(!confirm('Remove this template?'))return;TPLS=TPLS.filter(t=>t.id!==id);renderTpls();}
+
+function checkOAuth(){
+  const p=new URLSearchParams(window.location.search);
+  if(p.get('auth')==='success'){alert('Connected successfully as '+(p.get('handle')||p.get('platform'))+'!');window.history.replaceState({},document.title,window.location.pathname);goTab('connect',document.querySelectorAll('.nt')[3]);}
+  else if(p.get('auth')==='error'){alert('Connection failed: '+p.get('reason'));window.history.replaceState({},document.title,window.location.pathname);}
+}
+</script>
+</body>
+</html>
