@@ -43,4 +43,4 @@ coverage/
 # Railway / deployment
 .railway/
 
-docs/backend.zip
+backend.zip
