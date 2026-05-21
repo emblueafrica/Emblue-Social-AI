@@ -25,9 +25,7 @@ export default function LoginPage() {
           Hey Admin <span>👋</span>
         </h2>
         <p className="text-muted-foreground mt-1 mb-8">Login to your Account</p>
-        <p className="mb-6 inline-flex rounded-full bg-accent px-3 py-1 text-xs font-semibold text-primary">
-          Secure admin access
-        </p>
+        
 
         <form onSubmit={submit} className="space-y-5">
           <div>
