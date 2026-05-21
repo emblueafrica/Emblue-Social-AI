@@ -1,17 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "version": 2,
-  "name": "social-emblue-ai-frontend",
-  "builds": [
-    {
-      "src": "Frontend/package.json",
-      "use": "@vercel/next"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "Frontend/$1"
-    }
-  ]
+  "framework": "nextjs",
+  "installCommand": "npm --prefix Frontend ci",
+  "buildCommand": "npm --prefix Frontend run build",
+  "outputDirectory": "Frontend/.next"
 }
