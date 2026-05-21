@@ -41,7 +41,20 @@ function dateOnly(date?: Date | null): string | undefined {
   return date ? date.toISOString().slice(0, 10) : undefined;
 }
 
-function normalizeApifyItem(item: Record<string, unknown>, platform: Platform, matchedKeyword: string): NormalizedSearchItem | null {
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && !Array.isArray(entry))
+    : [];
+}
+
+function nestedOwnerId(item: Record<string, unknown>): unknown {
+  const owner = item['owner'];
+  return typeof owner === 'object' && owner !== null && !Array.isArray(owner)
+    ? (owner as Record<string, unknown>)['id']
+    : null;
+}
+
+function normalizeApifyItem(item: Record<string, unknown>, platform: Platform, matchedKeyword: string, parent?: Record<string, unknown>): NormalizedSearchItem | null {
   const text = asString(item['text'] ?? item['content'] ?? item['body'] ?? item['caption'] ?? item['message'] ?? item['commentText'] ?? item['title']);
   if (!text) return null;
 
@@ -49,16 +62,29 @@ function normalizeApifyItem(item: Record<string, unknown>, platform: Platform, m
     platform,
     matchedKeyword,
     text: text.slice(0, 4000),
-    authorHandle: asString(item['username'] ?? item['author'] ?? item['authorUsername'] ?? item['authorName'] ?? item['displayName'] ?? item['channelName']),
-    authorIdExt: asString(item['authorId'] ?? item['userId'] ?? item['ownerId'] ?? item['channelId'] ?? item['id']),
-    url: asString(item['url'] ?? item['postUrl'] ?? item['tweetUrl'] ?? item['videoUrl'] ?? item['permalink']),
+    authorHandle: asString(item['username'] ?? item['ownerUsername'] ?? item['author'] ?? item['authorUsername'] ?? item['authorName'] ?? item['displayName'] ?? item['channelName'] ?? parent?.['ownerUsername']),
+    authorIdExt: asString(item['authorId'] ?? item['userId'] ?? item['ownerId'] ?? nestedOwnerId(item) ?? item['channelId'] ?? item['id']),
+    url: asString(item['url'] ?? item['postUrl'] ?? item['tweetUrl'] ?? item['videoUrl'] ?? item['permalink'] ?? parent?.['url']),
     postedAt: asDate(item['timestamp'] ?? item['createdAt'] ?? item['created_at'] ?? item['date'] ?? item['publishedAt'] ?? item['created_time']),
     likes: asNumber(item['likes'] ?? item['likeCount'] ?? item['likesCount'] ?? item['upVotes']),
     repliesCount: asNumber(item['replies'] ?? item['replyCount'] ?? item['repliesCount'] ?? item['commentsCount'] ?? item['numComments']),
     shares: asNumber(item['shares'] ?? item['shareCount'] ?? item['retweets'] ?? item['retweetCount']),
-    views: asNumber(item['views'] ?? item['viewCount'] ?? item['viewsCount'] ?? item['playCount']),
-    raw: item,
+    views: asNumber(item['views'] ?? item['viewCount'] ?? item['viewsCount'] ?? item['playCount'] ?? item['videoViewCount']),
+    raw: parent ? { ...item, parentPost: parent } : item,
   };
+}
+
+function normalizeApifyItems(item: Record<string, unknown>, platform: Platform, matchedKeyword: string): NormalizedSearchItem[] {
+  const normalized: NormalizedSearchItem[] = [];
+  const post = normalizeApifyItem(item, platform, matchedKeyword);
+  if (post) normalized.push(post);
+
+  for (const comment of asRecordArray(item['latestComments'])) {
+    const normalizedComment = normalizeApifyItem(comment, platform, matchedKeyword, item);
+    if (normalizedComment) normalized.push(normalizedComment);
+  }
+
+  return normalized;
 }
 
 async function runActorForKeyword(
@@ -90,9 +116,7 @@ async function runActorForKeyword(
     });
 
     const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: maxItems });
-    const normalized = items
-      .map(item => normalizeApifyItem(item as Record<string, unknown>, platform, input.keyword))
-      .filter((item): item is NormalizedSearchItem => Boolean(item));
+    const normalized = items.flatMap(item => normalizeApifyItems(item as Record<string, unknown>, platform, input.keyword));
 
     return { items: normalized, errors: [] };
   } catch (err) {

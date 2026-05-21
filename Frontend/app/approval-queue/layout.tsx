@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Success - Emblue Social AI",
-  description: "Password reset successful.",
+  title: "Approval Queue - Emblue Social AI",
+  description: "Approve, edit, and reject generated social replies.",
 };
 
 export default function RouteLayout({ children }: { children: React.ReactNode }) {

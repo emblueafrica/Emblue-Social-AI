@@ -1,10 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
-  Activity,
-  Bell,
   Search,
   Layers,
   MessageSquare,
@@ -14,10 +11,10 @@ import {
   Lightbulb,
   Gauge,
   Users,
-  Settings,
-  LogOut,
   AlertCircle,
 } from "lucide-react";
+import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
+import { PlatformLogo, type PlatformLogoName } from "@/components/PlatformLogo";
 import {
   BarChart,
   Bar,
@@ -26,50 +23,8 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { EmblueLogo } from "@/components/EmblueLogo";
 
-const navGroups = [
-  {
-    label: "DASHBOARD",
-    items: [{ icon: Activity, label: "Performance", active: true }],
-  },
-  {
-    label: "LISTEN",
-    items: [
-      { icon: Search, label: "Advanced Listening" },
-      { icon: Layers, label: "Search & Clustering" },
-    ],
-  },
-  {
-    label: "RESPOND",
-    items: [{ icon: MessageCircle, label: "AI Reply Engine" }],
-  },
-  {
-    label: "CONVERT",
-    items: [
-      { icon: MessageSquare, label: "Comment → DM Funnel" },
-      { icon: Link2, label: "Attribution & Links" },
-    ],
-  },
-  {
-    label: "CREATE & INSIGHTS",
-    items: [
-      { icon: Palette, label: "Creative Predictor" },
-      { icon: Lightbulb, label: "Comment Mining" },
-    ],
-  },
-  {
-    label: "OPERATIONS",
-    items: [
-      { icon: Gauge, label: "Campaign War Room" },
-      { icon: Users, label: "Engage the Engager" },
-    ],
-  },
-  {
-    label: "OTHERS",
-    items: [{ icon: Settings, label: "Settings" }],
-  },
-];
+
 
 const tools = [
   { n: "Tool 1", title: "Advanced Listening", value: "124K", sub: "msgs processed", icon: Search, color: "bg-primary" },
@@ -98,79 +53,19 @@ const topTools = [
 ];
 
 const sentiments = [
-  { name: "Instagram", icon: "📷", color: "bg-pink-500", pct: 67, label: "67% Positive", positive: true },
-  { name: "Tiktok", icon: "🎵", color: "bg-black", pct: 71, label: "71% Positive", positive: true },
-  { name: "X / Twitter", icon: "𝕏", color: "bg-black", pct: 48, label: "48% Positive", positive: false },
-  { name: "Facebook", icon: "f", color: "bg-blue-600", pct: 67, label: "67% Positive", positive: true },
-];
+  { name: "Instagram", platform: "instagram", pct: 67, label: "67% Positive", positive: true },
+  { name: "Tiktok", platform: "tiktok", pct: 71, label: "71% Positive", positive: true },
+  { name: "X / Twitter", platform: "x", pct: 48, label: "48% Positive", positive: false },
+  { name: "Facebook", platform: "facebook", pct: 67, label: "67% Positive", positive: true },
+] satisfies { name: string; platform: PlatformLogoName; pct: number; label: string; positive: boolean }[];
 
-export default function DashboardPage() {
-  const router = useRouter();
-
+export default function Dashboard() {
   return (
     <div className="min-h-screen flex bg-muted/30">
-      {/* Sidebar */}
-      <aside className="hidden lg:flex w-72 bg-sidebar text-sidebar-foreground flex-col">
-        <div className="px-6 py-8 border-b border-sidebar-border">
-          <EmblueLogo variant="light" />
-        </div>
-        <nav className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
-          {navGroups.map((group) => (
-            <div key={group.label}>
-              <p className="px-3 text-[0.7rem] font-semibold tracking-wider opacity-60 mb-2">
-                {group.label}
-              </p>
-              <ul className="space-y-1">
-                {group.items.map((item) => {
-                  const active = "active" in item && item.active;
-                  return (
-                  <li key={item.label}>
-                    <button
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition ${
-                        active
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm"
-                          : "hover:bg-white/5"
-                      }`}
-                    >
-                      <item.icon className="size-5" />
-                      <span>{item.label}</span>
-                    </button>
-                  </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
-          <button
-            onClick={() => router.push("/")}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-red-400 hover:bg-white/5 transition"
-          >
-            <LogOut className="size-5" />
-            <span className="font-semibold">Logout</span>
-          </button>
-        </nav>
-      </aside>
+      <Sidebar activeLabel="Performance" />
 
-      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <header className="flex items-center justify-between px-6 md:px-10 py-6 bg-card border-b">
-          <h1 className="text-xl md:text-2xl font-bold">Overall Performance Dashboard</h1>
-          <div className="flex items-center gap-6">
-            <button className="size-10 rounded-full hover:bg-muted flex items-center justify-center">
-              <Bell className="size-5" />
-            </button>
-            <div className="flex items-center gap-3 pl-6 border-l">
-              <div className="size-10 rounded-full bg-accent text-primary flex items-center justify-center font-bold text-sm">
-                BC
-              </div>
-              <div className="hidden sm:block">
-                <p className="text-sm font-semibold leading-tight">Adeboye Toluwalogo</p>
-                <p className="text-xs text-muted-foreground">Super Admin</p>
-              </div>
-            </div>
-          </div>
-        </header>
+        <DashHeader title="Overall Performance Dashboard" />
 
         <main className="flex-1 p-6 md:p-10 space-y-8">
           {/* KPI cards */}
@@ -256,8 +151,8 @@ export default function DashboardPage() {
                 <div key={s.name}>
                   <div className="flex items-center justify-between mb-2 text-sm">
                     <div className="flex items-center gap-2">
-                      <span className={`size-6 rounded-md ${s.color} text-white text-xs flex items-center justify-center font-bold`}>
-                        {s.icon}
+                      <span className="size-6 rounded-md flex items-center justify-center">
+                        <PlatformLogo platform={s.platform} size={20} />
                       </span>
                       <span className="font-medium">{s.name}</span>
                     </div>

@@ -1,8 +1,9 @@
 // src/middleware/auth.ts
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { AuthUser, BrandRole, JwtPayload, PlatformRole, UserRole } from '../types';
+import { AuthUser, BrandRole, PlatformRole, UserRole } from '../types';
 import { loadAuthContext } from '../rbac/service';
+import { verifySupabaseJwt } from '../auth/verifySupabaseJwt';
 
 declare global {
   namespace Express {
@@ -94,15 +95,8 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (!secret) {
-    console.error('[Auth] SUPABASE_JWT_SECRET is not set');
-    res.status(500).json({ error: 'Auth not configured' });
-    return;
-  }
-
   try {
-    const decoded = jwt.verify(header.slice(7), secret) as JwtPayload;
+    const decoded = await verifySupabaseJwt(header.slice(7));
     req.user = await loadAuthContext(decoded);
     if (req.user.status === 'suspended' && !STATUS_VISIBLE_PATHS.has(req.path)) {
       res.status(403).json({

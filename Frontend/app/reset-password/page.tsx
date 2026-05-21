@@ -40,7 +40,7 @@ function PwdField({
   );
 }
 
-export default function ResetPasswordPage() {
+export default function ResetPage() {
   const [pwd, setPwd] = useState("");
   const [confirm, setConfirm] = useState("");
   const router = useRouter();

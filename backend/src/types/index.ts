@@ -488,7 +488,8 @@ export interface Env {
   SUPABASE_URL:          string;
   SUPABASE_ANON_KEY:     string;
   SUPABASE_SERVICE_ROLE_KEY: string;
-  SUPABASE_JWT_SECRET:   string;
+  SUPABASE_JWT_SECRET?:  string;
+  SUPABASE_JWKS_URL?:    string;
   SUPERADMIN_EMAILS?:    string;
   SUPER_ADMIN_EMAIL?:    string;
   SUPER_ADMIN_PASSWORD?: string;

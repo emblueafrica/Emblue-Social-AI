@@ -105,7 +105,7 @@ export default function OtpPage() {
             </span>
           </div>
           <div className="text-muted-foreground">
-            Didn&apos;t get a code?{" "}
+            Didn't get a code?{" "}
             <button
               type="button"
               onClick={() => {

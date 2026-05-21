@@ -8,8 +8,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }) {
         <Link href="/">
           <EmblueLogo variant="dark" />
         </Link>
-        <Link
-          href="/"
+        <Link href="/"
           className="bg-primary text-primary-foreground px-8 py-3 rounded-xl font-semibold text-base shadow-sm hover:opacity-90 transition"
         >
           Login

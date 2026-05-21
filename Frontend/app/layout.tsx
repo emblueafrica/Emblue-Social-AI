@@ -4,19 +4,19 @@ import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: {
-    default: "Login — Emblue Social AI",
+    default: "Login - Emblue Social AI",
     template: "%s",
   },
-  description: "Sign in to your Emblue Social AI admin account.",
-  authors: [{ name: "Lovable" }],
+  description: "Emblue Social AI admin and engagement dashboard.",
+  authors: [{ name: "Emblue Social AI" }],
   openGraph: {
-    title: "Lovable App",
-    description: "Lovable Generated Project",
+    title: "Emblue Social AI",
+    description: "Emblue Social AI admin and engagement dashboard.",
     type: "website",
   },
   twitter: {
     card: "summary",
-    site: "@Lovable",
+    site: "@EmblueSocialAI",
   },
 };
 

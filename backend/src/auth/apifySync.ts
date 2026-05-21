@@ -30,26 +30,52 @@ export interface ApifySyncResult {
   errors:      string[];
 }
 
-function normaliseApifyItem(item: Record<string, unknown>, platform: Platform): RawMessage | null {
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null && !Array.isArray(entry))
+    : [];
+}
+
+function nestedOwnerId(item: Record<string, unknown>): unknown {
+  const owner = item["owner"];
+  return typeof owner === "object" && owner !== null && !Array.isArray(owner)
+    ? (owner as Record<string, unknown>)["id"]
+    : null;
+}
+
+function normaliseApifyItem(item: Record<string, unknown>, platform: Platform, parent?: Record<string, unknown>): RawMessage | null {
   const text =
-    (item["text"] ?? item["content"] ?? item["commentText"] ?? item["body"]) as string | undefined;
+    (item["text"] ?? item["content"] ?? item["commentText"] ?? item["body"] ?? item["caption"]) as string | undefined;
   if (!text) return null;
 
   return {
     platform,
-    kind:          "comment",
+    kind:          parent ? "comment" : "post",
     text:          String(text).slice(0, 2000),
-    author_handle: String(item["authorId"] ?? item["username"] ?? item["author"] ?? "unknown"),
-    author_id:     String(item["authorId"] ?? item["id"] ?? ""),
-    url:           String(item["url"] ?? item["postUrl"] ?? ""),
+    author_handle: String(item["ownerUsername"] ?? item["username"] ?? item["author"] ?? parent?.["ownerUsername"] ?? "unknown"),
+    author_id:     String(item["authorId"] ?? item["ownerId"] ?? nestedOwnerId(item) ?? item["id"] ?? ""),
+    url:           String(item["url"] ?? item["postUrl"] ?? parent?.["url"] ?? ""),
     metrics: {
       likes:   Number(item["likesCount"] ?? item["likes"] ?? 0),
-      replies: Number(item["repliesCount"] ?? item["replies"] ?? 0),
+      replies: Number(item["repliesCount"] ?? item["replies"] ?? item["commentsCount"] ?? 0),
       shares:  0,
-      views:   Number(item["viewsCount"] ?? 0),
+      views:   Number(item["viewsCount"] ?? item["videoViewCount"] ?? item["videoPlayCount"] ?? 0),
     },
-    raw: item,
+    raw: parent ? { ...item, parentPost: parent } : item,
   };
+}
+
+function normaliseApifyItems(item: Record<string, unknown>, platform: Platform): RawMessage[] {
+  const rawItems: RawMessage[] = [];
+  const post = normaliseApifyItem(item, platform);
+  if (post) rawItems.push(post);
+
+  for (const comment of asRecordArray(item["latestComments"])) {
+    const normalisedComment = normaliseApifyItem(comment, platform, item);
+    if (normalisedComment) rawItems.push(normalisedComment);
+  }
+
+  return rawItems;
 }
 
 export async function runApifySync(config: ApifySyncConfig): Promise<ApifySyncResult> {
@@ -78,8 +104,7 @@ export async function runApifySync(config: ApifySyncConfig): Promise<ApifySyncRe
     const rawItems: RawMessage[] = [];
 
     for (const item of items) {
-      const normalised = normaliseApifyItem(item as Record<string, unknown>, config.platform);
-      if (normalised) rawItems.push(normalised);
+      rawItems.push(...normaliseApifyItems(item as Record<string, unknown>, config.platform));
     }
 
     if (!rawItems.length) {

@@ -5,7 +5,7 @@ import { useState } from "react";
 import { User } from "lucide-react";
 import { AuthLayout } from "@/components/AuthLayout";
 
-export default function ForgotPasswordPage() {
+export default function ForgotPage() {
   const [email, setEmail] = useState("");
   const router = useRouter();
   const enabled = email.length > 0;
