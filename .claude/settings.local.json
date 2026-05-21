@@ -3,7 +3,8 @@
     "allow": [
       "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\(p.scripts,null,2\\)\\); console.log\\('---deps for prisma---'\\); console.log\\('prisma:', \\(p.devDependencies||{}\\).prisma, '@prisma/client:', \\(p.dependencies||{}\\)['@prisma/client']\\);\")",
       "Bash(git ls-tree *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(node -e \"require\\('child_process'\\)\")"
     ]
   }
 }

@@ -26,6 +26,7 @@ const PUBLIC_PATHS: PublicPath[] = [
   { method: 'GET', prefix: '/api/v1/auth/meta/callback' },
   { method: 'GET', prefix: '/api/v1/auth/tiktok/callback' },
   { method: 'GET', prefix: '/api/v1/l/' },
+  { method: 'GET', prefix: '/api/v1/rt/webhook/' },
   { method: 'POST', path: '/api/v1/rt/events/convert' },
   { method: 'POST', prefix: '/api/v1/rt/webhook/' },
 ];
