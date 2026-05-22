@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import {
   Search,
   Layers,
@@ -15,6 +16,8 @@ import {
 } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { PlatformLogo, type PlatformLogoName } from "@/components/PlatformLogo";
+import { useAuth } from "@/hooks/use-auth";
+import { ApiError, getDashboardSummary, getToolAccess } from "@/lib/api";
 import {
   BarChart,
   Bar,
@@ -60,6 +63,32 @@ const sentiments = [
 ] satisfies { name: string; platform: PlatformLogoName; pct: number; label: string; positive: boolean }[];
 
 export default function Dashboard() {
+  const { activeBrandId } = useAuth();
+  const summaryQuery = useQuery({
+    queryKey: ["dashboard-summary", activeBrandId],
+    queryFn: () => getDashboardSummary(activeBrandId!),
+    enabled: Boolean(activeBrandId),
+    retry: false,
+  });
+  useQuery({
+    queryKey: ["tool-access", activeBrandId],
+    queryFn: getToolAccess,
+    enabled: Boolean(activeBrandId),
+    retry: false,
+  });
+
+  const summary = summaryQuery.data;
+  const summaryError = summaryQuery.error;
+  const lockedError =
+    summaryError instanceof ApiError && summaryError.status === 403
+      ? summaryError
+      : null;
+
+  const formatCount = (value: number | null | undefined, fallback: string) =>
+    typeof value === "number" ? value.toLocaleString() : fallback;
+  const formatScore = (value: number | null | undefined, fallback: string) =>
+    typeof value === "number" ? `${Math.round(value)}%` : fallback;
+
   return (
     <div className="min-h-screen flex bg-muted/30">
       <Sidebar activeLabel="Performance" />
@@ -68,13 +97,55 @@ export default function Dashboard() {
         <DashHeader title="Overall Performance Dashboard" />
 
         <main className="flex-1 p-6 md:p-10 space-y-8">
+          {!activeBrandId && (
+            <DashboardNotice
+              title="No active brand workspace"
+              body="This account is authenticated, but it is not attached to an approved brand workspace yet."
+            />
+          )}
+
+          {lockedError && (
+            <DashboardNotice
+              title="Dashboard access is locked"
+              body={lockedError.message}
+              action={lockedError.upgradeUrl ? "Open upgrade settings" : undefined}
+            />
+          )}
+
+          {summaryQuery.isError && !lockedError && (
+            <DashboardNotice
+              title="Dashboard data unavailable"
+              body={summaryError instanceof Error ? summaryError.message : "Unable to load dashboard summary."}
+            />
+          )}
+
           {/* KPI cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            <KpiCard color="bg-primary" label="Total Messages Processed" value="124K" delta="↑ 18% vs last month" up />
-            <KpiCard color="bg-brand-pink" label="Total Replies Sent" value="18,420" delta="↑ 34% vs last month" up />
+            <KpiCard
+              color="bg-primary"
+              label="Total Messages Processed"
+              value={summaryQuery.isLoading ? "..." : formatCount(summary?.total_messages, "124K")}
+              delta={summary ? "Live from backend" : "Fallback sample"}
+              up={Boolean(summary)}
+            />
+            <KpiCard
+              color="bg-brand-pink"
+              label="Total Replies Sent"
+              value={summaryQuery.isLoading ? "..." : formatCount(summary?.replies_sent, "18,420")}
+              delta={summary ? "Live from backend" : "Fallback sample"}
+              up={Boolean(summary)}
+            />
             <KpiCard color="bg-brand-olive" label="Revenue Attributed" value="$24,810" delta="↑ 22% vs last month" up />
             <KpiCard color="bg-destructive" label="Avg Response Time" value="1.8m" delta="↓ from 38m manual" />
           </div>
+
+          {summary && (
+            <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <MiniScore label="Listening Score" value={formatScore(summary.listening_kpi, "N/A")} />
+              <MiniScore label="Reply Score" value={formatScore(summary.reply_kpi, "N/A")} />
+              <MiniScore label="Funnel Score" value={formatScore(summary.funnel_kpi, "N/A")} />
+            </section>
+          )}
 
           {/* Tools grid */}
           <section className="bg-card rounded-2xl p-6 md:p-8 shadow-sm">
@@ -200,5 +271,33 @@ function KpiCard({
       <p className="text-3xl font-bold mt-2">{value}</p>
       <p className={`text-xs mt-2 ${up ? "text-success" : "text-destructive"}`}>{delta}</p>
     </div>
+  );
+}
+
+function MiniScore({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl bg-card p-5 shadow-sm">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-2 text-3xl font-bold">{value}</p>
+      <p className="mt-2 text-xs text-success">Live from backend</p>
+    </div>
+  );
+}
+
+function DashboardNotice({
+  title,
+  body,
+  action,
+}: {
+  title: string;
+  body: string;
+  action?: string;
+}) {
+  return (
+    <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950">
+      <h2 className="text-sm font-bold">{title}</h2>
+      <p className="mt-1 text-sm">{body}</p>
+      {action && <p className="mt-3 text-xs font-semibold">{action}</p>}
+    </section>
   );
 }

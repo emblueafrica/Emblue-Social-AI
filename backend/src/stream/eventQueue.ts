@@ -20,6 +20,7 @@ const EVENT_TOOL_ACCESS: Record<string, ToolId> = {
   warroom_update: 'tool_9',
   approval_queued: 'tool_3',
   reply_approved: 'tool_3',
+  reply_skipped: 'tool_3',
   reply_published: 'tool_3',
   reply_failed: 'tool_3',
   bot_blocked: 'tool_10',

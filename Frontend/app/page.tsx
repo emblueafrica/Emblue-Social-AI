@@ -2,20 +2,34 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Eye, EyeOff, User } from "lucide-react";
 import { LoginLayout } from "@/components/LoginLayout";
+import { useAuth } from "@/hooks/use-auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const router = useRouter();
-  const enabled = email.length > 0 && password.length > 0;
+  const { signIn, session, loading, error } = useAuth();
+  const enabled = email.length > 0 && password.length > 0 && !loading;
 
-  const submit = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (session) router.replace("/dashboard");
+  }, [router, session]);
+
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (enabled) router.push("/dashboard");
+    if (!enabled) return;
+    setSubmitError(null);
+    try {
+      await signIn(email, password);
+      router.replace("/dashboard");
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Unable to log in.");
+    }
   };
 
   return (
@@ -25,7 +39,11 @@ export default function LoginPage() {
           Hey Admin <span>👋</span>
         </h2>
         <p className="text-muted-foreground mt-1 mb-8">Login to your Account</p>
-        
+        {(submitError || error) && (
+          <div className="mb-5 rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
+            {submitError ?? error}
+          </div>
+        )}
 
         <form onSubmit={submit} className="space-y-5">
           <div>
@@ -75,7 +93,7 @@ export default function LoginPage() {
             disabled={!enabled}
             className="w-full mt-4 py-3.5 rounded-xl font-semibold text-primary-foreground transition bg-primary disabled:bg-brand-soft disabled:cursor-not-allowed"
           >
-            Login
+            {loading ? "Checking..." : "Login"}
           </button>
         </form>
       </div>

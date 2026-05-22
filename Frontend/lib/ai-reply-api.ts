@@ -1,0 +1,66 @@
+import { apiRequest, type ApprovalQueueItem } from "@/lib/api";
+
+export type AiReplyPlatform = "instagram" | "facebook" | "x" | "tiktok" | "youtube" | "reddit" | "whatsapp";
+
+export type AiReplyRequest = {
+  brand_id: number;
+  message: string;
+  platform: AiReplyPlatform;
+  tone: string;
+  campaign_context: {
+    name?: string;
+    objective: string;
+    cta_link?: string;
+    action_type?: string;
+  };
+  ruleset: {
+    tone: string;
+    required_words?: string[];
+    do_not_say?: string[];
+  };
+  author_handle?: string;
+  reply_channel?: "dm" | "thread_reply" | "comment_reply";
+};
+
+export type AiReplySuggestion = {
+  text: string;
+  reply_text?: string;
+  tone: string;
+  confidence: number;
+  risk_flags?: string[];
+};
+
+export type AiReplyResponse = {
+  replies?: AiReplySuggestion[];
+  suggestions?: AiReplySuggestion[];
+  error?: string;
+};
+
+export function generateAiReplies(payload: AiReplyRequest) {
+  return apiRequest<AiReplyResponse>("/api/v1/reply", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getAiReplyQueue(brandId: number) {
+  return apiRequest<{ queue: ApprovalQueueItem[] }>(`/api/v1/rt/reply-queue/${brandId}`);
+}
+
+export function approveAiReplyQueueItem(brandId: number, index: number, replyText?: string) {
+  return apiRequest<{
+    ok: true;
+    item: ApprovalQueueItem;
+    publish?: { success: boolean; platform: AiReplyPlatform; message_id?: string; error?: string };
+  }>("/api/v1/rt/queue/approve", {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId, index, reply_text: replyText }),
+  });
+}
+
+export function skipAiReplyQueueItem(brandId: number, index: number) {
+  return apiRequest<{ ok: true; item: ApprovalQueueItem }>("/api/v1/rt/queue/skip", {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId, index }),
+  });
+}

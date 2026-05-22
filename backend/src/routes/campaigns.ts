@@ -18,6 +18,38 @@ import {
 
 const router = Router();
 
+const SOCIAL_RESPONSE_DAYS = 30;
+
+function dayKey(date: Date | null | undefined): string {
+  return (date ?? new Date()).toISOString().slice(0, 10);
+}
+
+function recentDayKeys(days: number): string[] {
+  const keys: string[] = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    keys.push(dayKey(d));
+  }
+  return keys;
+}
+
+function dayLabel(key: string): string {
+  const date = new Date(`${key}T00:00:00.000Z`);
+  return date.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+}
+
+function severityFor(
+  score: number | null | undefined,
+  sentiment: string | null | undefined
+): { severity: string; tag: string } {
+  if ((score ?? 0) >= 5) return { severity: 'CRITICAL', tag: 'Urgent reply' };
+  if ((score ?? 0) >= 4) return { severity: 'HIGH', tag: 'Priority reply' };
+  if (sentiment === 'negative') return { severity: 'HIGH', tag: 'Negative sentiment' };
+  return { severity: 'MEDIUM', tag: 'Needs review' };
+}
+
 // ── LIST CAMPAIGNS ────────────────────────────────────────────────────────────
 // ── CREATE / UPDATE CAMPAIGN ──────────────────────────────────────────────────
 router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
@@ -290,12 +322,66 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
 
   try {
-    const since = new Date(Date.now() - 30 * 86400000);
-    const grouped = await prisma.autoEngagement.groupBy({
-      by: ['platform', 'status'],
-      where: { brandId, firedAt: { gt: since } },
-      _count: { _all: true },
-    });
+    const since = new Date(Date.now() - SOCIAL_RESPONSE_DAYS * 86400000);
+    const trendKeys = recentDayKeys(7);
+    const [
+      grouped,
+      engagements,
+      messages,
+      kpiSnapshots,
+      linkTotals,
+      riskMessages,
+    ] = await Promise.all([
+      prisma.autoEngagement.groupBy({
+        by: ['platform', 'status'],
+        where: { brandId, firedAt: { gt: since } },
+        _count: { _all: true },
+      }),
+      prisma.autoEngagement.findMany({
+        where: { brandId, firedAt: { gt: since } },
+        select: { platform: true, status: true, firedAt: true },
+      }),
+      prisma.socialMessage.findMany({
+        where: { brandId, capturedAt: { gt: since } },
+        select: { capturedAt: true, sentiment: true, urgencyScore: true },
+      }),
+      prisma.kpiSnapshot.findMany({
+        where: { brandId },
+        orderBy: { createdAt: 'desc' },
+        take: 7,
+        select: {
+          createdAt: true,
+          listeningKpi: true,
+          replyKpi: true,
+          funnelKpi: true,
+          riskEvents: true,
+        },
+      }),
+      prisma.trackedLink.aggregate({
+        where: { brandId },
+        _sum: { clicks: true, conversions: true },
+      }),
+      prisma.socialMessage.findMany({
+        where: {
+          brandId,
+          capturedAt: { gt: since },
+          OR: [
+            { urgencyScore: { gte: 4 } },
+            { sentiment: 'negative' },
+          ],
+        },
+        orderBy: { capturedAt: 'desc' },
+        take: 10,
+        select: {
+          capturedAt: true,
+          platform: true,
+          text: true,
+          sentiment: true,
+          urgencyScore: true,
+          topics: true,
+        },
+      }),
+    ]);
 
     const byPlatform = new Map<string, { platform: string; total: number; sent: number; manual: number; queued: number }>();
     for (const row of grouped) {
@@ -309,7 +395,103 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
       byPlatform.set(row.platform, stats);
     }
 
-    res.json({ stats: Array.from(byPlatform.values()) });
+    const messageVolume = new Map<string, { d: string; classified: number; total: number }>();
+    const sentiment = new Map<string, { d: string; pos: number; neu: number; neg: number }>();
+    for (const key of trendKeys) {
+      messageVolume.set(key, { d: dayLabel(key), classified: 0, total: 0 });
+      sentiment.set(key, { d: dayLabel(key), pos: 0, neu: 0, neg: 0 });
+    }
+
+    for (const message of messages) {
+      const key = dayKey(message.capturedAt);
+      if (!messageVolume.has(key)) continue;
+      const volume = messageVolume.get(key)!;
+      volume.classified += 1;
+      volume.total += 1;
+
+      const sentimentBucket = sentiment.get(key)!;
+      if (message.sentiment === 'positive') sentimentBucket.pos += 1;
+      else if (message.sentiment === 'negative') sentimentBucket.neg += 1;
+      else sentimentBucket.neu += 1;
+    }
+
+    const sentByDay = new Map<string, number>();
+    const manualByDay = new Map<string, number>();
+    const queuedByDay = new Map<string, number>();
+    for (const engagement of engagements) {
+      const key = dayKey(engagement.firedAt);
+      if (!trendKeys.includes(key)) continue;
+      if (engagement.status === 'sent') sentByDay.set(key, (sentByDay.get(key) ?? 0) + 1);
+      if (engagement.status === 'manual_copy') manualByDay.set(key, (manualByDay.get(key) ?? 0) + 1);
+      if (engagement.status === 'queued') queuedByDay.set(key, (queuedByDay.get(key) ?? 0) + 1);
+    }
+
+    const latestKpi = kpiSnapshots[0];
+    const fallbackScores = {
+      listening: latestKpi?.listeningKpi === null || latestKpi?.listeningKpi === undefined ? null : Number(latestKpi.listeningKpi),
+      reply: latestKpi?.replyKpi === null || latestKpi?.replyKpi === undefined ? null : Number(latestKpi.replyKpi),
+      funnel: latestKpi?.funnelKpi === null || latestKpi?.funnelKpi === undefined ? null : Number(latestKpi.funnelKpi),
+    };
+    const snapshotByDay = new Map(kpiSnapshots.map(snapshot => [dayKey(snapshot.createdAt), snapshot]));
+    const score_trend = trendKeys.map(key => {
+      const snapshot = snapshotByDay.get(key);
+      return {
+        d: dayLabel(key),
+        listening: snapshot?.listeningKpi === null || snapshot?.listeningKpi === undefined ? fallbackScores.listening : Number(snapshot.listeningKpi),
+        reply: snapshot?.replyKpi === null || snapshot?.replyKpi === undefined ? fallbackScores.reply : Number(snapshot.replyKpi),
+        funnel: snapshot?.funnelKpi === null || snapshot?.funnelKpi === undefined ? fallbackScores.funnel : Number(snapshot.funnelKpi),
+      };
+    });
+
+    const stats = Array.from(byPlatform.values());
+    const totals = stats.reduce(
+      (acc, row) => ({
+        total: acc.total + row.total,
+        sent: acc.sent + row.sent,
+        manual: acc.manual + row.manual,
+        queued: acc.queued + row.queued,
+      }),
+      { total: 0, sent: 0, manual: 0, queued: 0 },
+    );
+
+    const risk_events = riskMessages.map(message => {
+      const risk = severityFor(message.urgencyScore, message.sentiment);
+      return {
+        time: message.capturedAt.toISOString(),
+        platform: message.platform,
+        tag: risk.tag,
+        severity: risk.severity,
+        text: message.text,
+        sentiment: message.sentiment,
+        urgency_score: message.urgencyScore,
+        topics: message.topics,
+      };
+    });
+
+    res.json({
+      stats,
+      summary: {
+        total_messages: messages.length,
+        replies_sent: totals.sent,
+        manual_reviews: totals.manual,
+        queued: totals.queued,
+        listening_score: fallbackScores.listening,
+        reply_score: fallbackScores.reply,
+        funnel_score: fallbackScores.funnel,
+        risk_events: risk_events.length || latestKpi?.riskEvents || 0,
+        avg_response_time_minutes: null,
+        revenue_attributed: null,
+      },
+      score_trend,
+      message_volume: Array.from(messageVolume.values()),
+      sentiment: Array.from(sentiment.values()),
+      risk_events,
+      attribution: {
+        clicks: linkTotals._sum.clicks ?? 0,
+        conversions: linkTotals._sum.conversions ?? 0,
+        revenue: null,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }

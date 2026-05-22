@@ -180,16 +180,16 @@ async function main(): Promise<void> {
       update: { role: 'client_owner', isActive: true },
     });
 
-    for (const toolId of ALL_TOOL_IDS) {
-      await tx.brandToolAccess.upsert({
-        where: { brandId_toolId: { brandId: demoBrand.brandId, toolId } },
-        create: { brandId: demoBrand.brandId, toolId, isActive: true, planName: 'demo_full_suite' },
-        update: { isActive: true, planName: 'demo_full_suite', expiresAt: null },
-      });
-    }
-
     return demoBrand;
   });
+
+  for (const toolId of ALL_TOOL_IDS) {
+    await prisma.brandToolAccess.upsert({
+      where: { brandId_toolId: { brandId: brand.brandId, toolId } },
+      create: { brandId: brand.brandId, toolId, isActive: true, planName: 'demo_full_suite' },
+      update: { isActive: true, planName: 'demo_full_suite', expiresAt: null },
+    });
+  }
 
   await clearDemoBrandData(brand.brandId);
 
@@ -712,7 +712,7 @@ async function main(): Promise<void> {
 
   console.log('[Seed] Demo database is ready');
   console.log(`email=${demo.email}`);
-  console.log(`password=${demo.password}`);
+  console.log('password=[redacted]');
   console.log(`user_id=${userId}`);
   console.log(`brand_id=${brand.brandId}`);
   console.log(`brand_slug=${brand.slug}`);

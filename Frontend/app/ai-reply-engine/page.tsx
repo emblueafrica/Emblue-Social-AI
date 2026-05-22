@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronRight,
@@ -14,8 +15,19 @@ import {
 } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { PlatformLogo } from "@/components/PlatformLogo";
+import { useAuth } from "@/hooks/use-auth";
+import { ApiError, getToolAccess, type ApprovalQueueItem } from "@/lib/api";
+import {
+  approveAiReplyQueueItem,
+  generateAiReplies,
+  getAiReplyQueue,
+  skipAiReplyQueueItem,
+  type AiReplyPlatform,
+  type AiReplySuggestion,
+} from "@/lib/ai-reply-api";
 
 type Platform = "instagram" | "facebook" | "x" | "tiktok" | "linkedin";
+type BackendPagePlatform = Extract<Platform, AiReplyPlatform>;
 type Sentiment = "Negative" | "Postive" | "Neutral";
 type Status = "pending" | "Posted";
 type Urgency = "red" | "yellow" | "blue";
@@ -30,6 +42,10 @@ type Message = {
   status: Status;
   ago: string;
   urgency: Urgency;
+  original?: string;
+  reply?: string;
+  confidence?: number;
+  queueIndex?: number;
 };
 
 const MESSAGES: Message[] = [
@@ -97,7 +113,58 @@ function PlatformIcon({ p, className = "size-4" }: { p: Platform; className?: st
 
 const TONES = ["Empathetic", "Solution-first", "Warm", "Professional", "Conversion", "Direct"];
 
+function apiErrorMessage(error: unknown) {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return "AI reply request failed.";
+}
+
+function isBackendPlatform(platform: Platform): platform is BackendPagePlatform {
+  return platform === "instagram" || platform === "facebook" || platform === "x" || platform === "tiktok";
+}
+
+function replyChannel(platform: AiReplyPlatform) {
+  if (platform === "x") return "thread_reply" as const;
+  if (platform === "tiktok") return "comment_reply" as const;
+  return "dm" as const;
+}
+
+function selectedMessageText(selected: Message | null) {
+  if (!selected) return "";
+  if (selected.original) return selected.original;
+  if (selected.user === "@tunde_Lagos") return TUNDE_TEXT;
+  return KEMIWEARS_TEXT;
+}
+
+function firstSuggestion(result: { replies?: AiReplySuggestion[]; suggestions?: AiReplySuggestion[] }) {
+  return result.replies?.[0] ?? result.suggestions?.[0] ?? null;
+}
+
+function mapQueueItem(item: ApprovalQueueItem, index: number): Message {
+  const author = item.author.startsWith("@") ? item.author : `@${item.author}`;
+  const platform = isBackendPlatform(item.platform as Platform) ? item.platform as BackendPagePlatform : "x";
+  const confidence = item.manual_copy_required ? 50 : 80;
+
+  return {
+    id: index + 1,
+    user: author,
+    platform,
+    preview: item.original.slice(0, 64) || item.reply.slice(0, 64),
+    sentiment: item.manual_copy_required ? "Neutral" : "Postive",
+    tag: item.manual_copy_required ? "Manual Review" : "Approval Queue",
+    status: "pending",
+    ago: "Live",
+    urgency: item.manual_copy_required ? "yellow" : "red",
+    original: item.original,
+    reply: item.reply,
+    confidence,
+    queueIndex: index,
+  };
+}
+
 export default function AIReplyEngine() {
+  const queryClient = useQueryClient();
+  const { activeBrandId } = useAuth();
   const [platforms, setPlatforms] = useState<Record<Platform, boolean>>({
     instagram: true,
     facebook: true,
@@ -109,14 +176,100 @@ export default function AIReplyEngine() {
   const [tone, setTone] = useState<string>("Empathetic");
   const [toast, setToast] = useState<null | { kind: "approved" | "skipped" }>(null);
   const [queueCleared, setQueueCleared] = useState(false);
+  const [generatedDrafts, setGeneratedDrafts] = useState<Record<number, AiReplySuggestion>>({});
+  const [apiNotice, setApiNotice] = useState<string | null>(null);
+
+  const accessQuery = useQuery({
+    queryKey: ["tool-access", activeBrandId],
+    queryFn: getToolAccess,
+    enabled: Boolean(activeBrandId),
+    retry: false,
+  });
+
+  const queueQuery = useQuery({
+    queryKey: ["ai-reply-queue", activeBrandId],
+    queryFn: () => getAiReplyQueue(activeBrandId!),
+    enabled: Boolean(activeBrandId),
+    retry: false,
+  });
+
+  const replyMutation = useMutation({
+    mutationFn: generateAiReplies,
+    onSuccess: (result) => {
+      const suggestion = firstSuggestion(result);
+      if (!selectedId || !suggestion) {
+        setApiNotice(result.error ?? "The backend did not return a reply suggestion.");
+        return;
+      }
+
+      setGeneratedDrafts((current) => ({ ...current, [selectedId]: suggestion }));
+      setTone(suggestion.tone || tone);
+      setApiNotice("Draft regenerated from the backend AI Reply Engine.");
+    },
+    onError: (error) => {
+      setApiNotice(apiErrorMessage(error));
+    },
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: ({ index, replyText }: { index: number; replyText: string }) =>
+      approveAiReplyQueueItem(activeBrandId!, index, replyText),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
+      setQueueCleared(true);
+      setToast({ kind: "approved" });
+      setApiNotice(
+        result.publish?.success === false
+          ? `Approved, but sending needs attention: ${result.publish.error ?? "platform publish failed"}`
+          : "Reply approved and sent.",
+      );
+      setTimeout(() => setToast(null), 2500);
+    },
+    onError: (error) => {
+      setApiNotice(apiErrorMessage(error));
+    },
+  });
+
+  const skipMutation = useMutation({
+    mutationFn: (index: number) => skipAiReplyQueueItem(activeBrandId!, index),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
+      setQueueCleared(true);
+      setToast({ kind: "skipped" });
+      setApiNotice("Message skipped.");
+      setTimeout(() => setToast(null), 2500);
+    },
+    onError: (error) => {
+      setApiNotice(apiErrorMessage(error));
+    },
+  });
+
+  const queueMessages = useMemo(
+    () => queueQuery.data?.queue.map(mapQueueItem) ?? [],
+    [queueQuery.data?.queue],
+  );
+  const sourceMessages = queueQuery.data ? queueMessages : MESSAGES;
 
   const visible = useMemo(
-    () => MESSAGES.filter((m) => platforms[m.platform]),
-    [platforms],
+    () => sourceMessages.filter((m) => platforms[m.platform]),
+    [platforms, sourceMessages],
   );
 
   const selected = visible.find((m) => m.id === selectedId) ?? null;
   const draft = selected ? DRAFTS[selected.user] ?? DRAFTS["@kemiwears"] : null;
+  const generatedDraft = selected ? generatedDrafts[selected.id] : undefined;
+  const draftBody = generatedDraft?.text ?? generatedDraft?.reply_text ?? selected?.reply ?? draft?.body ?? "";
+  const draftTone = generatedDraft?.tone ?? draft?.tone ?? tone;
+  const lockedError =
+    (accessQuery.error instanceof ApiError && accessQuery.error.status === 403
+      ? accessQuery.error
+      : null) ||
+    (replyMutation.error instanceof ApiError && replyMutation.error.status === 403
+      ? replyMutation.error
+      : null);
+  const hasReplyTool = accessQuery.data ? accessQuery.data.enabled.includes("tool_3") : true;
+  const backendDraftAvailable = Boolean(activeBrandId && hasReplyTool && selected && isBackendPlatform(selected.platform));
+  const queueCount = queueQuery.data ? queueMessages.length : MESSAGES.length;
 
   const togglePlatform = (p: Platform) =>
     setPlatforms((s) => ({ ...s, [p]: !s[p] }));
@@ -126,6 +279,55 @@ export default function AIReplyEngine() {
     setTimeout(() => setToast(null), 2500);
   };
 
+  const regenerateDraft = () => {
+    if (!selected || !activeBrandId) {
+      setApiNotice("Connect this account to a brand workspace before generating a new draft.");
+      return;
+    }
+
+    if (!isBackendPlatform(selected.platform)) {
+      setApiNotice("LinkedIn draft generation is not available yet.");
+      return;
+    }
+
+    setApiNotice(null);
+    replyMutation.mutate({
+      brand_id: activeBrandId,
+      message: selectedMessageText(selected),
+      platform: selected.platform,
+      tone,
+      campaign_context: {
+        name: selected.tag,
+        objective: "respond to social comments quickly and helpfully",
+      },
+      ruleset: {
+        tone,
+        do_not_say: ["internal policy", "AI generated"],
+      },
+      author_handle: selected.user,
+      reply_channel: replyChannel(selected.platform),
+    });
+  };
+
+  const approveSelected = () => {
+    if (!selected) return;
+    if (activeBrandId && selected.queueIndex !== undefined && queueQuery.data) {
+      approveMutation.mutate({ index: selected.queueIndex, replyText: draftBody });
+      return;
+    }
+    showToast("approved");
+    setQueueCleared(true);
+  };
+
+  const skipSelected = () => {
+    if (!selected) return;
+    if (activeBrandId && selected.queueIndex !== undefined && queueQuery.data) {
+      skipMutation.mutate(selected.queueIndex);
+      return;
+    }
+    showToast("skipped");
+  };
+
   return (
     <div className="min-h-screen flex bg-muted/30">
       <Sidebar activeLabel="AI Reply Engine" />
@@ -133,12 +335,57 @@ export default function AIReplyEngine() {
         <DashHeader title="AI Reply Engine" />
 
         <main className="flex-1 p-6 md:p-8 space-y-6">
+          {!activeBrandId && (
+            <Notice tone="warning" title="No active brand workspace">
+              Live replies will appear after this account is attached to an approved brand workspace.
+            </Notice>
+          )}
+          {accessQuery.isLoading && (
+            <Notice title="Checking AI Reply Engine access">
+              Loading backend access for this workspace...
+            </Notice>
+          )}
+          {queueQuery.isLoading && (
+            <Notice title="Loading reply queue">
+              Fetching replies that need review.
+            </Notice>
+          )}
+          {lockedError && (
+            <Notice tone="warning" title="AI Reply Engine access is locked">
+              {lockedError.message}
+            </Notice>
+          )}
+          {accessQuery.data && !hasReplyTool && (
+            <Notice tone="warning" title="AI Reply Engine is not enabled">
+              Reply generation is not enabled for this brand.
+            </Notice>
+          )}
+          {accessQuery.error && !lockedError && (
+            <Notice tone="error" title="Backend access check failed">
+              {apiErrorMessage(accessQuery.error)}
+            </Notice>
+          )}
+          {queueQuery.error && !(queueQuery.error instanceof ApiError && queueQuery.error.status === 403) && (
+            <Notice tone="error" title="Reply queue unavailable">
+              {apiErrorMessage(queueQuery.error)}
+            </Notice>
+          )}
+          {queueQuery.data && queueMessages.length === 0 && (
+            <Notice title="No replies waiting">
+              New replies will appear here when campaigns queue them for approval.
+            </Notice>
+          )}
+          {apiNotice && (
+            <Notice tone={replyMutation.isError ? "error" : "info"} title="AI Reply Engine">
+              {apiNotice}
+            </Notice>
+          )}
           {/* KPIs */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <Kpi color="bg-primary" label="Replies Sent Today" value="342" delta="12% from yesterday" up />
             <Kpi color="bg-brand-pink" label="Avg Response Time" value="1.8mins" delta="40%  vs manual" />
             <Kpi color="bg-brand-olive" label="Approval Rate" value="94%" sub="Human-approved drafts" />
-            <Kpi color="bg-destructive" label="Queue" value="18" delta="5 new since last check" up dangerDelta />
+            <Kpi color="bg-destructive" label="Queue" value={String(queueCount)} delta="waiting for review" up dangerDelta />
           </div>
 
           {/* Body grid */}
@@ -210,7 +457,7 @@ export default function AIReplyEngine() {
                       <span className="font-medium min-w-[110px]">{m.user}</span>
                       <span className="text-muted-foreground truncate flex-1">{m.preview}</span>
                       <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${sentimentClass[m.sentiment]}`}>
-                        {m.sentiment}
+                        {m.confidence ? `${m.confidence}%` : m.sentiment}
                       </span>
                       <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
                         {m.tag}
@@ -288,7 +535,7 @@ export default function AIReplyEngine() {
                   </div>
 
                   <div className="bg-muted/40 rounded-xl p-4 text-sm leading-relaxed mb-3">
-                    {selected.user === "@tunde_Lagos" ? TUNDE_TEXT : KEMIWEARS_TEXT}
+                        {selectedMessageText(selected)}
                   </div>
 
                   <div className="flex gap-2 mb-5">
@@ -306,18 +553,23 @@ export default function AIReplyEngine() {
                     </div>
                     <div>
                       <p className="text-sm font-semibold text-primary">{draft.agent}</p>
-                      <p className="text-xs text-muted-foreground">Tone: {draft.tone}</p>
+                      <p className="text-xs text-muted-foreground">Tone: {draftTone}</p>
                     </div>
                   </div>
 
                   <div className="border rounded-xl p-4 text-sm leading-relaxed mb-2 max-h-44 overflow-auto">
-                    {draft.body}
+                    {draftBody}
                   </div>
                   <div className="flex items-center justify-between text-xs mb-5">
-                    <button className="flex items-center gap-1 text-primary font-semibold">
-                      <RefreshCw className="size-3" /> Regenerate draft
+                    <button
+                      onClick={regenerateDraft}
+                      disabled={!backendDraftAvailable || replyMutation.isPending}
+                      className="flex items-center gap-1 text-primary font-semibold disabled:text-muted-foreground disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw className={`size-3 ${replyMutation.isPending ? "animate-spin" : ""}`} />
+                      {replyMutation.isPending ? "Regenerating..." : "Regenerate draft"}
                     </button>
-                    <span className="text-muted-foreground">252 chars</span>
+                    <span className="text-muted-foreground">{draftBody.length} chars</span>
                   </div>
 
                   <p className="text-[11px] font-semibold tracking-wider text-muted-foreground mb-3">
@@ -340,21 +592,18 @@ export default function AIReplyEngine() {
                   </div>
 
                   <button
-                    onClick={() => {
-                      showToast("approved");
-                      setQueueCleared(true);
-                    }}
-                    className="w-full bg-primary text-primary-foreground rounded-xl py-3 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition"
+                    onClick={approveSelected}
+                    disabled={approveMutation.isPending || skipMutation.isPending}
+                    className="w-full bg-primary text-primary-foreground rounded-xl py-3 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition disabled:opacity-60"
                   >
-                    <Check className="size-4" /> Approval & Send
+                    <Check className="size-4" /> {approveMutation.isPending ? "Sending..." : "Approve & Send"}
                   </button>
                   <button
-                    onClick={() => {
-                      showToast("skipped");
-                    }}
-                    className="w-full text-center py-3 text-sm font-semibold hover:text-primary"
+                    onClick={skipSelected}
+                    disabled={approveMutation.isPending || skipMutation.isPending}
+                    className="w-full text-center py-3 text-sm font-semibold hover:text-primary disabled:opacity-60"
                   >
-                    Skip
+                    {skipMutation.isPending ? "Skipping..." : "Skip"}
                   </button>
                 </>
               )}
@@ -363,6 +612,30 @@ export default function AIReplyEngine() {
         </main>
       </div>
     </div>
+  );
+}
+
+function Notice({
+  title,
+  children,
+  tone = "info",
+}: {
+  title: string;
+  children: React.ReactNode;
+  tone?: "info" | "warning" | "error";
+}) {
+  const cls =
+    tone === "error"
+      ? "border-red-200 bg-red-50 text-red-800"
+      : tone === "warning"
+        ? "border-amber-200 bg-amber-50 text-amber-900"
+        : "border-border bg-card text-foreground";
+
+  return (
+    <section className={`rounded-xl border px-4 py-3 text-sm ${cls}`}>
+      <p className="font-semibold">{title}</p>
+      <p className="mt-1 text-sm opacity-90">{children}</p>
+    </section>
   );
 }
 

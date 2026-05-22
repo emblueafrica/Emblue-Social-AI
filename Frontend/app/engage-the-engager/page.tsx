@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
   ChevronDown,
@@ -13,6 +14,16 @@ import {
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { NewCampaignModal, type CampaignDraft } from "@/components/dashboard/NewCampaignModal";
 import { PlatformLogo } from "@/components/PlatformLogo";
+import { useAuth } from "@/hooks/use-auth";
+import {
+  ApiError,
+  getCampaigns,
+  runPostUrlCampaign,
+  saveCampaign,
+  toggleCampaign,
+  type CampaignPayload,
+  type CampaignRecord,
+} from "@/lib/api";
 
 type Platform = "instagram" | "facebook" | "tiktok" | "x";
 
@@ -81,18 +92,110 @@ const INITIAL_CAMPAIGNS: Campaign[] = [
   },
 ];
 
+function mapCampaignRecord(record: CampaignRecord): Campaign {
+  const allocation = record.platform_allocation ?? { instagram: 50, facebook: 30, tiktok: 20 };
+  const platforms = uniquePlatforms([
+    record.platform,
+    ...(Object.entries(allocation)
+      .filter(([, value]) => Number(value) > 0)
+      .map(([platform]) => platform as Platform)),
+  ]);
+  const draft = seedDraft({
+    name: record.name,
+    platforms: platforms.length ? platforms : record.platform ? [record.platform] : ["instagram"],
+    keywords: record.keywords ?? [],
+    tone: record.tone ?? "",
+    maxPerHour: record.max_per_hour ?? 50,
+    template: record.reply_template ?? "",
+    ctaLink: record.cta_link ?? "",
+    imageUrl: record.image_url ?? "",
+    threshold: record.auto_fire_threshold ?? 85,
+    allocation: {
+      instagram: allocation.instagram ?? 0,
+      facebook: allocation.facebook ?? 0,
+      tiktok: allocation.tiktok ?? 0,
+    },
+  });
+
+  return {
+    id: record.campaign_id,
+    title: record.name,
+    meta: buildCampaignMeta(draft),
+    platforms: draft.platforms,
+    stat: record.is_active === false ? "Paused" : `${record.total_sent ?? 0} sent total`,
+    state: record.is_active === false ? "paused" : "running",
+    draft,
+  };
+}
+
+function uniquePlatforms(platforms: Array<Platform | undefined>) {
+  return Array.from(new Set(platforms.filter(Boolean))) as Platform[];
+}
+
+function buildCampaignMeta(c: CampaignDraft) {
+  const parts: string[] = [];
+  if (c.keywords.length) parts.push(`Keywords: ${c.keywords.join(", ")}`);
+  else parts.push("All commenters");
+  if (c.imageUrl) parts.push("DM with branded image");
+  if (c.ctaLink) parts.push(c.ctaLink.replace(/^https?:\/\//, ""));
+  parts.push(`${c.maxPerHour}/hr limit`);
+  return parts.join(" ? ");
+}
+
+function apiErrorMessage(err: unknown) {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error) return err.message;
+  return "Request failed.";
+}
+
 export default function EngageTheEngager() {
+  const queryClient = useQueryClient();
+  const { activeBrandId } = useAuth();
   const [posts, setPosts] = useState<PostRow[]>([
     { id: nextId++, platform: "instagram", url: "", comments: false, likes: true },
   ]);
   const [allocation, setAllocation] = useState({ instagram: 50, facebook: 30, tiktok: 20 });
+  const [postTemplate, setPostTemplate] = useState("");
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
-  const [campaigns, setCampaigns] = useState<Campaign[]>(INITIAL_CAMPAIGNS);
+  const [fallbackCampaigns, setFallbackCampaigns] = useState<Campaign[]>(INITIAL_CAMPAIGNS);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [campaignMenuId, setCampaignMenuId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [apiNotice, setApiNotice] = useState<string | null>(null);
+
+  const campaignsQuery = useQuery({
+    queryKey: ["campaigns", activeBrandId],
+    queryFn: () => getCampaigns(activeBrandId!),
+    enabled: Boolean(activeBrandId),
+    retry: false,
+  });
+
+  const apiCampaigns = campaignsQuery.data?.campaigns.map(mapCampaignRecord) ?? [];
+  const campaigns = campaignsQuery.data ? apiCampaigns : fallbackCampaigns;
+
+  const saveCampaignMutation = useMutation({
+    mutationFn: saveCampaign,
+    onSuccess: async () => {
+      if (activeBrandId) {
+        await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+      }
+    },
+  });
+
+  const toggleCampaignMutation = useMutation({
+    mutationFn: toggleCampaign,
+    onSuccess: async () => {
+      if (activeBrandId) {
+        await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+      }
+    },
+  });
+
+  const runPostUrlMutation = useMutation({
+    mutationFn: runPostUrlCampaign,
+  });
 
   useEffect(() => {
     if (!toast) return;
@@ -117,19 +220,40 @@ export default function EngageTheEngager() {
     setOpenMenuId(null);
   };
 
-  const buildMeta = (c: CampaignDraft) => {
-    const parts: string[] = [];
-    if (c.keywords.length) parts.push(`Keywords: ${c.keywords.join(", ")}`);
-    else parts.push("All commenters");
-    if (c.imageUrl) parts.push("DM with branded image");
-    if (c.ctaLink) parts.push(c.ctaLink.replace(/^https?:\/\//, ""));
-    parts.push(`${c.maxPerHour}/hr limit`);
-    return parts.join(" · ");
-  };
+  const buildMeta = buildCampaignMeta;
 
-  const handleSaveCampaign = (c: CampaignDraft) => {
+  const toPayload = (c: CampaignDraft): CampaignPayload => ({
+    ...(editingId && editingId > 0 ? { campaign_id: editingId } : {}),
+    brand_id: activeBrandId!,
+    name: c.name,
+    platform: c.platforms[0] ?? "instagram",
+    keywords: c.keywords,
+    tone: c.tone,
+    reply_template: c.template,
+    cta_link: c.ctaLink,
+    image_url: c.imageUrl,
+    auto_fire_threshold: c.threshold,
+    max_per_hour: c.maxPerHour,
+    is_active: true,
+    platform_allocation: c.allocation,
+  });
+
+  const handleSaveCampaign = async (c: CampaignDraft) => {
+    if (activeBrandId) {
+      try {
+        await saveCampaignMutation.mutateAsync(toPayload(c));
+        setEditingId(null);
+        setModalOpen(false);
+        setToast(editingId !== null ? "Campaign updated successfully." : "A new campaign has been set successfully.");
+        setApiNotice(null);
+        return;
+      } catch (err) {
+        setApiNotice(apiErrorMessage(err));
+      }
+    }
+
     if (editingId !== null) {
-      setCampaigns((arr) =>
+      setFallbackCampaigns((arr) =>
         arr.map((row) =>
           row.id === editingId
             ? { ...row, title: c.name, meta: buildMeta(c), platforms: c.platforms, draft: c }
@@ -137,22 +261,22 @@ export default function EngageTheEngager() {
         ),
       );
       setEditingId(null);
-      setToast("Campaign updated successfully.");
+      setToast("Campaign updated locally.");
     } else {
-      setCampaigns((arr) => [
+      setFallbackCampaigns((arr) => [
         {
           id: Date.now(),
           title: c.name,
           meta: buildMeta(c),
           platforms: c.platforms,
-          stat: "Just activated",
+          stat: "Local draft",
           state: "running",
           justActivated: true,
           draft: c,
         },
         ...arr,
       ]);
-      setToast("A new campaign has been set successfully.");
+      setToast("Campaign saved locally.");
     }
     setModalOpen(false);
   };
@@ -163,10 +287,67 @@ export default function EngageTheEngager() {
 
   const handleDeleteConfirmed = () => {
     if (confirmDeleteId === null) return;
-    setCampaigns((arr) => arr.filter((c) => c.id !== confirmDeleteId));
+    setFallbackCampaigns((arr) => arr.filter((c) => c.id !== confirmDeleteId));
     setConfirmDeleteId(null);
     setEditingId(null);
-    setToast("Campaign deleted.");
+    setToast("Campaign deleted locally.");
+  };
+
+  const handleToggleCampaign = async (campaign: Campaign) => {
+    if (campaign.id > 0 && activeBrandId) {
+      try {
+        await toggleCampaignMutation.mutateAsync(campaign.id);
+        setToast(campaign.state === "paused" ? "Campaign resumed." : "Campaign paused.");
+        setApiNotice(null);
+        return;
+      } catch (err) {
+        setApiNotice(apiErrorMessage(err));
+      }
+    }
+
+    setFallbackCampaigns((arr) =>
+      arr.map((row) =>
+        row.id === campaign.id
+          ? {
+              ...row,
+              state: row.state === "paused" ? "running" : "paused",
+              stat: row.state === "paused" ? "Resumed" : "Paused",
+            }
+          : row,
+      ),
+    );
+  };
+
+  const handleRunPostUrls = async () => {
+    const validPosts = posts
+      .filter((post) => post.url.trim())
+      .map((post) => ({ platform: post.platform, url: post.url.trim() }));
+
+    if (!activeBrandId) {
+      setApiNotice("Connect this account to a brand workspace before running post URL campaigns.");
+      return;
+    }
+    if (!validPosts.length) {
+      setApiNotice("Add at least one post URL before fetching engagers.");
+      return;
+    }
+    if (!allocOk) {
+      setApiNotice("Platform allocation must equal 100% before running.");
+      return;
+    }
+
+    try {
+      const result = await runPostUrlMutation.mutateAsync({
+        brand_id: activeBrandId,
+        post_urls: validPosts,
+        platform_allocation: allocation,
+        reply_template: postTemplate,
+      });
+      setApiNotice(null);
+      setToast(result.message);
+    } catch (err) {
+      setApiNotice(apiErrorMessage(err));
+    }
   };
 
 
@@ -200,6 +381,22 @@ export default function EngageTheEngager() {
         )}
 
         <main className="flex-1 p-6 md:p-8 space-y-6 max-w-[1200px] w-full mx-auto">
+          {apiNotice && (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-950">
+              {apiNotice}
+            </section>
+          )}
+          {campaignsQuery.isLoading && (
+            <section className="rounded-2xl bg-card p-5 text-sm text-muted-foreground shadow-sm">
+              Loading campaigns...
+            </section>
+          )}
+          {campaignsQuery.error && (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-950">
+              {apiErrorMessage(campaignsQuery.error)} Showing sample campaigns until the API is available.
+            </section>
+          )}
+
           {/* Top 3 explainer cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <ExplainerCard
@@ -271,9 +468,7 @@ export default function EngageTheEngager() {
                     onMenuToggle={() => setCampaignMenuId((id) => (id === c.id ? null : c.id))}
                     onEdit={() => { setEditingId(c.id); setModalOpen(true); setCampaignMenuId(null); }}
                     onRequestDelete={() => { setConfirmDeleteId(c.id); setCampaignMenuId(null); }}
-                    onTogglePause={() =>
-                      setCampaigns((arr) => arr.map((row) => row.id === c.id ? { ...row, state: row.state === "paused" ? "running" : "paused", stat: row.state === "paused" ? row.stat.replace("Paused", "Resumed") : "Paused" } : row))
-                    }
+                    onTogglePause={() => void handleToggleCampaign(c)}
                   />
                 ))}
               </ul>
@@ -396,6 +591,8 @@ export default function EngageTheEngager() {
               </div>
               <textarea
                 rows={3}
+                value={postTemplate}
+                onChange={(e) => setPostTemplate(e.target.value)}
                 placeholder="Hey {{handle}}! Thanks for engaging with our post. Here's something special for you: {{link}}"
                 className="w-full rounded-xl border border-border bg-card p-4 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
@@ -407,8 +604,12 @@ export default function EngageTheEngager() {
               </div>
             </div>
 
-            <button className="mt-5 w-full bg-primary text-primary-foreground rounded-xl py-3.5 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition">
-              <Check className="size-4" /> Fetch & Message all Engagers
+            <button
+              onClick={handleRunPostUrls}
+              disabled={runPostUrlMutation.isPending}
+              className="mt-5 w-full bg-primary text-primary-foreground rounded-xl py-3.5 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition disabled:opacity-60"
+            >
+              <Check className="size-4" /> {runPostUrlMutation.isPending ? "Starting..." : "Fetch & Message all Engagers"}
             </button>
           </div>
 

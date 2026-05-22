@@ -19,6 +19,7 @@ const endpoints = [
   { method: 'GET', path: '/api/v1/listening/runs/1', expect: [401] },
   { method: 'GET', path: '/api/v1/listening/feed/1', expect: [401] },
   { method: 'GET', path: '/api/v1/rt/queue/1', expect: [401] },
+  { method: 'GET', path: '/api/v1/rt/reply-queue/1', expect: [401] },
   { method: 'GET', path: '/api/v1/rt/webhook/meta', expect: [403] },
   {
     method: 'POST',
@@ -32,6 +33,8 @@ const endpoints = [
   { method: 'POST', path: '/api/v1/cluster', body: {}, expect: [401] },
   { method: 'POST', path: '/api/v1/strategize', body: {}, expect: [401] },
   { method: 'POST', path: '/api/v1/reply', body: {}, expect: [401] },
+  { method: 'POST', path: '/api/v1/rt/queue/skip', body: {}, expect: [401] },
+  { method: 'POST', path: '/api/v1/rt/queue/approve', body: {}, expect: [401] },
   { method: 'POST', path: '/api/v1/kpi', body: {}, expect: [401] },
   { method: 'POST', path: '/api/v1/creative/score', body: {}, expect: [401] },
   { method: 'POST', path: '/api/v1/insights/run', body: {}, expect: [401] },

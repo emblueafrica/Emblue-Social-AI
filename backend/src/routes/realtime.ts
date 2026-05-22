@@ -4,6 +4,7 @@ import { addSseClient, broadcastToClients, getApprovalQueue, removeFromQueue } f
 import prisma from '../db/prisma';
 import { requireBrandAccess } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
+import { publishReply } from '../stream/publisher';
 import { getRequiredBrandId, requireNonEmptyString, sendValidationError } from '../utils/validation';
 
 const router = Router();
@@ -70,7 +71,37 @@ router.get('/queue/:brand_id', requireBrandAccess, requireToolAccess('tool_5'), 
   res.json({ queue: getApprovalQueue(brandId) });
 });
 
-router.post('/queue/approve', requireBrandAccess, requireToolAccess('tool_3'), (req: Request, res: Response) => {
+router.get('/reply-queue/:brand_id', requireBrandAccess, requireToolAccess('tool_3'), (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.params['brand_id']);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  res.json({ queue: getApprovalQueue(brandId) });
+});
+
+router.post('/queue/approve', requireBrandAccess, requireToolAccess('tool_3'), async (req: Request, res: Response) => {
+  const { brand_id, index, reply_text } = req.body as { brand_id: number; index: number; reply_text?: string };
+  const brandId = getRequiredBrandId(brand_id);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  if (!Number.isInteger(index) || index < 0) { sendValidationError(res, 'index must be a non-negative integer'); return; }
+
+  const item = removeFromQueue(brandId, index);
+  if (!item) { res.status(404).json({ error: 'Queue item not found' }); return; }
+
+  const publish = await publishReply({
+    brand_id: brandId,
+    platform: item.platform,
+    reply_text: requireNonEmptyString(reply_text) ? reply_text.trim() : item.reply,
+    author_id: item.meta?.author_id ?? undefined,
+    comment_id: item.meta?.comment_id ?? item.meta?.post_id ?? undefined,
+    tweet_id: item.meta?.tweet_id ?? undefined,
+    image_url: item.image_url ?? undefined,
+    tracked_link: item.tracked_link ?? undefined,
+  });
+
+  broadcastToClients(brandId, 'reply_approved', { index, item });
+  res.json({ ok: true, item, publish });
+});
+
+router.post('/queue/skip', requireBrandAccess, requireToolAccess('tool_3'), (req: Request, res: Response) => {
   const { brand_id, index } = req.body as { brand_id: number; index: number };
   const brandId = getRequiredBrandId(brand_id);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
@@ -79,7 +110,7 @@ router.post('/queue/approve', requireBrandAccess, requireToolAccess('tool_3'), (
   const item = removeFromQueue(brandId, index);
   if (!item) { res.status(404).json({ error: 'Queue item not found' }); return; }
 
-  broadcastToClients(brandId, 'reply_approved', { index, item });
+  broadcastToClients(brandId, 'reply_skipped', { index, item });
   res.json({ ok: true, item });
 });
 

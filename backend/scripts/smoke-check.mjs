@@ -54,6 +54,9 @@ const openApiSpec = readIfExists('src/docs/openapi.ts');
 const toolRegistry = readIfExists('src/tools/registry.ts');
 const toolAccessService = readIfExists('src/tools/access.ts');
 const toolAccessMiddleware = readIfExists('src/middleware/toolAccess.ts');
+const frontendAiReplyApi = readIfExists('../Frontend/lib/ai-reply-api.ts');
+const frontendAiReplyPage = readIfExists('../Frontend/app/ai-reply-engine/page.tsx');
+const frontendSocialResponsePage = readIfExists('../Frontend/app/social-response/page.tsx');
 const productReadinessGuide = readIfExists('../docs/Social_Emblue_AI_API_Tools_Product_Readiness_Guide.md');
 const projectSecurityRules = readIfExists('../AGENTS.md');
 const rootGitignore = readIfExists('../.gitignore');
@@ -208,6 +211,11 @@ check('rate limits match security policy tiers', rateLimitMiddleware.includes('A
 check('ai rate limit uses bearer identity hash when available', rateLimitMiddleware.includes('createHash') && rateLimitMiddleware.includes('bearer:') && rateLimitMiddleware.includes('sha256'));
 check('cloudinary upload utility validates files safely', cloudinaryUtil.includes('MAX_IMAGE_BYTES') && cloudinaryUtil.includes('ALLOWED_EXTENSIONS') && cloudinaryUtil.includes('detectImageMime') && cloudinaryUtil.includes('randomUUID') && cloudinaryUtil.includes('allowed_formats'));
 check('frontend scan has no obvious dangerous sinks or secret literals', !readIfExists('../Frontend/src/App.tsx').includes('dangerouslySetInnerHTML') && !readIfExists('../Frontend/src/App.tsx').includes('eval(') && !readIfExists('../Frontend/src/App.tsx').includes('sk-'));
+check('reply queue exposes tool 3 load and skip endpoints', realtimeRoutes.includes("router.get('/reply-queue/:brand_id'") && realtimeRoutes.includes("router.post('/queue/skip'") && realtimeRoutes.includes("requireToolAccess('tool_3')"));
+check('approval queue approve publishes replies', realtimeRoutes.includes('publishReply') && realtimeRoutes.includes('reply_text') && realtimeRoutes.includes('publish'));
+check('campaign stats returns richer social response analytics', campaigns.includes('score_trend') && campaigns.includes('message_volume') && campaigns.includes('sentiment') && campaigns.includes('risk_events') && campaigns.includes('attribution'));
+check('frontend ai reply consumes live queue actions', frontendAiReplyApi.includes('getAiReplyQueue') && frontendAiReplyApi.includes('approveAiReplyQueueItem') && frontendAiReplyApi.includes('skipAiReplyQueueItem') && frontendAiReplyPage.includes('queueQuery'));
+check('frontend social response consumes richer analytics', frontendSocialResponsePage.includes('score_trend') && frontendSocialResponsePage.includes('message_volume') && frontendSocialResponsePage.includes('sentiment') && frontendSocialResponsePage.includes('risk_events') && frontendSocialResponsePage.includes('attribution'));
 
 const failed = checks.filter(result => !result.passed);
 for (const result of checks) {

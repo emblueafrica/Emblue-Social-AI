@@ -1,9 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info, Check } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { PlatformLogo } from "@/components/PlatformLogo";
+import { useAuth } from "@/hooks/use-auth";
+import {
+  ApiError,
+  approveQueueItem,
+  getApprovalQueue,
+  type ApprovalQueueItem,
+} from "@/lib/api";
 
 type Platform = "instagram" | "x" | "tiktok" | "facebook";
 type QueueItem = {
@@ -99,18 +107,97 @@ function PlatformIcon({ p }: { p: Platform }) {
   return <PlatformLogo platform={p} size={16} />;
 }
 
+function normalizePlatform(platform: string): Platform {
+  if (platform === "instagram" || platform === "facebook" || platform === "tiktok" || platform === "x") {
+    return platform;
+  }
+  return "x";
+}
+
+function mapApprovalItem(item: ApprovalQueueItem, index: number): QueueItem {
+  const author = item.author.startsWith("@") ? item.author : `@${item.author}`;
+  const category = item.manual_copy_required ? "MANUAL REVIEW" : "AI REPLY";
+
+  return {
+    id: index + 1,
+    handle: author,
+    platform: normalizePlatform(item.platform),
+    confidence: item.manual_copy_required ? 50 : 72,
+    ago: "Live",
+    preview: item.reply.slice(0, 72) || "Reply waiting for review.",
+    original: item.original,
+    reply: item.reply,
+    tags: [
+      item.manual_copy_required
+        ? { label: "Manual copy", cls: "bg-amber-100 text-amber-700" }
+        : { label: "Ready to send", cls: "bg-emerald-100 text-emerald-700" },
+      item.tracked_link
+        ? { label: "Tracked link", cls: "bg-indigo-100 text-indigo-700" }
+        : { label: "Reply", cls: "bg-pink-100 text-pink-700" },
+    ],
+    category,
+  };
+}
+
+function apiErrorMessage(error: unknown) {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return "Approval queue request failed.";
+}
+
 export default function ApprovalQueue() {
+  const queryClient = useQueryClient();
+  const { activeBrandId } = useAuth();
   const [sort, setSort] = useState("Confidence");
   const [selectedId, setSelectedId] = useState<number>(1);
-  const [items, setItems] = useState(ITEMS);
+  const [fallbackItems, setFallbackItems] = useState(ITEMS);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [toast, setToast] = useState<{ handle: string } | null>(null);
+  const [apiNotice, setApiNotice] = useState<string | null>(null);
+
+  const queueQuery = useQuery({
+    queryKey: ["approval-queue", activeBrandId],
+    queryFn: () => getApprovalQueue(activeBrandId!),
+    enabled: Boolean(activeBrandId),
+    staleTime: 10_000,
+  });
+
+  const liveItems = queueQuery.data?.queue.map(mapApprovalItem) ?? [];
+  const items = queueQuery.data ? liveItems : fallbackItems;
+
+  const approveMutation = useMutation({
+    mutationFn: ({ brandId, index, replyText }: { brandId: number; index: number; replyText?: string }) =>
+      approveQueueItem(brandId, index, replyText),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["approval-queue", activeBrandId] });
+    },
+  });
 
   const selected = items.find((i) => i.id === selectedId);
   const draftText = selected ? drafts[selected.id] ?? "" : "";
 
-  const approve = () => {
+  const approve = async () => {
     if (!selected) return;
+    setApiNotice(null);
+
+    if (activeBrandId && queueQuery.data) {
+      const index = items.findIndex((item) => item.id === selected.id);
+      try {
+        await approveMutation.mutateAsync({
+          brandId: activeBrandId,
+          index,
+          replyText: draftText.trim() || selected.reply,
+        });
+        setToast({ handle: selected.handle });
+        setTimeout(() => setToast(null), 5000);
+        return;
+      } catch (error) {
+        setApiNotice(apiErrorMessage(error));
+        return;
+      }
+    }
+
+    setFallbackItems((current) => current.filter((item) => item.id !== selected.id));
     setToast({ handle: selected.handle });
     setTimeout(() => setToast(null), 5000);
   };
@@ -124,6 +211,26 @@ export default function ApprovalQueue() {
         <DashHeader title="Approval Queue" />
 
         <main className="flex-1 p-6 md:p-8">
+          {!activeBrandId && (
+            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              No active brand was found for this account.
+            </div>
+          )}
+          {queueQuery.isLoading && (
+            <div className="mb-5 rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
+              Loading approval queue...
+            </div>
+          )}
+          {queueQuery.error && (
+            <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {apiErrorMessage(queueQuery.error)}
+            </div>
+          )}
+          {apiNotice && (
+            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {apiNotice}
+            </div>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-[380px_minmax(0,1fr)] gap-6">
             {/* Queue list */}
             <section>
@@ -150,6 +257,11 @@ export default function ApprovalQueue() {
               </div>
 
               <ul className="bg-card rounded-2xl shadow-sm divide-y overflow-hidden">
+                {items.length === 0 && (
+                  <li className="p-6 text-sm text-muted-foreground">
+                    No replies are waiting for approval.
+                  </li>
+                )}
                 {items.map((it) => {
                   const isSel = it.id === selectedId;
                   return (
@@ -175,6 +287,11 @@ export default function ApprovalQueue() {
 
             {/* Detail panel */}
             <section className="bg-card rounded-2xl shadow-sm p-6 md:p-8 self-start">
+              {!selected && (
+                <div className="text-sm text-muted-foreground">
+                  Select a reply from the queue to review it.
+                </div>
+              )}
               {selected && (
                 <>
                   <div className="flex items-center justify-between mb-6">
@@ -232,9 +349,10 @@ export default function ApprovalQueue() {
 
                   <button
                     onClick={approve}
-                    className="w-full bg-primary text-primary-foreground rounded-xl py-3.5 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition mb-3"
+                    disabled={approveMutation.isPending}
+                    className="w-full bg-primary text-primary-foreground rounded-xl py-3.5 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition mb-3 disabled:opacity-60"
                   >
-                    <Check className="size-4" /> Approve & Send
+                    <Check className="size-4" /> {approveMutation.isPending ? "Approving..." : "Approve & Send"}
                   </button>
                   <button className="w-full border border-red-300 text-red-500 rounded-xl py-3.5 font-semibold hover:bg-red-50 transition">
                     Reject

@@ -17,6 +17,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { EmblueLogo } from "@/components/EmblueLogo";
+import { useAuth } from "@/hooks/use-auth";
 
 type NavItem = { icon: typeof Activity; label: string; to?: string };
 type NavGroup = { label: string; items: NavItem[] };
@@ -69,6 +70,7 @@ const navGroups: NavGroup[] = [
 
 export function Sidebar({ activeLabel }: { activeLabel: string }) {
   const router = useRouter();
+  const { signOut } = useAuth();
   return (
     <aside className="hidden lg:flex w-72 bg-sidebar text-sidebar-foreground flex-col">
       <div className="px-6 py-8 border-b border-sidebar-border">
@@ -108,7 +110,10 @@ export function Sidebar({ activeLabel }: { activeLabel: string }) {
           </div>
         ))}
         <button
-          onClick={() => router.push("/")}
+          onClick={async () => {
+            await signOut();
+            router.replace("/");
+          }}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-red-400 hover:bg-white/5 transition"
         >
           <LogOut className="size-5" />
@@ -120,6 +125,17 @@ export function Sidebar({ activeLabel }: { activeLabel: string }) {
 }
 
 export function DashHeader({ title, action }: { title: string; action?: React.ReactNode }) {
+  const { authContext } = useAuth();
+  const displayName = authContext?.active_brand?.name ?? "Workspace";
+  const role = authContext?.active_brand?.role ?? authContext?.platform_role ?? "Authenticated";
+  const initials = displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase() || "BC";
+
   return (
     <header className="flex items-center justify-between px-6 md:px-10 py-6 bg-card border-b">
       <h1 className="text-xl md:text-2xl font-bold">{title}</h1>
@@ -129,10 +145,10 @@ export function DashHeader({ title, action }: { title: string; action?: React.Re
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
         </button>
         <div className="flex items-center gap-3 pl-6 border-l">
-          <div className="size-10 rounded-full bg-accent text-primary flex items-center justify-center font-bold text-sm">BC</div>
+          <div className="size-10 rounded-full bg-accent text-primary flex items-center justify-center font-bold text-sm">{initials}</div>
           <div className="hidden sm:block">
-            <p className="text-sm font-semibold leading-tight">Bola Cunha</p>
-            <p className="text-xs text-muted-foreground">Super Admin</p>
+            <p className="text-sm font-semibold leading-tight">{displayName}</p>
+            <p className="text-xs text-muted-foreground capitalize">{role.replace(/_/g, " ")}</p>
           </div>
         </div>
       </div>
