@@ -206,7 +206,7 @@ export default function ApprovalQueue() {
 
   return (
     <div className="min-h-screen flex bg-muted/30">
-      <Sidebar activeLabel="Engage the Engager" />
+      <Sidebar activeLabel="Approval Queue" />
       <div className="flex-1 flex flex-col min-w-0">
         <DashHeader title="Approval Queue" />
 

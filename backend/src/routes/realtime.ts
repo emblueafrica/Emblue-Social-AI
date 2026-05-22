@@ -6,6 +6,7 @@ import { requireBrandAccess } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
 import { publishReply } from '../stream/publisher';
 import { getRequiredBrandId, requireNonEmptyString, sendValidationError } from '../utils/validation';
+import { ApprovalQueueItem, Platform } from '../types';
 
 const router = Router();
 
@@ -65,16 +66,54 @@ router.post('/webhook/meta', (req: Request, res: Response) => {
 });
 
 // ── APPROVAL QUEUE ────────────────────────────────────────────────────────────
-router.get('/queue/:brand_id', requireBrandAccess, requireToolAccess('tool_5'), (req: Request, res: Response) => {
+// The queue has two sources: the in-memory queue (live items pushed by the
+// automation) and the approval_queue table (persisted items that survive a
+// restart and can be seeded). GET returns them concatenated as
+// [in-memory..., db...]; the `index` used by approve/skip is a position into
+// that combined list.
+
+function fetchPendingApprovalRows(brandId: number) {
+  return prisma.approvalQueue.findMany({
+    where: { brandId, status: 'pending' },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+type PendingApprovalRow = Awaited<ReturnType<typeof fetchPendingApprovalRows>>[number];
+
+function mapApprovalRow(row: PendingApprovalRow, brandId: number): ApprovalQueueItem {
+  return {
+    brand_id: brandId,
+    platform: (row.platform ?? 'x') as Platform,
+    author: row.authorHandle ?? '',
+    original: row.originalText ?? '',
+    reply: row.replyText ?? '',
+  };
+}
+
+async function getCombinedApprovalQueue(brandId: number): Promise<ApprovalQueueItem[]> {
+  const dbRows = await fetchPendingApprovalRows(brandId);
+  return [...getApprovalQueue(brandId), ...dbRows.map(row => mapApprovalRow(row, brandId))];
+}
+
+router.get('/queue/:brand_id', requireBrandAccess, requireToolAccess('tool_5'), async (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.params['brand_id']);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
-  res.json({ queue: getApprovalQueue(brandId) });
+  try {
+    res.json({ queue: await getCombinedApprovalQueue(brandId) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load approval queue', message: (err as Error).message });
+  }
 });
 
-router.get('/reply-queue/:brand_id', requireBrandAccess, requireToolAccess('tool_3'), (req: Request, res: Response) => {
+router.get('/reply-queue/:brand_id', requireBrandAccess, requireToolAccess('tool_3'), async (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.params['brand_id']);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
-  res.json({ queue: getApprovalQueue(brandId) });
+  try {
+    res.json({ queue: await getCombinedApprovalQueue(brandId) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load reply queue', message: (err as Error).message });
+  }
 });
 
 router.post('/queue/approve', requireBrandAccess, requireToolAccess('tool_3'), async (req: Request, res: Response) => {
@@ -83,35 +122,75 @@ router.post('/queue/approve', requireBrandAccess, requireToolAccess('tool_3'), a
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
   if (!Number.isInteger(index) || index < 0) { sendValidationError(res, 'index must be a non-negative integer'); return; }
 
-  const item = removeFromQueue(brandId, index);
-  if (!item) { res.status(404).json({ error: 'Queue item not found' }); return; }
+  try {
+    const memoryItems = getApprovalQueue(brandId);
 
-  const publish = await publishReply({
-    brand_id: brandId,
-    platform: item.platform,
-    reply_text: requireNonEmptyString(reply_text) ? reply_text.trim() : item.reply,
-    author_id: item.meta?.author_id ?? undefined,
-    comment_id: item.meta?.comment_id ?? item.meta?.post_id ?? undefined,
-    tweet_id: item.meta?.tweet_id ?? undefined,
-    image_url: item.image_url ?? undefined,
-    tracked_link: item.tracked_link ?? undefined,
-  });
+    // In-memory item pushed by live automation — original behaviour.
+    if (index < memoryItems.length) {
+      const item = removeFromQueue(brandId, index);
+      if (!item) { res.status(404).json({ error: 'Queue item not found' }); return; }
 
-  broadcastToClients(brandId, 'reply_approved', { index, item });
-  res.json({ ok: true, item, publish });
+      const publish = await publishReply({
+        brand_id: brandId,
+        platform: item.platform,
+        reply_text: requireNonEmptyString(reply_text) ? reply_text.trim() : item.reply,
+        author_id: item.meta?.author_id ?? undefined,
+        comment_id: item.meta?.comment_id ?? item.meta?.post_id ?? undefined,
+        tweet_id: item.meta?.tweet_id ?? undefined,
+        image_url: item.image_url ?? undefined,
+        tracked_link: item.tracked_link ?? undefined,
+      });
+
+      broadcastToClients(brandId, 'reply_approved', { index, item });
+      res.json({ ok: true, item, publish });
+      return;
+    }
+
+    // Persisted item from the approval_queue table.
+    const dbRows = await fetchPendingApprovalRows(brandId);
+    const row = dbRows[index - memoryItems.length];
+    if (!row) { res.status(404).json({ error: 'Queue item not found' }); return; }
+
+    const item = mapApprovalRow(row, brandId);
+    const replyText = requireNonEmptyString(reply_text) ? reply_text.trim() : item.reply;
+    const publish = await publishReply({ brand_id: brandId, platform: item.platform, reply_text: replyText });
+
+    await prisma.approvalQueue.update({ where: { queueId: row.queueId }, data: { status: 'approved' } });
+    broadcastToClients(brandId, 'reply_approved', { index, item });
+    res.json({ ok: true, item: { ...item, reply: replyText }, publish });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to approve queue item', message: (err as Error).message });
+  }
 });
 
-router.post('/queue/skip', requireBrandAccess, requireToolAccess('tool_3'), (req: Request, res: Response) => {
+router.post('/queue/skip', requireBrandAccess, requireToolAccess('tool_3'), async (req: Request, res: Response) => {
   const { brand_id, index } = req.body as { brand_id: number; index: number };
   const brandId = getRequiredBrandId(brand_id);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
   if (!Number.isInteger(index) || index < 0) { sendValidationError(res, 'index must be a non-negative integer'); return; }
 
-  const item = removeFromQueue(brandId, index);
-  if (!item) { res.status(404).json({ error: 'Queue item not found' }); return; }
+  try {
+    const memoryItems = getApprovalQueue(brandId);
 
-  broadcastToClients(brandId, 'reply_skipped', { index, item });
-  res.json({ ok: true, item });
+    if (index < memoryItems.length) {
+      const item = removeFromQueue(brandId, index);
+      if (!item) { res.status(404).json({ error: 'Queue item not found' }); return; }
+      broadcastToClients(brandId, 'reply_skipped', { index, item });
+      res.json({ ok: true, item });
+      return;
+    }
+
+    const dbRows = await fetchPendingApprovalRows(brandId);
+    const row = dbRows[index - memoryItems.length];
+    if (!row) { res.status(404).json({ error: 'Queue item not found' }); return; }
+
+    const item = mapApprovalRow(row, brandId);
+    await prisma.approvalQueue.update({ where: { queueId: row.queueId }, data: { status: 'rejected' } });
+    broadcastToClients(brandId, 'reply_skipped', { index, item });
+    res.json({ ok: true, item });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to skip queue item', message: (err as Error).message });
+  }
 });
 
 // ── CONVERSION TRACKING (public — no auth) ────────────────────────────────────

@@ -6,7 +6,9 @@
       "Bash(git config *)",
       "Bash(node -e \"require\\('child_process'\\)\")",
       "Bash(curl -s -i -X OPTIONS 'https://emblue-social-ai-production.up.railway.app/api/v1/auth/me' -H 'Origin: https://emblue-social-ai.vercel.app' -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: authorization' --max-time 25)",
-      "Bash(curl -s -i 'https://emblue-social-ai-production.up.railway.app/api/v1/health' -H 'Origin: https://emblue-social-ai.vercel.app' --max-time 25)"
+      "Bash(curl -s -i 'https://emblue-social-ai-production.up.railway.app/api/v1/health' -H 'Origin: https://emblue-social-ai.vercel.app' --max-time 25)",
+      "PowerShell(Get-Process node -ErrorAction SilentlyContinue | Select-Object Id,StartTime,@{N='Cmd';E={\\(Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($_.Id\\)\"\\).CommandLine}} | Format-Table -Wrap)",
+      "PowerShell(Stop-Process -Id 7252 -Force)"
     ]
   }
 }

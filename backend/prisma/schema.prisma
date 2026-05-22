@@ -578,13 +578,15 @@ model TriggerRule {
 }
 
 model ApprovalQueue {
-  queueId    BigInt          @id @default(autoincrement()) @map("queue_id")
-  brandId    Int?            @map("brand_id")
-  platform   Platform?
-  replyText  String?         @map("reply_text")
-  confidence Int?
-  status     ApprovalStatus? @default(pending)
-  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  queueId      BigInt          @id @default(autoincrement()) @map("queue_id")
+  brandId      Int?            @map("brand_id")
+  platform     Platform?
+  authorHandle String?         @map("author_handle")
+  originalText String?         @map("original_text")
+  replyText    String?         @map("reply_text")
+  confidence   Int?
+  status       ApprovalStatus? @default(pending)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("approval_queue")
 }
