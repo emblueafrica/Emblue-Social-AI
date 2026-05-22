@@ -24,24 +24,44 @@ const PORT = parseInt(process.env.PORT ?? '3001', 10);
 app.disable('x-powered-by');
 
 function buildCorsOptions(): CorsOptions {
-  const normalizeOrigin = (origin: string): string => origin.trim().replace(/\/$/, '');
-  const allowedOrigins = (process.env.FRONTEND_URL ?? '')
+  const normalizeOrigin = (value: string): string => value.trim().replace(/\/+$/, '');
+
+  // Origins that are always allowed, independent of the FRONTEND_URL env var.
+  const STATIC_ALLOWED = ['http://localhost:3000', 'https://emblue-social-ai.vercel.app']
+    .map(normalizeOrigin);
+
+  const envOrigins = (process.env.FRONTEND_URL ?? '')
     .split(',')
     .map(normalizeOrigin)
     .filter(Boolean);
-  const allowAnyOrigin = allowedOrigins.length === 0 || allowedOrigins.includes('*');
+
+  const allowAnyOrigin = envOrigins.includes('*');
+  const allowList = new Set([...STATIC_ALLOWED, ...envOrigins.filter(o => o !== '*')]);
+
+  // Vercel production + preview deployments for this project, e.g.
+  // https://emblue-social-ai-git-main-team.vercel.app
+  const isProjectVercelDomain = (origin: string): boolean =>
+    /^https:\/\/emblue-social-ai[a-z0-9-]*\.vercel\.app$/i.test(origin);
 
   return {
-    origin: allowAnyOrigin
-      ? true
-      : (origin, callback) => {
-          if (!origin || allowedOrigins.includes(normalizeOrigin(origin))) {
-            callback(null, true);
-            return;
-          }
-          callback(null, false);
-        },
-    credentials: !allowAnyOrigin,
+    // A function origin reflects the specific request origin (never "*"),
+    // which keeps it compatible with credentials. Returning callback(null, false)
+    // for unknown origins simply omits the CORS headers — the browser blocks it.
+    origin: (origin, callback) => {
+      // Requests without an Origin header (curl, server-to-server, health checks).
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      const normalized = normalizeOrigin(origin);
+      if (allowAnyOrigin || allowList.has(normalized) || isProjectVercelDomain(normalized)) {
+        callback(null, true);
+        return;
+      }
+      console.warn(`[CORS] Blocked request from origin: ${origin}`);
+      callback(null, false);
+    },
+    credentials: true,
   };
 }
 
