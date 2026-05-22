@@ -7,6 +7,17 @@ const includeDbBackedChecks = process.env.ENDPOINT_CHECK_DB === 'true' || Boolea
 
 const endpoints = [
   { method: 'GET', path: '/', expect: [200] },
+  {
+    method: 'OPTIONS',
+    path: '/api/v1/auth/me',
+    headers: {
+      Origin: (process.env.FRONTEND_URL ?? 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, ''),
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'authorization,content-type',
+    },
+    expect: [204],
+    expectCorsOrigin: true,
+  },
   { method: 'GET', path: '/api/v1/health', expect: [200] },
   { method: 'GET', path: '/api-docs.json', expect: [200, 404] },
   { method: 'GET', path: '/api/v1/auth/me', expect: [401] },
@@ -64,16 +75,20 @@ async function waitForServer(child) {
 async function checkEndpoint(endpoint) {
   const response = await fetch(`${baseUrl}${endpoint.path}`, {
     method: endpoint.method,
-    headers: endpoint.body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: endpoint.headers ?? (endpoint.body ? { 'Content-Type': 'application/json' } : undefined),
     body: endpoint.body ? JSON.stringify(endpoint.body) : undefined,
   });
 
   const accepted = endpoint.expect.includes(response.status);
   const noServerError = response.status < 500;
-  const passed = accepted && noServerError;
+  const corsOriginOk = endpoint.expectCorsOrigin
+    ? response.headers.get('access-control-allow-origin') === endpoint.headers?.Origin
+    : true;
+  const passed = accepted && noServerError && corsOriginOk;
   return {
     ...endpoint,
     status: response.status,
+    corsOrigin: response.headers.get('access-control-allow-origin'),
     passed,
   };
 }
@@ -107,7 +122,8 @@ async function main() {
     const failed = results.filter(result => !result.passed);
     for (const result of results) {
       const label = result.passed ? 'PASS' : 'FAIL';
-      console.log(`${label} ${result.method} ${result.path} -> ${result.status}`);
+      const corsLabel = result.expectCorsOrigin ? ` cors=${result.corsOrigin ?? 'missing'}` : '';
+      console.log(`${label} ${result.method} ${result.path} -> ${result.status}${corsLabel}`);
     }
 
     if (failed.length) {

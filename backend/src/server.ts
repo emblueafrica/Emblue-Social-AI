@@ -24,9 +24,10 @@ const PORT = parseInt(process.env.PORT ?? '3001', 10);
 app.disable('x-powered-by');
 
 function buildCorsOptions(): CorsOptions {
+  const normalizeOrigin = (origin: string): string => origin.trim().replace(/\/$/, '');
   const allowedOrigins = (process.env.FRONTEND_URL ?? '')
     .split(',')
-    .map(origin => origin.trim())
+    .map(normalizeOrigin)
     .filter(Boolean);
   const allowAnyOrigin = allowedOrigins.length === 0 || allowedOrigins.includes('*');
 
@@ -34,11 +35,11 @@ function buildCorsOptions(): CorsOptions {
     origin: allowAnyOrigin
       ? true
       : (origin, callback) => {
-          if (!origin || allowedOrigins.includes(origin)) {
+          if (!origin || allowedOrigins.includes(normalizeOrigin(origin))) {
             callback(null, true);
             return;
           }
-          callback(new Error('Not allowed by CORS'));
+          callback(null, false);
         },
     credentials: !allowAnyOrigin,
   };
@@ -47,6 +48,7 @@ function buildCorsOptions(): CorsOptions {
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
 app.use(securityHeaders);
 app.use(cors(buildCorsOptions()));
+app.options('*', cors(buildCorsOptions()));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(apiRateLimit);
