@@ -389,7 +389,7 @@ export default function AIReplyEngine() {
           </div>
 
           {/* Body grid */}
-          <div className="grid grid-cols-1 xl:grid-cols-[260px_minmax(0,1fr)_360px] gap-5">
+          <div className="grid grid-cols-1 2xl:grid-cols-[240px_minmax(0,1fr)_340px] gap-5">
             {/* Filters */}
             <aside className="space-y-4">
               <FilterCard title="SORT BY">
@@ -427,7 +427,7 @@ export default function AIReplyEngine() {
             </aside>
 
             {/* Message list */}
-            <section className="bg-card rounded-2xl shadow-sm overflow-hidden flex flex-col">
+            <section className="bg-card rounded-2xl shadow-sm overflow-hidden flex flex-col min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b">
                 <label className="flex items-center gap-3 text-sm">
                   <input type="checkbox" className="size-4 rounded" />
@@ -451,19 +451,19 @@ export default function AIReplyEngine() {
                         isSel ? "bg-muted/50" : ""
                       }`}
                     >
-                      <input type="checkbox" className="size-4 rounded" onClick={(e) => e.stopPropagation()} />
-                      <span className={`size-2 rounded-full ${urgencyDot[m.urgency]}`} />
-                      <PlatformIcon p={m.platform} className="size-4" />
-                      <span className="font-medium min-w-[110px]">{m.user}</span>
-                      <span className="text-muted-foreground truncate flex-1">{m.preview}</span>
-                      <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${sentimentClass[m.sentiment]}`}>
+                      <input type="checkbox" className="size-4 rounded shrink-0" onClick={(e) => e.stopPropagation()} />
+                      <span className={`size-2 rounded-full shrink-0 ${urgencyDot[m.urgency]}`} />
+                      <PlatformIcon p={m.platform} className="size-4 shrink-0" />
+                      <span className="font-medium shrink-0 min-w-[110px]">{m.user}</span>
+                      <span className="text-muted-foreground truncate flex-1 min-w-0">{m.preview}</span>
+                      <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full shrink-0 whitespace-nowrap ${sentimentClass[m.sentiment]}`}>
                         {m.confidence ? `${m.confidence}%` : m.sentiment}
                       </span>
-                      <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
+                      <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full shrink-0 whitespace-nowrap bg-amber-50 text-amber-700">
                         {m.tag}
                       </span>
                       <span
-                        className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
+                        className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full shrink-0 whitespace-nowrap ${
                           m.status === "Posted"
                             ? "bg-emerald-100 text-emerald-700"
                             : "bg-yellow-100 text-yellow-700"
@@ -471,7 +471,7 @@ export default function AIReplyEngine() {
                       >
                         {m.status}
                       </span>
-                      <span className="text-xs text-muted-foreground w-14 text-right">{m.ago}</span>
+                      <span className="text-xs text-muted-foreground w-14 text-right shrink-0">{m.ago}</span>
                     </li>
                   );
                 })}
@@ -509,7 +509,7 @@ export default function AIReplyEngine() {
             </section>
 
             {/* Reply panel */}
-            <aside className="bg-card rounded-2xl shadow-sm p-5 flex flex-col">
+            <aside className="bg-card rounded-2xl shadow-sm p-5 flex flex-col min-w-0">
               {queueCleared || !selected || !draft ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center py-16 text-muted-foreground">
                   <FileText className="size-12 mb-4" strokeWidth={1.4} />
