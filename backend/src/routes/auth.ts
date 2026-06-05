@@ -1,6 +1,13 @@
 // src/routes/auth.ts
 import { Router, Request, Response } from 'express';
-import { getMetaAuthUrl, handleMetaCallback, getXAuthUrl, handleXCallback } from '../auth/platformAuth';
+import {
+  getMetaAuthUrl,
+  handleMetaCallback,
+  getXAuthUrl,
+  handleXCallback,
+  getTikTokAuthUrl,
+  handleTikTokCallback,
+} from '../auth/platformAuth';
 import { syncAllPlatforms } from '../auth/platformSync';
 import { startAutomation, stopAutomation, getAutomationStatus } from '../automation/scheduler';
 import prisma from '../db/prisma';
@@ -55,12 +62,22 @@ router.get('/meta/callback', (req: Request, res: Response) => {
 router.get('/x/connect', requireBrandAccess, (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.query['brand_id']);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
-  const { url } = getXAuthUrl(brandId);
-  res.redirect(url);
+  res.redirect(getXAuthUrl(brandId));
 });
 
 router.get('/x/callback', (req: Request, res: Response) => {
   void handleXCallback(req, res);
+});
+
+// ── TIKTOK OAUTH ──────────────────────────────────────────────────────────────
+router.get('/tiktok/connect', requireBrandAccess, (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.query['brand_id']);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  res.redirect(getTikTokAuthUrl(brandId));
+});
+
+router.get('/tiktok/callback', (req: Request, res: Response) => {
+  void handleTikTokCallback(req, res);
 });
 
 // ── CONNECTIONS LIST ──────────────────────────────────────────────────────────

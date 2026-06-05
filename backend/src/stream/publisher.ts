@@ -1,6 +1,7 @@
 // src/stream/publisher.ts — Reply publisher (fires approved replies to platform APIs)
 import prisma from "../db/prisma";
 import { broadcastToClients } from "./eventQueue";
+import { getValidToken } from "../auth/platformAuth";
 import { Platform } from "../types";
 
 export interface PublishPayload {
@@ -22,17 +23,10 @@ export interface PublishResult {
   error?:     string;
 }
 
-async function getToken(brandId: number, platform: Platform): Promise<string | null> {
-  const row = await prisma.connectedAccount.findFirst({
-    where: { brandId, platform: platform as never, isActive: true },
-    select: { accessToken: true },
-  });
-  return row?.accessToken ?? null;
-}
-
 export async function publishReply(payload: PublishPayload): Promise<PublishResult> {
   const { brand_id, platform, reply_text } = payload;
-  const token = await getToken(brand_id, platform);
+  // getValidToken refreshes the token transparently when it is near expiry.
+  const token = await getValidToken(brand_id, platform);
 
   const result: PublishResult = { success: false, platform };
 

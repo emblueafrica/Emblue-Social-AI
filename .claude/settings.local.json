@@ -8,7 +8,10 @@
       "Bash(curl -s -i -X OPTIONS 'https://emblue-social-ai-production.up.railway.app/api/v1/auth/me' -H 'Origin: https://emblue-social-ai.vercel.app' -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: authorization' --max-time 25)",
       "Bash(curl -s -i 'https://emblue-social-ai-production.up.railway.app/api/v1/health' -H 'Origin: https://emblue-social-ai.vercel.app' --max-time 25)",
       "PowerShell(Get-Process node -ErrorAction SilentlyContinue | Select-Object Id,StartTime,@{N='Cmd';E={\\(Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($_.Id\\)\"\\).CommandLine}} | Format-Table -Wrap)",
-      "PowerShell(Stop-Process -Id 7252 -Force)"
+      "PowerShell(Stop-Process -Id 7252 -Force)",
+      "Bash(sed -n '368,410p' src/db/queries.ts)",
+      "Bash(sed -n '1,40p' src/auth/platformSync.ts)",
+      "Bash(Get-Content \"C:\\\\Users\\\\pc\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-pc-Desktop-Social-Emblue-AI\\\\42325547-74c7-437d-ae68-cf88a2f44838\\\\tasks\\\\a236059a470174704.output\" -ErrorAction SilentlyContinue)"
     ]
   }
 }

@@ -1,5 +1,6 @@
 // src/routes/api.ts
 import { Router, Request, Response } from 'express';
+import { createHash } from 'node:crypto';
 import { runAgent1 } from '../agents/agent1_listening';
 import { runAgent2 } from '../agents/agent2_clustering';
 import { runAgent3 } from '../agents/agent3_content_strategist';
@@ -7,7 +8,9 @@ import { runAgent4 } from '../agents/agent4_reply_assistant';
 import { runAgent6 } from '../agents/agents567';
 import { runAgent9, runAgent10, runAgent11 } from '../agents/agents9_to_14';
 import { createTrackedLink } from '../agents/agent8_attribution';
-import { requireBrandAccess } from '../middleware/auth';
+import prisma from '../db/prisma';
+import { generateKpiReportPdf } from '../reports/pdf';
+import { canAccessBrandId, requireBrandAccess } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
 import {
   persistAgent1Result, persistAgent2Result, persistAgent3Result,

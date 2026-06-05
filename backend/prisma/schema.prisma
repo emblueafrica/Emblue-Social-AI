@@ -403,15 +403,17 @@ model ReplySuggestion {
 }
 
 model Funnel {
-  funnelId   BigInt    @id @default(autoincrement()) @map("funnel_id")
-  brandId    Int?      @map("brand_id")
-  platform   Platform?
-  keywords   String[]  @default([])
-  maxPerHour Int?      @default(20) @map("max_per_hour")
-  delaySec   Int?      @default(30) @map("delay_sec")
-  destUrl    String?   @map("dest_url")
-  isActive   Boolean?  @default(false) @map("is_active")
-  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  funnelId       BigInt    @id @default(autoincrement()) @map("funnel_id")
+  brandId        Int?      @map("brand_id")
+  name           String?
+  platform       Platform?
+  keywords       String[]  @default([])
+  triggerActions String[]  @default([]) @map("trigger_actions")
+  maxPerHour     Int?      @default(20) @map("max_per_hour")
+  delaySec       Int?      @default(30) @map("delay_sec")
+  destUrl        String?   @map("dest_url")
+  isActive       Boolean?  @default(false) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("funnels")
 }
@@ -426,6 +428,8 @@ model DmEvent {
   openedAt     DateTime? @map("opened_at") @db.Timestamptz(6)
   clickedAt    DateTime? @map("clicked_at") @db.Timestamptz(6)
   converted    Boolean?  @default(false)
+  status       String?   @default("queued")
+  dmText       String?   @map("dm_text")
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("dm_events")
@@ -697,4 +701,49 @@ model CampaignPostEngager {
   @@unique([brandId, campaignId, platform, authorId])
   @@index([brandId, campaignId, status], map: "idx_post_engagers_campaign")
   @@map("campaign_post_engagers")
+}
+
+model Alert {
+  alertId          BigInt    @id @default(autoincrement()) @map("alert_id")
+  brandId          Int       @map("brand_id")
+  type             String
+  severity         String    @default("medium")
+  title            String
+  message          String
+  metadata         Json      @default("{}")
+  status           String    @default("open")
+  assignedToUserId String?   @map("assigned_to_user_id") @db.Uuid
+  acknowledgedBy   String?   @map("acknowledged_by") @db.Uuid
+  acknowledgedAt   DateTime? @map("acknowledged_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([brandId, status, createdAt], map: "idx_alerts_brand")
+  @@map("alerts")
+}
+
+model CreativeBenchmark {
+  benchmarkId BigInt    @id @default(autoincrement()) @map("benchmark_id")
+  platform    Platform?
+  format      String?
+  metric      String
+  value       Decimal   @db.Decimal
+  source      String?
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("creative_benchmarks")
+}
+
+model DmTemplate {
+  templateId BigInt   @id @default(autoincrement()) @map("template_id")
+  brandId    Int      @map("brand_id")
+  funnelId   BigInt?  @map("funnel_id")
+  name       String
+  body       String
+  ctaLink    String?  @map("cta_link")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([brandId, funnelId], map: "idx_dm_templates_brand")
+  @@map("dm_templates")
 }

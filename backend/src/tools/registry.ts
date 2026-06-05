@@ -20,7 +20,7 @@ export const TOOL_REGISTRY = {
   tool_4: {
     id: 'tool_4',
     name: 'Comment to DM Funnel',
-    routeGroup: '/api/v1/funnel/*',
+    routeGroup: '/api/v1/funnels/*',
     dependencies: [],
   },
   tool_5: {

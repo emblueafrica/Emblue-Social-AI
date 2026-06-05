@@ -7,6 +7,8 @@ import { runAgent3 } from '../agents/agent3_content_strategist';
 import { runAgent6 } from '../agents/agents567';
 import { runAgent10, runAgent11 } from '../agents/agents9_to_14';
 import { syncAllPlatforms } from '../auth/platformSync';
+import { runActiveFunnels } from '../stream/funnelRunner';
+import { scanBrandAlerts } from '../alerts/engine';
 import { runRealtimeKeywordMonitoring } from '../listening/searchService';
 import { broadcastToClients } from '../stream/eventQueue';
 import { hasToolAccess } from '../tools/access';
@@ -148,14 +150,34 @@ async function runWarRoom(brandId: number): Promise<void> {
   }
 }
 
+async function runFunnels(brandId: number): Promise<void> {
+  try {
+    if (!(await canRunTool(brandId, 'tool_4', 'funnels'))) return;
+    await runActiveFunnels(brandId);
+  } catch (err) {
+    console.error(`[Scheduler] funnel error brand ${brandId}:`, (err as Error).message);
+  }
+}
+
+async function runAlerts(brandId: number): Promise<void> {
+  try {
+    if (!(await canRunTool(brandId, 'tool_1', 'alerts'))) return;
+    await scanBrandAlerts(brandId);
+  } catch (err) {
+    console.error(`[Scheduler] alerts error brand ${brandId}:`, (err as Error).message);
+  }
+}
+
 export function startAutomation(brandId: number): void {
   // Clear any existing intervals for this brand
   stopAutomation(brandId);
 
   const timers: NodeJS.Timeout[] = [
+    setInterval(() => void runAlerts(brandId),    2 * 60 * 1000), // 2 min
     setInterval(() => void runSync(brandId),     5  * 60 * 1000), // 5 min
     setInterval(() => void runListening(brandId), 15 * 60 * 1000), // 15 min
     setInterval(() => void runCluster(brandId),  15 * 60 * 1000), // 15 min
+    setInterval(() => void runFunnels(brandId),  15 * 60 * 1000), // 15 min
     setInterval(() => void runWarRoom(brandId),  30 * 60 * 1000), // 30 min
     setInterval(() => void runStrategy(brandId), 60 * 60 * 1000), // 1 hr
     setInterval(() => void runKpi(brandId),      60 * 60 * 1000), // 1 hr

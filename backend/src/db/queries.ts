@@ -405,3 +405,44 @@ export async function upsertConnectedAccount(
     },
   });
 }
+
+export type ConnectedAccountRecord = {
+  accessToken: string;
+  refreshToken: string | null;
+  tokenExpiresAt: Date | null;
+  accountHandle: string | null;
+  accountIdExt: string | null;
+  scope: string | null;
+};
+
+/** Full token record for a connected account — used by the token-refresh path. */
+export async function getConnectedAccountRecord(
+  brandId: number,
+  platform: string
+): Promise<ConnectedAccountRecord | null> {
+  return prisma.connectedAccount.findFirst({
+    where: { brandId, platform: platform as never, isActive: true },
+    select: {
+      accessToken: true,
+      refreshToken: true,
+      tokenExpiresAt: true,
+      accountHandle: true,
+      accountIdExt: true,
+      scope: true,
+    },
+  });
+}
+
+/** Persist a freshly refreshed token without touching the rest of the record. */
+export async function updateConnectedAccountTokens(
+  brandId: number,
+  platform: string,
+  accessToken: string,
+  refreshToken: string | null,
+  expiresAt: Date | null
+): Promise<void> {
+  await prisma.connectedAccount.updateMany({
+    where: { brandId, platform: platform as never },
+    data: { accessToken, refreshToken, tokenExpiresAt: expiresAt, updatedAt: new Date() },
+  });
+}

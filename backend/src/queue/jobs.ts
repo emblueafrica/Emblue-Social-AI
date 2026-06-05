@@ -14,6 +14,8 @@ import {
   getTopClusters, getBrandById, persistAgent1Result,
 } from "../db/queries";
 import { syncAllPlatforms } from "../auth/platformSync";
+import { runActiveFunnels } from "../stream/funnelRunner";
+import { scanBrandAlerts } from "../alerts/engine";
 import { broadcastToClients } from "../stream/eventQueue";
 import { Platform } from "../types";
 import { hasToolAccess } from "../tools/access";
@@ -26,6 +28,8 @@ export const JOB = {
   KPI_SNAPSHOT:     "kpi_snapshot",
   COMMENT_MINING:   "comment_mining",
   WAR_ROOM:         "war_room",
+  FUNNEL_RUN:       "funnel_run",
+  ALERTS_SCAN:      "alerts_scan",
 } as const;
 
 type JobName = typeof JOB[keyof typeof JOB];
@@ -118,6 +122,16 @@ async function processJob(job: Job<JobData>): Promise<void> {
       broadcastToClients(brand_id, "warroom_update", { health: r.campaign_health, alerts: r.alerts?.length ?? 0 });
       break;
     }
+    case JOB.FUNNEL_RUN: {
+      if (!(await canProcessTool(brand_id, "tool_4", JOB.FUNNEL_RUN))) break;
+      await runActiveFunnels(brand_id);
+      break;
+    }
+    case JOB.ALERTS_SCAN: {
+      if (!(await canProcessTool(brand_id, "tool_1", JOB.ALERTS_SCAN))) break;
+      await scanBrandAlerts(brand_id);
+      break;
+    }
     default: console.warn("[BullMQ] Unknown job:", job.name);
   }
 }
@@ -134,8 +148,10 @@ export async function scheduleRecurringJobs(brandId: number): Promise<void> {
     if (job.id?.includes(String(brandId))) await mainQueue.removeRepeatableByKey(job.key);
   }
   const jobs: { name: JobName; every: number }[] = [
+    { name: JOB.ALERTS_SCAN,      every: 2*60*1000 },
     { name: JOB.PLATFORM_SYNC,    every: 5*60*1000 },
     { name: JOB.CLUSTERING,       every: 15*60*1000 },
+    { name: JOB.FUNNEL_RUN,       every: 15*60*1000 },
     { name: JOB.WAR_ROOM,         every: 30*60*1000 },
     { name: JOB.CONTENT_STRATEGY, every: 60*60*1000 },
     { name: JOB.KPI_SNAPSHOT,     every: 60*60*1000 },
