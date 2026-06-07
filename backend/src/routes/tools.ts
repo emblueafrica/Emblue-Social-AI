@@ -2,6 +2,9 @@ import { Router, Request, Response } from 'express';
 import prisma from '../db/prisma';
 import { resolveRequestBrandId } from '../middleware/auth';
 import { getBrandToolPlan, getEnabledToolIds } from '../tools/access';
+import { B2B_TOOL_PLANS } from '../tools/plans';
+import { ALL_TOOL_IDS, TOOL_REGISTRY } from '../tools/registry';
+import { sendServerError } from '../utils/validation';
 
 const router = Router();
 
@@ -23,9 +26,17 @@ router.get('/my-access', async (req: Request, res: Response): Promise<void> => {
       select: { brandId: true, accountType: true, name: true, slug: true },
     });
     const accountType = membership?.account_type ?? brand?.accountType;
+    const tools = ALL_TOOL_IDS.map(toolId => ({
+      id: toolId,
+      name: TOOL_REGISTRY[toolId].name,
+      route_group: TOOL_REGISTRY[toolId].routeGroup,
+      dependencies: TOOL_REGISTRY[toolId].dependencies,
+      enabled: enabled.includes(toolId),
+    }));
     if (membership?.role !== 'client_owner' && !req.user?.platform_role) {
       res.json({
         enabled,
+        tools,
         account_type: accountType,
       });
       return;
@@ -35,6 +46,13 @@ router.get('/my-access', async (req: Request, res: Response): Promise<void> => {
     res.json({
       enabled,
       plan,
+      plans: Object.values(B2B_TOOL_PLANS).map(item => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        tool_ids: item.toolIds,
+      })),
+      tools,
       account_type: accountType,
       brand: membership ? {
         brand_id: membership.brand_id,
@@ -47,7 +65,7 @@ router.get('/my-access', async (req: Request, res: Response): Promise<void> => {
       } : undefined,
     });
   } catch (err) {
-    res.status(500).json({ error: 'Tool access lookup failed', message: (err as Error).message });
+    sendServerError(res, 'Tool access lookup failed', err);
   }
 });
 

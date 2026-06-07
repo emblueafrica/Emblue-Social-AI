@@ -63,12 +63,170 @@ export type DashboardSummary = {
 export type ToolAccessResponse = {
   enabled: string[];
   account_type?: string;
-  plan?: unknown;
+  plan?: string | null;
+  plans?: ToolPlan[];
+  tools?: ToolAccessTool[];
   brand?: {
     brand_id: number;
     name: string;
     slug: string;
   };
+};
+
+export type ToolAccessTool = {
+  id: string;
+  name: string;
+  route_group: string;
+  dependencies: string[];
+  enabled: boolean;
+};
+
+export type ToolPlan = {
+  id: "starter" | "growth" | "enterprise";
+  name: string;
+  description: string;
+  tool_ids: string[];
+};
+
+export type AdminUser = {
+  user_id: string;
+  email: string;
+  full_name?: string | null;
+  phone?: string | null;
+  status: string;
+  platform_roles: string[];
+  brand_memberships: { brand_id: number; role: string }[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type SignupRequest = {
+  request_id: number;
+  user_id: string;
+  email: string;
+  contact_name: string;
+  company_name: string;
+  requested_plan?: string | null;
+  requested_account_type: "b2b_licensed" | "b2c_managed" | "internal";
+  status: "pending" | "approved" | "rejected";
+  brand_id?: number | null;
+  created_at: string;
+};
+
+export type AdminBrand = {
+  brand_id: number;
+  name: string;
+  slug: string;
+  account_type: "b2b_licensed" | "b2c_managed" | "internal";
+  campaign_objective?: string | null;
+  tone?: string | null;
+  owner_user_id?: string | null;
+  members: { user_id: string; role: string }[];
+  enabled_tools: string[];
+  plan: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AuditLog = {
+  audit_id: number;
+  actor_user_id?: string | null;
+  actor_platform_role?: string | null;
+  action: string;
+  resource_type: string;
+  resource_id?: string | null;
+  brand_id?: number | null;
+  target_user_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ClientSummary = {
+  brand: {
+    brand_id: number;
+    name: string;
+    slug: string;
+    account_type: string;
+    campaign_objective?: string | null;
+  };
+  period_days: number;
+  summary: {
+    total_messages: number;
+    replies_sent: number;
+    engagements: number;
+    pending_approvals: number;
+    listening_kpi: number | null;
+    reply_kpi: number | null;
+    funnel_kpi: number | null;
+    risk_events: number;
+  };
+  kpis: unknown[];
+  alerts: unknown[];
+  campaign_metrics: {
+    campaign?: string | null;
+    platform?: string | null;
+    metric: string;
+    value: number | null;
+    created_at: string;
+  }[];
+  campaigns: {
+    campaign_id: number;
+    name: string;
+    platform?: string | null;
+    is_active?: boolean | null;
+    total_sent?: number | null;
+    updated_at: string;
+  }[];
+  updated_at: string;
+};
+
+export type ClientInsights = {
+  brand: {
+    brand_id: number;
+    name: string;
+    account_type: string;
+  };
+  audience: {
+    positive_sentiment_pct: number | null;
+    purchase_intent_pct: number | null;
+    questions_count: number;
+    summary?: string | null;
+    messages_processed: number;
+    last_run_at?: string | null;
+    faqs: {
+      faq_id: number;
+      question: string;
+      frequency?: number | null;
+      platforms: string[];
+      created_at: string;
+    }[];
+    pain_points: {
+      pain_point_id: number;
+      text: string;
+      severity?: string | null;
+      frequency?: number | null;
+      created_at: string;
+    }[];
+  };
+  templates: {
+    template_id: number;
+    name: string;
+    platform?: string | null;
+    trigger_keywords: string[];
+    template_text?: string | null;
+    is_active?: boolean | null;
+    use_count?: number | null;
+    updated_at: string;
+  }[];
+  connections: ConnectionRecord[];
+  updated_at: string;
+};
+
+export type ConnectionRecord = {
+  platform: string;
+  account_handle?: string | null;
+  is_active: boolean;
+  connected_at: string;
 };
 
 export type Platform = "instagram" | "facebook" | "tiktok" | "x";
@@ -154,6 +312,50 @@ export type ApprovalQueueItem = {
   manual_copy_instructions?: string | Record<string, string>;
 };
 
+export type KeywordGroup = {
+  group_id: number;
+  brand_id: number;
+  name: string;
+  keywords: string[];
+  platforms: string[];
+  mode: string;
+  is_active?: boolean | null;
+  created_at: string;
+  last_run_at?: string | null;
+};
+
+export type FunnelRecord = {
+  funnel_id: number;
+  brand_id?: number | null;
+  name?: string | null;
+  platform?: string | null;
+  keywords: string[];
+  trigger_actions: string[];
+  max_per_hour?: number | null;
+  delay_sec?: number | null;
+  dest_url?: string | null;
+  is_active?: boolean | null;
+  created_at: string;
+};
+
+export type ToolActionResult = Record<string, unknown>;
+
+export type AttributionLinkPayload = {
+  brand_id: number;
+  dest_url: string;
+  platform: Platform;
+  campaign?: string;
+  content_type?: string;
+};
+
+export type CreativeScorePayload = {
+  brand_id: number;
+  platform: Platform;
+  caption: string;
+  format?: string;
+  objective?: string;
+};
+
 async function getAccessToken() {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw new ApiError({ status: 401, message: error.message });
@@ -213,8 +415,85 @@ export function getToolAccess() {
   return apiRequest<ToolAccessResponse>("/api/v1/tools/my-access");
 }
 
+export function getAdminPlans() {
+  return apiRequest<{ plans: ToolPlan[] }>("/api/v1/admin/plans");
+}
+
+export function getAdminUsers() {
+  return apiRequest<{ users: AdminUser[] }>("/api/v1/admin/users");
+}
+
+export function getAdminBrands() {
+  return apiRequest<{ brands: AdminBrand[] }>("/api/v1/admin/brands");
+}
+
+export function getSignupRequests(status = "pending") {
+  return apiRequest<{ requests: SignupRequest[] }>(`/api/v1/admin/signup-requests?status=${encodeURIComponent(status)}`);
+}
+
+export function getAuditLogs() {
+  return apiRequest<{ audit_logs: AuditLog[] }>("/api/v1/admin/audit-logs?limit=50");
+}
+
+export function approveSignupRequest(
+  requestId: number,
+  payload: {
+    account_type: "b2b_licensed" | "b2c_managed";
+    plan_id: "starter" | "growth" | "enterprise";
+  },
+) {
+  return apiRequest<{ ok: true; brand_id: number; enabled: string[] }>(
+    `/api/v1/admin/signup-requests/${requestId}/approve`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function rejectSignupRequest(requestId: number, reason: string) {
+  return apiRequest<{ ok: true }>(`/api/v1/admin/signup-requests/${requestId}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function updateBrandAccess(
+  brandId: number,
+  payload: {
+    account_type: "b2b_licensed" | "b2c_managed" | "internal";
+    plan_id: "starter" | "growth" | "enterprise";
+  },
+) {
+  return apiRequest<{ ok: true; brand_id: number; account_type: string; plan: string; enabled: string[] }>(
+    `/api/v1/admin/brands/${brandId}/access`,
+    { method: "PUT", body: JSON.stringify(payload) },
+  );
+}
+
+export function suspendUser(userId: string) {
+  return apiRequest<{ ok: true; user_id: string; status: string }>(`/api/v1/admin/users/${userId}/suspend`, {
+    method: "POST",
+  });
+}
+
+export function activateUser(userId: string) {
+  return apiRequest<{ ok: true; user_id: string; status: string }>(`/api/v1/admin/users/${userId}/activate`, {
+    method: "POST",
+  });
+}
+
 export function getDashboardSummary(brandId: number) {
   return apiRequest<DashboardSummary>(`/api/v1/dashboard/summary?brand_id=${brandId}`);
+}
+
+export function getClientSummary(brandId: number) {
+  return apiRequest<ClientSummary>(`/api/v1/dashboard/client-summary?brand_id=${brandId}`);
+}
+
+export function getClientInsights(brandId: number) {
+  return apiRequest<ClientInsights>(`/api/v1/dashboard/client-insights?brand_id=${brandId}`);
+}
+
+export function getConnections(brandId: number) {
+  return apiRequest<{ connections: ConnectionRecord[] }>(`/api/v1/auth/connections/${brandId}`);
 }
 
 export function getCampaigns(brandId: number) {
@@ -257,5 +536,55 @@ export function approveQueueItem(brandId: number, index: number, replyText?: str
   }>("/api/v1/rt/queue/approve", {
     method: "POST",
     body: JSON.stringify({ brand_id: brandId, index, reply_text: replyText }),
+  });
+}
+
+export function getKeywordGroups(brandId: number) {
+  return apiRequest<{ keyword_groups: KeywordGroup[] }>(`/api/v1/listening/keyword-groups/${brandId}`);
+}
+
+export function getFunnels(brandId: number) {
+  return apiRequest<{ funnels: FunnelRecord[] }>(`/api/v1/funnels/${brandId}`);
+}
+
+export function runClustering(brandId: number, timeWindowDays = 7) {
+  return apiRequest<ToolActionResult>("/api/v1/cluster", {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId, time_window_days: timeWindowDays }),
+  });
+}
+
+export function runStrategy(brandId: number) {
+  return apiRequest<ToolActionResult>("/api/v1/strategize", {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId }),
+  });
+}
+
+export function runCommentMining(brandId: number) {
+  return apiRequest<ToolActionResult>("/api/v1/insights/run", {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId }),
+  });
+}
+
+export function runWarRoomSnapshot(brandId: number) {
+  return apiRequest<ToolActionResult>("/api/v1/warroom/snapshot", {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId }),
+  });
+}
+
+export function createAttributionLink(payload: AttributionLinkPayload) {
+  return apiRequest<ToolActionResult>("/api/v1/attribution/links", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function scoreCreative(payload: CreativeScorePayload) {
+  return apiRequest<ToolActionResult>("/api/v1/creative/score", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }

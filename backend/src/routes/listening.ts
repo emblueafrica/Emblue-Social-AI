@@ -8,6 +8,7 @@ import {
   getRequiredBrandId,
   isPlatform,
   requireNonEmptyArray,
+  sendServerError,
   sendValidationError,
 } from '../utils/validation';
 import { Platform } from '../types';
@@ -209,7 +210,7 @@ router.post('/keyword-groups', requireBrandRole('client_owner'), requireBrandAcc
     });
     res.json({ ok: true, keyword_group: keywordGroupJson(row) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Keyword group save failed', err);
   }
 });
 
@@ -224,7 +225,7 @@ router.get('/keyword-groups/:brand_id', requireBrandAccess, requireToolAccess('t
     });
     res.json({ keyword_groups: rows.map(keywordGroupJson) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Keyword group lookup failed', err);
   }
 });
 
@@ -240,7 +241,7 @@ router.delete('/keyword-groups/:group_id', requireBrandRole('client_owner'), req
     await prisma.keywordGroup.delete({ where: { groupId } });
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Keyword group deletion failed', err);
   }
 });
 
@@ -259,7 +260,7 @@ router.post('/keyword-groups/:group_id/toggle', requireBrandRole('client_owner')
     });
     res.json({ ok: true, keyword_group: keywordGroupJson(row) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Keyword group toggle failed', err);
   }
 });
 
@@ -299,7 +300,7 @@ router.post('/search', requireBrandAccess, requireToolAccess('tool_1'), async (r
 
     res.status(202).json({ ok: true, run_id: runId, status: 'pending' });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Listening search failed', err);
   }
 });
 
@@ -315,7 +316,7 @@ router.get('/runs/:brand_id', requireBrandAccess, requireToolAccess('tool_1'), a
     });
     res.json({ runs: rows.map(searchRunJson) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Listening search start failed', err);
   }
 });
 
@@ -341,7 +342,7 @@ router.get('/runs/:run_id/results', requireToolAccess('tool_1'), async (req: Req
     ]);
     res.json({ total, limit, offset, results: rows.map(searchResultJson) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Search run lookup failed', err);
   }
 });
 
@@ -360,7 +361,7 @@ router.get('/runs/:run_id/volume', requireToolAccess('tool_1'), async (req: Requ
     });
     res.json({ volume: rows.map(searchVolumeJson) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Search result lookup failed', err);
   }
 });
 
@@ -374,7 +375,7 @@ router.get('/runs/:run_id/status', requireToolAccess('tool_1'), async (req: Requ
     if (!canAccessBrand(req, run.brandId)) { res.status(403).json({ error: 'Forbidden' }); return; }
     res.json({ run: searchRunJson(run) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Search volume lookup failed', err);
   }
 });
 
@@ -390,7 +391,7 @@ router.get('/feed/:brand_id', requireBrandAccess, requireToolAccess('tool_1'), a
     });
     res.json({ feed: rows.map(searchResultJson) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Listening feed lookup failed', err);
   }
 });
 
@@ -424,7 +425,7 @@ router.post('/results/:result_id/engage', requireToolAccess('tool_1'), async (re
 
     res.json({ ok: true, result_id: Number(resultId), engaged: true, reply });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Listening engagement failed', err);
   }
 });
 

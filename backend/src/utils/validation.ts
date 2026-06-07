@@ -8,6 +8,17 @@ export function sendValidationError(res: Response, message: string): void {
   res.status(400).json({ error: 'Validation failed', message });
 }
 
+export function sendServerError(res: Response, publicMessage: string, err?: unknown): void {
+  if (err) {
+    console.error(`[ServerError] ${publicMessage}`, err);
+  }
+
+  res.status(500).json({
+    error: publicMessage,
+    ...(process.env.NODE_ENV === 'production' ? {} : { message: err instanceof Error ? err.message : 'Internal error' }),
+  });
+}
+
 export function parsePositiveInt(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;

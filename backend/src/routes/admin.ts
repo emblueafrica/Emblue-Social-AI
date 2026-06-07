@@ -5,10 +5,19 @@ import prisma from '../db/prisma';
 import { createSupabaseUser } from '../auth/supabaseAdmin';
 import { requirePlatformRole } from '../middleware/auth';
 import { provisionToolAccess } from '../tools/access';
+import {
+  B2B_TOOL_PLANS,
+  B2BPlanId,
+  getDefaultToolIdsForAccountType,
+  getPlanDefinition,
+  isB2BPlanId,
+  parseToolIdList,
+  resolveProvisioningToolIds,
+} from '../tools/plans';
 import { isToolId, ToolId } from '../tools/registry';
 import { BrandAccountType, BrandRole } from '../types';
 import { sendPlatformAdminCreatedEmail, sendSignupApprovedEmail, sendSignupRejectedEmail } from '../utils/email';
-import { getRequiredBrandId, sendValidationError } from '../utils/validation';
+import { getRequiredBrandId, sendServerError, sendValidationError } from '../utils/validation';
 
 const router = Router();
 
@@ -39,6 +48,17 @@ function parseToolIds(value: unknown): ToolId[] | null {
     toolIds.push(toolId);
   }
   return Array.from(new Set(toolIds));
+}
+
+function parseOptionalToolIds(value: unknown): ToolId[] | null | undefined {
+  if (value === null || value === undefined) return null;
+  const parsed = parseToolIdList(value);
+  return parsed ?? undefined;
+}
+
+function parseOptionalPlanId(value: unknown): B2BPlanId | null | undefined {
+  if (value === null || value === undefined || value === '') return null;
+  return isB2BPlanId(value) ? value : undefined;
 }
 
 function parseOptionalAccountType(value: unknown): BrandAccountType | null | undefined {
@@ -173,7 +193,7 @@ router.get('/users', requirePlatformRole('super_admin', 'platform_admin'), async
       })),
     });
   } catch (err) {
-    res.status(500).json({ error: 'User lookup failed', message: (err as Error).message });
+    sendServerError(res, 'User lookup failed', err);
   }
 });
 
@@ -212,7 +232,7 @@ router.get('/audit-logs', requirePlatformRole('super_admin'), async (req: Reques
       })),
     });
   } catch (err) {
-    res.status(500).json({ error: 'Audit log lookup failed', message: (err as Error).message });
+    sendServerError(res, 'Audit log lookup failed', err);
   }
 });
 
@@ -230,7 +250,63 @@ router.get('/signup-requests', requirePlatformRole('super_admin', 'platform_admi
     });
     res.json({ requests: rows.map(signupRequestJson) });
   } catch (err) {
-    res.status(500).json({ error: 'Signup request lookup failed', message: (err as Error).message });
+    sendServerError(res, 'Signup request lookup failed', err);
+  }
+});
+
+router.get('/plans', requirePlatformRole('super_admin', 'platform_admin'), (_req: Request, res: Response): void => {
+  res.json({
+    plans: Object.values(B2B_TOOL_PLANS).map(plan => ({
+      id: plan.id,
+      name: plan.name,
+      description: plan.description,
+      tool_ids: resolveProvisioningToolIds(plan.id),
+    })),
+  });
+});
+
+router.get('/brands', requirePlatformRole('super_admin', 'platform_admin'), async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const brands = await prisma.brand.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    const brandIds = brands.map(brand => brand.brandId);
+    const [memberships, toolRows] = await Promise.all([
+      prisma.brandMembership.findMany({
+        where: { brandId: { in: brandIds }, isActive: true },
+        select: { brandId: true, userId: true, role: true },
+      }),
+      prisma.brandToolAccess.findMany({
+        where: { brandId: { in: brandIds }, isActive: true },
+        select: { brandId: true, toolId: true, planName: true, expiresAt: true },
+      }),
+    ]);
+
+    res.json({
+      brands: brands.map(brand => {
+        const brandTools = toolRows.filter(row => row.brandId === brand.brandId);
+        const plans = Array.from(new Set(brandTools.map(row => row.planName).filter(Boolean)));
+        return {
+          brand_id: brand.brandId,
+          name: brand.name,
+          slug: brand.slug,
+          account_type: brand.accountType,
+          campaign_objective: brand.campaignObjective,
+          tone: brand.tone,
+          owner_user_id: brand.ownerUserId,
+          members: memberships
+            .filter(row => row.brandId === brand.brandId)
+            .map(row => ({ user_id: row.userId, role: row.role })),
+          enabled_tools: brandTools.map(row => row.toolId).filter(isToolId),
+          plan: plans.length === 1 ? plans[0] : plans.length > 1 ? 'custom' : null,
+          created_at: brand.createdAt,
+          updated_at: brand.updatedAt,
+        };
+      }),
+    });
+  } catch (err) {
+    sendServerError(res, 'Brand lookup failed', err);
   }
 });
 
@@ -241,11 +317,10 @@ router.post('/signup-requests/:request_id/approve', requirePlatformRole('super_a
   if (!requestId) { sendValidationError(res, 'request_id must be a positive integer'); return; }
 
   const body = req.body as Record<string, unknown>;
-  const toolIds = parseToolIds(body.tool_ids ?? body.toolIds);
-  if (!toolIds) { sendValidationError(res, 'tool_ids must be a non-empty array of valid tool IDs'); return; }
-
-  const planName = cleanString(body.plan_name ?? body.planName);
-  if (!planName) { sendValidationError(res, 'plan_name is required'); return; }
+  const planId = parseOptionalPlanId(body.plan_id ?? body.planId ?? body.plan_name ?? body.planName);
+  if (planId === undefined) { sendValidationError(res, 'plan_id must be starter, growth, or enterprise'); return; }
+  const extraToolIds = parseOptionalToolIds(body.tool_ids ?? body.toolIds);
+  if (extraToolIds === undefined) { sendValidationError(res, 'tool_ids must be an array of valid tool IDs'); return; }
 
   const expiresAt = parseExpiresAt(body.expires_at ?? body.expiresAt);
   if (expiresAt === undefined) { sendValidationError(res, 'expires_at must be a valid date or null'); return; }
@@ -281,6 +356,10 @@ router.post('/signup-requests/:request_id/approve', requirePlatformRole('super_a
       sendValidationError(res, `membership_role ${membershipRole} is not allowed for account_type ${accountType}`);
       return;
     }
+    const effectivePlanId = planId ?? 'starter';
+    const plan = getPlanDefinition(effectivePlanId);
+    const planName = accountType === 'b2c_managed' ? 'b2c_managed' : plan?.id ?? 'starter';
+    const toolIds = getDefaultToolIdsForAccountType(accountType, effectivePlanId, extraToolIds ?? []);
 
     const slug = await getUniqueBrandSlug(cleanString(body.brand_slug ?? body.brandSlug) ?? signupRequest.companyName);
     const now = new Date();
@@ -383,7 +462,7 @@ router.post('/signup-requests/:request_id/approve', requirePlatformRole('super_a
       enabled: provisioned,
     });
   } catch (err) {
-    res.status(500).json({ error: 'Signup approval failed', message: (err as Error).message });
+    sendServerError(res, 'Signup approval failed', err);
   }
 });
 
@@ -430,7 +509,7 @@ router.post('/signup-requests/:request_id/reject', requirePlatformRole('super_ad
     void sendSignupRejectedEmail(request.email, reason);
     res.json({ ok: true, request: signupRequestJson(request) });
   } catch (err) {
-    res.status(500).json({ error: 'Signup rejection failed', message: (err as Error).message });
+    sendServerError(res, 'Signup rejection failed', err);
   }
 });
 
@@ -461,7 +540,7 @@ router.post('/platform-admins', requirePlatformRole('super_admin'), async (req: 
       temporaryPassword = password;
     }
     if (!userId) {
-      res.status(500).json({ error: 'Platform admin creation failed', message: 'Supabase user ID was not returned' });
+      sendServerError(res, 'Platform admin creation failed');
       return;
     }
     const platformAdminUserId = userId;
@@ -503,7 +582,7 @@ router.post('/platform-admins', requirePlatformRole('super_admin'), async (req: 
     void sendPlatformAdminCreatedEmail(email.toLowerCase(), temporaryPassword);
     res.json({ ok: true, user_id: platformAdminUserId, role: 'platform_admin', is_active: true });
   } catch (err) {
-    res.status(500).json({ error: 'Platform admin creation failed', message: (err as Error).message });
+    sendServerError(res, 'Platform admin creation failed', err);
   }
 });
 
@@ -528,7 +607,7 @@ router.post('/users/:user_id/suspend', requirePlatformRole('super_admin', 'platf
     });
     res.json({ ok: true, user_id: userId, status: 'suspended' });
   } catch (err) {
-    res.status(500).json({ error: 'User suspension failed', message: (err as Error).message });
+    sendServerError(res, 'User suspension failed', err);
   }
 });
 
@@ -553,7 +632,7 @@ router.post('/users/:user_id/activate', requirePlatformRole('super_admin', 'plat
     });
     res.json({ ok: true, user_id: userId, status: 'active' });
   } catch (err) {
-    res.status(500).json({ error: 'User activation failed', message: (err as Error).message });
+    sendServerError(res, 'User activation failed', err);
   }
 });
 
@@ -579,7 +658,7 @@ router.delete('/platform-admins/:user_id', requirePlatformRole('super_admin'), a
     });
     res.json({ ok: true, user_id: userId, deactivated: result.count });
   } catch (err) {
-    res.status(500).json({ error: 'Platform admin removal failed', message: (err as Error).message });
+    sendServerError(res, 'Platform admin removal failed', err);
   }
 });
 
@@ -628,7 +707,102 @@ router.post('/provision', requirePlatformRole('super_admin', 'platform_admin'), 
     });
     res.json({ ok: true, brand_id: brandId, provisioned: provisioned.length, enabled: provisioned });
   } catch (err) {
-    res.status(500).json({ error: 'Provisioning failed', message: (err as Error).message });
+    sendServerError(res, 'Provisioning failed', err);
+  }
+});
+
+router.put('/brands/:brand_id/access', requirePlatformRole('super_admin', 'platform_admin'), async (req: Request, res: Response): Promise<void> => {
+  if (!req.user) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+  const brandId = getRequiredBrandId(req.params['brand_id']);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+
+  const body = req.body as Record<string, unknown>;
+  const accountType = parseOptionalAccountType(body.account_type ?? body.accountType);
+  if (accountType === undefined || accountType === null) {
+    sendValidationError(res, 'account_type must be b2b_licensed, b2c_managed, or internal');
+    return;
+  }
+  if (accountType === 'internal' && req.user.platform_role !== 'super_admin') {
+    res.status(403).json({ error: 'Forbidden', message: 'Only super_admin can assign internal workspaces' });
+    return;
+  }
+
+  const planId = parseOptionalPlanId(body.plan_id ?? body.planId ?? body.plan_name ?? body.planName);
+  if (planId === undefined) {
+    sendValidationError(res, 'plan_id must be starter, growth, or enterprise');
+    return;
+  }
+  const extraToolIds = parseOptionalToolIds(body.tool_ids ?? body.toolIds);
+  if (extraToolIds === undefined) {
+    sendValidationError(res, 'tool_ids must be an array of valid tool IDs');
+    return;
+  }
+
+  const effectivePlanId = planId ?? 'starter';
+  const planName = accountType === 'b2c_managed' ? 'b2c_managed' : effectivePlanId;
+  const enabled = getDefaultToolIdsForAccountType(accountType, effectivePlanId, extraToolIds ?? []);
+
+  try {
+    const brand = await prisma.$transaction(async tx => {
+      const updatedBrand = await tx.brand.update({
+        where: { brandId },
+        data: {
+          accountType,
+          updatedAt: new Date(),
+        },
+      });
+
+      await tx.brandToolAccess.updateMany({
+        where: {
+          brandId,
+          toolId: { notIn: enabled },
+          isActive: true,
+        },
+        data: { isActive: false },
+      });
+
+      await Promise.all(enabled.map(toolId =>
+        tx.brandToolAccess.upsert({
+          where: { brandId_toolId: { brandId, toolId } },
+          create: { brandId, toolId, isActive: true, planName, expiresAt: null },
+          update: { isActive: true, planName, expiresAt: null, activatedAt: new Date() },
+        })
+      ));
+
+      if (!enabled.length) {
+        await tx.brandToolAccess.updateMany({
+          where: { brandId, isActive: true },
+          data: { isActive: false },
+        });
+      }
+
+      await writeAuditLog({
+        req,
+        tx,
+        action: 'brand_access.updated',
+        resourceType: 'brand',
+        resourceId: brandId,
+        brandId,
+        metadata: {
+          account_type: accountType,
+          plan_name: planName,
+          enabled_tools: enabled,
+        },
+      });
+
+      return updatedBrand;
+    });
+
+    res.json({
+      ok: true,
+      brand_id: brand.brandId,
+      account_type: brand.accountType,
+      plan: planName,
+      enabled,
+    });
+  } catch (err) {
+    sendServerError(res, 'Brand access update failed', err);
   }
 });
 

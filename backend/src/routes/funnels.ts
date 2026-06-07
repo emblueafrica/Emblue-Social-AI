@@ -4,7 +4,7 @@ import prisma from '../db/prisma';
 import { canAccessBrandId, requireBrandAccess, requireBrandRole } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
 import { runFunnel } from '../stream/funnelRunner';
-import { getRequiredBrandId, isPlatform, requireNonEmptyString, sendValidationError } from '../utils/validation';
+import { getRequiredBrandId, isPlatform, requireNonEmptyString, sendServerError, sendValidationError } from '../utils/validation';
 
 const router = Router();
 
@@ -85,7 +85,7 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
     });
     res.json({ ok: true, funnel: serializeFunnel(row) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Funnel creation failed', err);
   }
 });
 
@@ -97,7 +97,7 @@ router.get('/:brand_id', requireBrandAccess, requireToolAccess('tool_4'), async 
     const rows = await prisma.funnel.findMany({ where: { brandId }, orderBy: { createdAt: 'desc' } });
     res.json({ funnels: rows.map(serializeFunnel) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Funnel lookup failed', err);
   }
 });
 
@@ -116,7 +116,7 @@ router.post('/:id/triggers', requireBrandRole('client_owner'), requireToolAccess
     });
     res.json({ ok: true, funnel: serializeFunnel(row) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Funnel trigger update failed', err);
   }
 });
 
@@ -149,7 +149,7 @@ router.post('/:id/templates', requireBrandRole('client_owner'), requireToolAcces
       },
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'DM template creation failed', err);
   }
 });
 
@@ -172,7 +172,7 @@ router.get('/:id/templates', requireToolAccess('tool_4'), async (req: Request, r
       })),
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'DM template lookup failed', err);
   }
 });
 
@@ -184,7 +184,7 @@ router.post('/:id/run', requireBrandRole('client_owner'), requireToolAccess('too
     const result = await runFunnel(Number(owned.funnelId));
     res.json({ ok: true, result });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Funnel run failed', err);
   }
 });
 
@@ -204,7 +204,7 @@ router.post('/:id/toggle', requireBrandRole('client_owner'), requireToolAccess('
     });
     res.json({ ok: true, funnel_id: Number(row.funnelId), is_active: row.isActive });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Funnel toggle failed', err);
   }
 });
 
@@ -229,7 +229,7 @@ router.get('/:id/metrics', requireToolAccess('tool_4'), async (req: Request, res
       },
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Funnel metrics lookup failed', err);
   }
 });
 
@@ -257,7 +257,7 @@ router.get('/:id/events', requireToolAccess('tool_4'), async (req: Request, res:
       })),
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'DM event creation failed', err);
   }
 });
 

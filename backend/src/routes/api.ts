@@ -23,6 +23,7 @@ import {
   isHttpUrl,
   isPlatform,
   requireNonEmptyArray,
+  sendServerError,
   sendValidationError,
 } from '../utils/validation';
 
@@ -49,7 +50,7 @@ router.post('/ingest', requireBrandAccess, requireToolAccess('tool_1'), async (r
     await persistAgent1Result(brandId, result);
     res.json({ ok: true, classified: result.total_items, errors: result.errors });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Ingest failed', err);
   }
 });
 
@@ -76,7 +77,7 @@ router.post('/cluster', requireBrandAccess, requireToolAccess('tool_2'), async (
     if (!result.insufficient_data) await persistAgent2Result(brandId, result);
     res.json({ ok: true, clusters: result.clusters_created, data: result });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Clustering failed', err);
   }
 });
 
@@ -101,7 +102,7 @@ router.post('/strategize', requireBrandAccess, requireToolAccess('tool_2'), asyn
     if (!result.error) await persistAgent3Result(brandId, result);
     res.json({ ok: true, recommendations: result.recommendations?.length ?? 0, data: result });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Strategy generation failed', err);
   }
 });
 
@@ -114,7 +115,7 @@ router.post('/reply', requireBrandAccess, requireToolAccess('tool_3'), async (re
     const result = await runAgent4(req.body);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Reply generation failed', err);
   }
 });
 
@@ -138,7 +139,7 @@ router.post('/kpi', requireBrandAccess, requireToolAccess('tool_5'), async (req:
     if (!result.error) await insertKpiSnapshot(brandId, result, ['x', 'instagram', 'facebook', 'tiktok']);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'KPI generation failed', err);
   }
 });
 
@@ -153,7 +154,7 @@ router.post('/creative/score', requireBrandAccess, requireToolAccess('tool_7'), 
     const result = await runAgent9(req.body);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Creative scoring failed', err);
   }
 });
 
@@ -180,7 +181,7 @@ router.post('/insights/run', requireBrandAccess, requireToolAccess('tool_8'), as
     if (!result.error) await persistAgent10Result(brandId, result);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Comment insights failed', err);
   }
 });
 
@@ -205,7 +206,7 @@ router.post('/warroom/snapshot', requireBrandAccess, requireToolAccess('tool_9')
     if (!result.error) await insertWarRoomSnapshot(1, brandId, result);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'War room snapshot failed', err);
   }
 });
 
@@ -220,7 +221,7 @@ router.post('/attribution/links', requireBrandAccess, requireToolAccess('tool_6'
     const result = await createTrackedLink(req.body);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Attribution link creation failed', err);
   }
 });
 

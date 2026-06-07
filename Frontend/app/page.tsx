@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Eye, EyeOff, User } from "lucide-react";
 import { LoginLayout } from "@/components/LoginLayout";
 import { useAuth } from "@/hooks/use-auth";
+import { getDefaultAuthenticatedRoute } from "@/lib/access";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -13,20 +14,20 @@ export default function LoginPage() {
   const [show, setShow] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const router = useRouter();
-  const { signIn, session, loading, error } = useAuth();
+  const { signIn, session, loading, error, authContext } = useAuth();
   const enabled = email.length > 0 && password.length > 0 && !loading;
 
   useEffect(() => {
-    if (session) router.replace("/dashboard");
-  }, [router, session]);
+    if (session && authContext) router.replace(getDefaultAuthenticatedRoute(authContext));
+  }, [authContext, router, session]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!enabled) return;
     setSubmitError(null);
     try {
-      await signIn(email, password);
-      router.replace("/dashboard");
+      const nextContext = await signIn(email, password);
+      router.replace(getDefaultAuthenticatedRoute(nextContext));
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Unable to log in.");
     }

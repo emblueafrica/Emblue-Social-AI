@@ -3,7 +3,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../db/prisma';
 import { canAccessBrandId, requireBrandAccess, requireBrandRole } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
-import { getRequiredBrandId, isPlatform, requireNonEmptyString, sendValidationError } from '../utils/validation';
+import { getRequiredBrandId, isPlatform, requireNonEmptyString, sendServerError, sendValidationError } from '../utils/validation';
 
 const router = Router();
 
@@ -66,7 +66,7 @@ router.get('/:brand_id', requireBrandAccess, requireToolAccess('tool_3'), async 
     });
     res.json({ templates: rows.map(serializeTemplate) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Reply template lookup failed', err);
   }
 });
 
@@ -94,7 +94,7 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
     });
     res.json({ ok: true, template: serializeTemplate(row) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Reply template creation failed', err);
   }
 });
 
@@ -122,7 +122,7 @@ router.put('/:id', requireBrandRole('client_owner'), requireToolAccess('tool_3')
     });
     res.json({ ok: true, template: serializeTemplate(row) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Reply template update failed', err);
   }
 });
 
@@ -134,7 +134,7 @@ router.delete('/:id', requireBrandRole('client_owner'), requireToolAccess('tool_
     await prisma.replyTemplate.delete({ where: { templateId: owned.templateId } });
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Reply template deletion failed', err);
   }
 });
 

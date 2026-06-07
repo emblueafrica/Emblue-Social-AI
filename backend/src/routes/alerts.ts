@@ -3,7 +3,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../db/prisma';
 import { canAccessBrandId, requireBrandAccess } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
-import { getRequiredBrandId, sendValidationError } from '../utils/validation';
+import { getRequiredBrandId, sendServerError, sendValidationError } from '../utils/validation';
 
 const router = Router();
 
@@ -75,7 +75,7 @@ router.get('/:brand_id', requireBrandAccess, requireToolAccess('tool_1'), async 
     });
     res.json({ alerts: rows.map(serializeAlert) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Alert lookup failed', err);
   }
 });
 
@@ -90,7 +90,7 @@ router.post('/:id/acknowledge', requireToolAccess('tool_1'), async (req: Request
     });
     res.json({ ok: true, alert: serializeAlert(row) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Alert acknowledgement failed', err);
   }
 });
 
@@ -106,7 +106,7 @@ router.post('/:id/assign', requireToolAccess('tool_1'), async (req: Request, res
     });
     res.json({ ok: true, alert: serializeAlert(row) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Alert assignment failed', err);
   }
 });
 

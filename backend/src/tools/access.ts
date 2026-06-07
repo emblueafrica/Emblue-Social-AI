@@ -86,6 +86,58 @@ export async function provisionToolAccess(
   return uniqueIds;
 }
 
+export async function replaceToolAccess(
+  brandId: number,
+  toolIds: ToolId[],
+  planName: string | null,
+  expiresAt: Date | null
+): Promise<ToolId[]> {
+  const uniqueIds = uniqueToolIds(toolIds);
+  const enabledSet = new Set(uniqueIds);
+  const now = new Date();
+
+  await prisma.$transaction(async tx => {
+    await tx.brandToolAccess.updateMany({
+      where: {
+        brandId,
+        toolId: { notIn: uniqueIds },
+        isActive: true,
+      },
+      data: {
+        isActive: false,
+      },
+    });
+
+    await Promise.all(uniqueIds.map(toolId =>
+      tx.brandToolAccess.upsert({
+        where: { brandId_toolId: { brandId, toolId } },
+        create: {
+          brandId,
+          toolId,
+          isActive: true,
+          planName,
+          expiresAt,
+        },
+        update: {
+          isActive: true,
+          planName,
+          expiresAt,
+          activatedAt: now,
+        },
+      })
+    ));
+
+    if (enabledSet.size === 0) {
+      await tx.brandToolAccess.updateMany({
+        where: { brandId, isActive: true },
+        data: { isActive: false },
+      });
+    }
+  });
+
+  return uniqueIds;
+}
+
 export async function provisionFullSuite(brandId: number, planName = 'full_suite'): Promise<ToolId[]> {
   return provisionToolAccess(brandId, ALL_TOOL_IDS, planName, null);
 }

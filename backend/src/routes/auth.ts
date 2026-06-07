@@ -13,7 +13,7 @@ import { startAutomation, stopAutomation, getAutomationStatus } from '../automat
 import prisma from '../db/prisma';
 import { requireBrandAccess, requireBrandRole } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
-import { getRequiredBrandId, isPlatform, sendValidationError } from '../utils/validation';
+import { getRequiredBrandId, isPlatform, sendServerError, sendValidationError } from '../utils/validation';
 
 const router = Router();
 
@@ -106,7 +106,7 @@ router.get('/connections/:brand_id', requireBrandAccess, async (req: Request, re
       })),
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Connection lookup failed', err);
   }
 });
 
@@ -123,7 +123,7 @@ router.delete('/disconnect/:brand_id/:platform', requireBrandRole('client_owner'
     });
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Disconnect failed', err);
   }
 });
 
@@ -160,7 +160,7 @@ router.post('/automation/run-now', requireBrandRole('client_owner'), requireBran
     const result = await syncAllPlatforms(brandId);
     res.json({ ok: true, job, result });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Automation run failed', err);
   }
 });
 
