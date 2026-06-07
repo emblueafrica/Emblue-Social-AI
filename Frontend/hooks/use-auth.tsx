@@ -20,7 +20,7 @@ type AuthContextValue = {
   activeBrandId: number | null;
   loading: boolean;
   error: string | null;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<AuthMeResponse | null>;
   signOut: () => Promise<void>;
   refreshAuthContext: () => Promise<AuthMeResponse | null>;
 };
@@ -94,8 +94,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw signInError;
       }
       setSession(data.session);
-      await refreshAuthContext();
+      const nextContext = await refreshAuthContext();
       setLoading(false);
+      return nextContext;
     },
     [refreshAuthContext],
   );

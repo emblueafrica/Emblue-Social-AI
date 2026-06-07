@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { resolveRequestBrandId } from './auth';
 import { getMissingToolIds } from '../tools/access';
 import { ToolId, TOOL_REGISTRY } from '../tools/registry';
+import { sendServerError } from '../utils/validation';
 
 export function requireToolAccess(toolId: ToolId) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -34,7 +35,7 @@ export function requireToolAccess(toolId: ToolId) {
 
       next();
     } catch (err) {
-      res.status(500).json({ error: 'Tool access check failed', message: (err as Error).message });
+      sendServerError(res, 'Tool access check failed', err);
     }
   };
 }

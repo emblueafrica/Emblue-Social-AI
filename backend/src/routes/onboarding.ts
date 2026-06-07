@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../db/prisma';
 import { toInputJson } from '../db/mappers';
 import { BrandAccountType } from '../types';
-import { sendValidationError } from '../utils/validation';
+import { sendServerError, sendValidationError } from '../utils/validation';
 
 const router = Router();
 
@@ -99,7 +99,7 @@ router.post('/client-signup', async (req: Request, res: Response): Promise<void>
       message: 'No tools or brand access is granted until a platform admin approves this request.',
     });
   } catch (err) {
-    res.status(500).json({ error: 'Client signup failed', message: (err as Error).message });
+    sendServerError(res, 'Client signup failed', err);
   }
 });
 

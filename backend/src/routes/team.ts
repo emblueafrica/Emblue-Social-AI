@@ -3,7 +3,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../db/prisma';
 import { requireBrandAccess, requireBrandRole, resolveRequestBrandId } from '../middleware/auth';
 import { sendTeamInviteEmail } from '../utils/email';
-import { getRequiredBrandId, sendValidationError } from '../utils/validation';
+import { getRequiredBrandId, sendServerError, sendValidationError } from '../utils/validation';
 
 const router = Router();
 
@@ -65,7 +65,7 @@ router.post('/invitations', requireBrandRole('client_owner'), requireBrandAccess
       expires_at: expiresAt,
     });
   } catch (err) {
-    res.status(500).json({ error: 'Team invitation failed', message: (err as Error).message });
+    sendServerError(res, 'Team invitation failed', err);
   }
 });
 
@@ -95,7 +95,7 @@ router.get('/invitations/:brand_id', requireBrandRole('client_owner'), requireBr
       })),
     });
   } catch (err) {
-    res.status(500).json({ error: 'Team invitation lookup failed', message: (err as Error).message });
+    sendServerError(res, 'Team invitation lookup failed', err);
   }
 });
 
@@ -163,7 +163,7 @@ router.post('/invitations/accept', async (req: Request, res: Response): Promise<
       status: 'accepted',
     });
   } catch (err) {
-    res.status(500).json({ error: 'Team invitation acceptance failed', message: (err as Error).message });
+    sendServerError(res, 'Team invitation acceptance failed', err);
   }
 });
 

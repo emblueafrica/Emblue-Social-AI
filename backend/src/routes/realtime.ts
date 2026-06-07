@@ -5,7 +5,7 @@ import prisma from '../db/prisma';
 import { requireBrandAccess } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
 import { publishReply } from '../stream/publisher';
-import { getRequiredBrandId, requireNonEmptyString, sendValidationError } from '../utils/validation';
+import { getRequiredBrandId, requireNonEmptyString, sendServerError, sendValidationError } from '../utils/validation';
 import { ApprovalQueueItem, Platform } from '../types';
 
 const router = Router();
@@ -102,7 +102,7 @@ router.get('/queue/:brand_id', requireBrandAccess, requireToolAccess('tool_5'), 
   try {
     res.json({ queue: await getCombinedApprovalQueue(brandId) });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to load approval queue', message: (err as Error).message });
+    sendServerError(res, 'Failed to load approval queue', err);
   }
 });
 
@@ -112,7 +112,7 @@ router.get('/reply-queue/:brand_id', requireBrandAccess, requireToolAccess('tool
   try {
     res.json({ queue: await getCombinedApprovalQueue(brandId) });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to load reply queue', message: (err as Error).message });
+    sendServerError(res, 'Failed to load reply queue', err);
   }
 });
 
@@ -159,7 +159,7 @@ router.post('/queue/approve', requireBrandAccess, requireToolAccess('tool_3'), a
     broadcastToClients(brandId, 'reply_approved', { index, item });
     res.json({ ok: true, item: { ...item, reply: replyText }, publish });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to approve queue item', message: (err as Error).message });
+    sendServerError(res, 'Failed to approve queue item', err);
   }
 });
 
@@ -189,7 +189,7 @@ router.post('/queue/skip', requireBrandAccess, requireToolAccess('tool_3'), asyn
     broadcastToClients(brandId, 'reply_skipped', { index, item });
     res.json({ ok: true, item });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to skip queue item', message: (err as Error).message });
+    sendServerError(res, 'Failed to skip queue item', err);
   }
 });
 
@@ -207,7 +207,7 @@ router.post('/events/convert', async (req: Request, res: Response) => {
     });
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Conversion event failed', err);
   }
 });
 

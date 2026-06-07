@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { AuthUser, BrandRole, PlatformRole, UserRole } from '../types';
 import { loadAuthContext } from '../rbac/service';
 import { verifySupabaseJwt } from '../auth/verifySupabaseJwt';
+import { sendServerError } from '../utils/validation';
 
 declare global {
   namespace Express {
@@ -123,7 +124,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       res.status(401).json({ error: 'Invalid token', message: 'Token signature is invalid' });
       return;
     }
-    res.status(500).json({ error: 'Auth context lookup failed', message: (err as Error).message });
+    sendServerError(res, 'Auth context lookup failed', err);
   }
 }
 

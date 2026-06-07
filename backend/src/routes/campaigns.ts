@@ -12,6 +12,7 @@ import {
   isHttpUrl,
   isPlatform,
   requireNonEmptyArray,
+  sendServerError,
   sendValidationError,
   validateAllocationTotal,
 } from '../utils/validation';
@@ -128,7 +129,7 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
     }
     res.json({ ok: true, campaign: result });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Campaign lookup failed', err);
   }
 });
 
@@ -155,7 +156,7 @@ router.post('/:campaign_id/toggle', requireBrandRole('client_owner'), requireToo
     });
     res.json({ ok: true, campaign_id: Number(row.campaignId), is_active: row.isActive });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Campaign save failed', err);
   }
 });
 
@@ -185,7 +186,7 @@ router.post('/:campaign_id/preview', requireBrandAccess, requireToolAccess('tool
     );
     res.json({ preview: text, image_url: config.image_url, cta_link: config.cta_link });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Campaign toggle failed', err);
   }
 });
 
@@ -237,7 +238,7 @@ router.post('/engage-now', requireBrandRole('client_owner'), requireBrandAccess,
 
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Campaign preview failed', err);
   }
 });
 
@@ -312,7 +313,7 @@ router.get('/:brand_id', requireBrandAccess, requireToolAccess('tool_10'), async
     });
     res.json({ campaigns: rows.map(mapEngageCampaign) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Engagement run failed', err);
   }
 });
 
@@ -493,7 +494,7 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
       },
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendServerError(res, 'Post URL campaign run failed', err);
   }
 });
 

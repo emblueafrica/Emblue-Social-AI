@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   Search,
@@ -17,6 +19,7 @@ import {
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { PlatformLogo, type PlatformLogoName } from "@/components/PlatformLogo";
 import { useAuth } from "@/hooks/use-auth";
+import { isB2CClient, isPlatformAdmin } from "@/lib/access";
 import { ApiError, getDashboardSummary, getToolAccess } from "@/lib/api";
 import {
   BarChart,
@@ -63,7 +66,12 @@ const sentiments = [
 ] satisfies { name: string; platform: PlatformLogoName; pct: number; label: string; positive: boolean }[];
 
 export default function Dashboard() {
-  const { activeBrandId } = useAuth();
+  const router = useRouter();
+  const { activeBrandId, authContext } = useAuth();
+  useEffect(() => {
+    if (isPlatformAdmin(authContext)) router.replace("/admin");
+    if (isB2CClient(authContext)) router.replace("/client-portal");
+  }, [authContext, router]);
   const summaryQuery = useQuery({
     queryKey: ["dashboard-summary", activeBrandId],
     queryFn: () => getDashboardSummary(activeBrandId!),
