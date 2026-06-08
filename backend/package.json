@@ -12,7 +12,8 @@
     "smoke": "node scripts/smoke-check.mjs",
     "check:endpoints": "node scripts/check-endpoints.mjs",
     "seed": "prisma db seed",
-    "seed:demo": "prisma db seed"
+    "seed:demo": "prisma db seed",
+    "seed:rbac": "node scripts/create-rbac-test-accounts.mjs"
   },
   "prisma": {
     "seed": "ts-node --transpile-only prisma/seed.ts"
