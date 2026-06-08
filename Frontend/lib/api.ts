@@ -496,6 +496,12 @@ export function getConnections(brandId: number) {
   return apiRequest<{ connections: ConnectionRecord[] }>(`/api/v1/auth/connections/${brandId}`);
 }
 
+export function getPlatformConnectUrl(platform: "meta" | "x" | "tiktok", brandId: number) {
+  return apiRequest<{ url: string }>(
+    `/api/v1/auth/${platform}/connect?brand_id=${brandId}&redirect=false`,
+  );
+}
+
 export function getCampaigns(brandId: number) {
   return apiRequest<{ campaigns: CampaignRecord[] }>(`/api/v1/campaigns/${brandId}`);
 }

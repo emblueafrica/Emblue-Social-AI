@@ -1,24 +1,78 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, PlugZap } from "lucide-react";
 import { DashHeader, Sidebar } from "@/components/dashboard/Sidebar";
 import { useAuth } from "@/hooks/use-auth";
-import { env } from "@/lib/env";
-import { getConnections, getToolAccess } from "@/lib/api";
+import { getConnections, getPlatformConnectUrl, getToolAccess } from "@/lib/api";
 import { isB2CClient } from "@/lib/access";
 
 const platforms = [
-  { id: "meta", label: "Meta", connectPath: "/api/v1/auth/meta/connect" },
-  { id: "x", label: "X", connectPath: "/api/v1/auth/x/connect" },
-  { id: "tiktok", label: "TikTok", connectPath: "/api/v1/auth/tiktok/connect" },
-];
+  { id: "meta", label: "Meta" },
+  { id: "x", label: "X" },
+  { id: "tiktok", label: "TikTok" },
+] as const;
+
+type PlatformConnectId = (typeof platforms)[number]["id"];
+
+const platformErrorMessage = "Could not start the connection flow. Check your account access and try again.";
+
+function isPlatformConnectId(value: string): value is PlatformConnectId {
+  return value === "meta" || value === "x" || value === "tiktok";
+}
+
+function getConnectionPlatformIds(platformId: PlatformConnectId): string[] {
+  return platformId === "meta" ? ["meta", "facebook", "instagram"] : [platformId];
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : platformErrorMessage;
+}
+
+function isValidProviderUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && [
+      "facebook.com",
+      "www.facebook.com",
+      "twitter.com",
+      "x.com",
+      "www.tiktok.com",
+      "open-api.tiktok.com",
+    ].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function redirectToPlatformConnect(platformId: PlatformConnectId, brandId: number) {
+  const response = await getPlatformConnectUrl(platformId, brandId);
+  if (!isValidProviderUrl(response.url)) {
+    throw new Error(platformErrorMessage);
+  }
+  window.location.assign(response.url);
+}
+
+function getPlatformLabel(platformId: PlatformConnectId) {
+  return platforms.find((item) => item.id === platformId)?.label ?? platformId;
+}
+
+type ConnectState = {
+  platformId: PlatformConnectId | null;
+  error: string | null;
+};
+
+const initialConnectState: ConnectState = {
+  platformId: null,
+  error: null,
+};
 
 export default function SettingsPage() {
   const router = useRouter();
   const { activeBrandId, authContext } = useAuth();
+  const [connectState, setConnectState] = useState<ConnectState>(initialConnectState);
   const connectionsQuery = useQuery({
     queryKey: ["connections", activeBrandId],
     queryFn: () => getConnections(activeBrandId!),
@@ -35,6 +89,20 @@ export default function SettingsPage() {
   useEffect(() => {
     if (isB2CClient(authContext)) router.replace("/client-portal/settings");
   }, [authContext, router]);
+
+  async function handleConnect(platformId: string) {
+    if (!activeBrandId || !isPlatformConnectId(platformId)) return;
+
+    setConnectState({ platformId, error: null });
+    try {
+      await redirectToPlatformConnect(platformId, activeBrandId);
+    } catch (error) {
+      setConnectState({
+        platformId: null,
+        error: `${getPlatformLabel(platformId)}: ${getErrorMessage(error)}`,
+      });
+    }
+  }
 
   if (isB2CClient(authContext)) return null;
 
@@ -56,11 +124,10 @@ export default function SettingsPage() {
             <Panel title="Platform Connections">
               <div className="space-y-3">
                 {platforms.map((platform) => {
-                  const connection = connectionsQuery.data?.connections.find((item) => item.platform === platform.id || (platform.id === "meta" && item.platform === "facebook"));
+                  const connectionPlatformIds = getConnectionPlatformIds(platform.id);
+                  const connection = connectionsQuery.data?.connections.find((item) => connectionPlatformIds.includes(item.platform));
                   const connected = Boolean(connection?.is_active);
-                  const url = activeBrandId && env.apiUrl
-                    ? `${env.apiUrl}${platform.connectPath}?brand_id=${activeBrandId}`
-                    : "#";
+                  const isConnecting = connectState.platformId === platform.id;
                   return (
                     <div key={platform.id} className="flex items-center justify-between gap-4 rounded-lg border p-4">
                       <div className="flex items-center gap-3">
@@ -72,16 +139,23 @@ export default function SettingsPage() {
                           </p>
                         </div>
                       </div>
-                      <a
-                        href={url}
-                        className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold hover:bg-muted"
+                      <button
+                        type="button"
+                        onClick={() => void handleConnect(platform.id)}
+                        disabled={!activeBrandId || isConnecting}
+                        className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <ExternalLink className="size-4" />
-                        {connected ? "Reconnect" : "Connect"}
-                      </a>
+                        {isConnecting ? "Opening..." : connected ? "Reconnect" : "Connect"}
+                      </button>
                     </div>
                   );
                 })}
+                {connectState.error ? (
+                  <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {connectState.error}
+                  </p>
+                ) : null}
               </div>
             </Panel>
 

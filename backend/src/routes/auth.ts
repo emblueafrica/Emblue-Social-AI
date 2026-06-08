@@ -51,7 +51,12 @@ router.get('/me', async (req: Request, res: Response) => {
 router.get('/meta/connect', requireBrandAccess, (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.query['brand_id']);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
-  res.redirect(getMetaAuthUrl(brandId));
+  const url = getMetaAuthUrl(brandId);
+  if (req.query['redirect'] === 'false') {
+    res.json({ url });
+    return;
+  }
+  res.redirect(url);
 });
 
 router.get('/meta/callback', (req: Request, res: Response) => {
@@ -62,7 +67,12 @@ router.get('/meta/callback', (req: Request, res: Response) => {
 router.get('/x/connect', requireBrandAccess, (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.query['brand_id']);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
-  res.redirect(getXAuthUrl(brandId));
+  const url = getXAuthUrl(brandId);
+  if (req.query['redirect'] === 'false') {
+    res.json({ url });
+    return;
+  }
+  res.redirect(url);
 });
 
 router.get('/x/callback', (req: Request, res: Response) => {
@@ -73,7 +83,12 @@ router.get('/x/callback', (req: Request, res: Response) => {
 router.get('/tiktok/connect', requireBrandAccess, (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.query['brand_id']);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
-  res.redirect(getTikTokAuthUrl(brandId));
+  const url = getTikTokAuthUrl(brandId);
+  if (req.query['redirect'] === 'false') {
+    res.json({ url });
+    return;
+  }
+  res.redirect(url);
 });
 
 router.get('/tiktok/callback', (req: Request, res: Response) => {
