@@ -48,11 +48,17 @@ function isValidProviderUrl(value: string): boolean {
 }
 
 async function redirectToPlatformConnect(platformId: PlatformConnectId, brandId: number) {
+  const connectWindow = window.open("about:blank", "_blank", "noopener,noreferrer");
   const response = await getPlatformConnectUrl(platformId, brandId);
   if (!isValidProviderUrl(response.url)) {
+    connectWindow?.close();
     throw new Error(platformErrorMessage);
   }
-  window.location.assign(response.url);
+  if (connectWindow) {
+    connectWindow.location.href = response.url;
+    return;
+  }
+  window.open(response.url, "_blank", "noopener,noreferrer");
 }
 
 function getPlatformLabel(platformId: PlatformConnectId) {
