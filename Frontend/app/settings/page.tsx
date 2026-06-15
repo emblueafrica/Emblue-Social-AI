@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, PlugZap } from "lucide-react";
 import { DashHeader, Sidebar } from "@/components/dashboard/Sidebar";
@@ -91,15 +91,18 @@ function getPlatformLabel(platformId: PlatformConnectId) {
 type ConnectState = {
   platformId: PlatformConnectId | null;
   error: string | null;
+  success: string | null;
 };
 
 const initialConnectState: ConnectState = {
   platformId: null,
   error: null,
+  success: null,
 };
 
 export default function SettingsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { activeBrandId, authContext } = useAuth();
   const [connectState, setConnectState] = useState<ConnectState>(initialConnectState);
   const connectionsQuery = useQuery({
@@ -119,16 +122,45 @@ export default function SettingsPage() {
     if (isB2CClient(authContext)) router.replace("/client-portal/settings");
   }, [authContext, router]);
 
+  useEffect(() => {
+    const auth = searchParams.get("auth");
+    if (!auth) return;
+
+    if (auth === "success") {
+      const platform = searchParams.get("platform") ?? "account";
+      const handle = searchParams.get("handle");
+      setConnectState((current) => ({
+        ...current,
+        platformId: null,
+        error: null,
+        success: handle ? `${platform} connected as ${handle}.` : `${platform} connected.`,
+      }));
+      void connectionsQuery.refetch();
+      return;
+    }
+
+    if (auth === "error") {
+      const reason = searchParams.get("reason") ?? platformErrorMessage;
+      setConnectState((current) => ({
+        ...current,
+        platformId: null,
+        success: null,
+        error: reason,
+      }));
+    }
+  }, [connectionsQuery, searchParams]);
+
   async function handleConnect(platformId: string) {
     if (!activeBrandId || !isPlatformConnectId(platformId)) return;
 
-    setConnectState({ platformId, error: null });
+    setConnectState({ platformId, error: null, success: null });
     try {
       await redirectToPlatformConnect(platformId, activeBrandId);
     } catch (error) {
       setConnectState({
         platformId: null,
         error: `${getPlatformLabel(platformId)}: ${getErrorMessage(error)}`,
+        success: null,
       });
     }
   }
@@ -183,6 +215,11 @@ export default function SettingsPage() {
                 {connectState.error ? (
                   <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                     {connectState.error}
+                  </p>
+                ) : null}
+                {connectState.success ? (
+                  <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                    {connectState.success}
                   </p>
                 ) : null}
               </div>
