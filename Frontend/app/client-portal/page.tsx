@@ -16,20 +16,6 @@ import { getClientSummary } from "@/lib/api";
 import { isB2CClient, isPlatformAdmin } from "@/lib/access";
 import { useAuth } from "@/hooks/use-auth";
 
-const trendData = [
-  { label: "Wk 1", replies: 18, conversions: 3 },
-  { label: "Wk 2", replies: 31, conversions: 7 },
-  { label: "Wk 3", replies: 46, conversions: 11 },
-  { label: "Wk 4", replies: 67, conversions: 16 },
-];
-
-const platformBreakdown = [
-  { platform: "Instagram", value: 42 },
-  { platform: "Facebook", value: 24 },
-  { platform: "TikTok", value: 18 },
-  { platform: "X", value: 14 },
-];
-
 export default function ClientPortalPage() {
   const router = useRouter();
   const { activeBrandId, authContext } = useAuth();
@@ -49,6 +35,8 @@ export default function ClientPortalPage() {
 
   const data = summaryQuery.data;
   const summary = data?.summary;
+  const trendData = buildTrendData(data?.campaign_metrics ?? []);
+  const platformBreakdown = buildPlatformBreakdown(data?.campaign_metrics ?? []);
 
   return (
     <PortalShell
@@ -74,23 +62,27 @@ export default function ClientPortalPage() {
             title="Campaign trend"
             description="Response and conversion movement for the current reporting window."
           >
-            <div className="h-[260px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData} margin={{ left: -20, right: 10, top: 10, bottom: 0 }}>
-                  <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6B7280", fontSize: 12 }} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: "#6B7280", fontSize: 12 }} />
-                  <Tooltip
-                    contentStyle={{
-                      border: "1px solid var(--portal-border)",
-                      borderRadius: "var(--portal-radius-input)",
-                      boxShadow: "var(--portal-shadow-card)",
-                    }}
-                  />
-                  <Line type="monotone" dataKey="replies" stroke="#1F40FF" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} />
-                  <Line type="monotone" dataKey="conversions" stroke="#10B981" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            {trendData.length ? (
+              <div className="h-[260px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendData} margin={{ left: -20, right: 10, top: 10, bottom: 0 }}>
+                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6B7280", fontSize: 12 }} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fill: "#6B7280", fontSize: 12 }} />
+                    <Tooltip
+                      contentStyle={{
+                        border: "1px solid var(--portal-border)",
+                        borderRadius: "var(--portal-radius-input)",
+                        boxShadow: "var(--portal-shadow-card)",
+                      }}
+                    />
+                    <Line type="monotone" dataKey="replies" stroke="#1F40FF" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} />
+                    <Line type="monotone" dataKey="conversions" stroke="#10B981" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <PortalEmptyState title="No campaign trend yet" body="Trend lines will appear once campaign metrics are recorded." />
+            )}
           </PortalSection>
 
           <PortalCard className="p-6">
@@ -110,19 +102,23 @@ export default function ClientPortalPage() {
 
         <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_350px]">
           <PortalSection title="Platform breakdown" description="Where campaign conversations are currently concentrated.">
-            <div className="space-y-4">
-              {platformBreakdown.map((item) => (
-                <div key={item.platform}>
-                  <div className="mb-2 flex items-center justify-between text-sm">
-                    <span className="font-semibold text-[var(--portal-text-body)]">{item.platform}</span>
-                    <span className="text-xs font-semibold text-[var(--portal-text-muted)]">{item.value}%</span>
+            {platformBreakdown.length ? (
+              <div className="space-y-4">
+                {platformBreakdown.map((item) => (
+                  <div key={item.platform}>
+                    <div className="mb-2 flex items-center justify-between text-sm">
+                      <span className="font-semibold text-[var(--portal-text-body)]">{item.platform}</span>
+                      <span className="text-xs font-semibold text-[var(--portal-text-muted)]">{item.value}%</span>
+                    </div>
+                    <div className="h-2.5 overflow-hidden rounded-full bg-[#F1F5F9]">
+                      <div className="h-full rounded-full bg-[var(--portal-blue)]" style={{ width: `${item.value}%` }} />
+                    </div>
                   </div>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-[#F1F5F9]">
-                    <div className="h-full rounded-full bg-[var(--portal-blue)]" style={{ width: `${item.value}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <PortalEmptyState title="No platform breakdown yet" body="Platform distribution will appear after metrics are captured." />
+            )}
           </PortalSection>
 
           <PortalSection title="Active campaigns">
@@ -158,6 +154,50 @@ function formatNumber(value: number | null | undefined) {
 
 function formatScore(value: number | null | undefined) {
   return typeof value === "number" ? `${Math.round(value)}%` : "N/A";
+}
+
+function buildTrendData(
+  metrics: {
+    campaign?: string | null;
+    platform?: string | null;
+    metric: string;
+    value: number | null;
+    created_at: string;
+  }[],
+) {
+  const byDay = new Map<string, { label: string; replies: number; conversions: number }>();
+  for (const metric of metrics) {
+    const day = new Date(metric.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const current = byDay.get(day) ?? { label: day, replies: 0, conversions: 0 };
+    if (metric.metric.toLowerCase().includes("reply")) current.replies += metric.value ?? 0;
+    if (metric.metric.toLowerCase().includes("conversion")) current.conversions += metric.value ?? 0;
+    byDay.set(day, current);
+  }
+  return Array.from(byDay.values()).slice(-6);
+}
+
+function buildPlatformBreakdown(
+  metrics: {
+    campaign?: string | null;
+    platform?: string | null;
+    metric: string;
+    value: number | null;
+    created_at: string;
+  }[],
+) {
+  const totals = new Map<string, number>();
+  for (const metric of metrics) {
+    if (!metric.platform) continue;
+    totals.set(metric.platform, (totals.get(metric.platform) ?? 0) + (metric.value ?? 0));
+  }
+  const total = Array.from(totals.values()).reduce((sum, value) => sum + value, 0);
+  if (total === 0) return [];
+  return Array.from(totals.entries())
+    .map(([platform, value]) => ({
+      platform: platform === "x" ? "X" : platform.charAt(0).toUpperCase() + platform.slice(1),
+      value: Math.round((value / total) * 100),
+    }))
+    .sort((a, b) => b.value - a.value);
 }
 
 function MiniKpi({ label, value }: { label: string; value: string }) {

@@ -60,6 +60,46 @@ export type DashboardSummary = {
   funnel_kpi: number | null;
 };
 
+export type CampaignStatsResponse = {
+  stats: {
+    platform: string;
+    total: number;
+    sent: number;
+    manual: number;
+    queued: number;
+  }[];
+  summary?: {
+    total_messages: number;
+    replies_sent: number;
+    manual_reviews: number;
+    queued: number;
+    listening_score: number | null;
+    reply_score: number | null;
+    funnel_score: number | null;
+    risk_events: number;
+    avg_response_time_minutes: number | null;
+    revenue_attributed: number | null;
+  };
+  score_trend?: { d: string; listening: number | null; reply: number | null; funnel: number | null }[];
+  message_volume?: { d: string; classified: number; total: number }[];
+  sentiment?: { d: string; pos: number; neu: number; neg: number }[];
+  risk_events?: {
+    time: string;
+    platform: string;
+    tag: string;
+    severity: string;
+    text: string;
+    sentiment: string | null;
+    urgency_score: number | null;
+    topics: string[];
+  }[];
+  attribution?: {
+    clicks: number;
+    conversions: number;
+    revenue: number | null;
+  };
+};
+
 export type ToolAccessResponse = {
   enabled: string[];
   account_type?: string;
@@ -339,6 +379,7 @@ export type FunnelRecord = {
 };
 
 export type ToolActionResult = Record<string, unknown>;
+export type ToolSummaryResponse = Record<string, unknown>;
 
 export type AttributionLinkPayload = {
   brand_id: number;
@@ -502,8 +543,24 @@ export function getPlatformConnectUrl(platform: "meta" | "x" | "tiktok", brandId
   );
 }
 
+export function disconnectPlatform(brandId: number, platform: "facebook" | "instagram" | "x" | "tiktok") {
+  return apiRequest<{ ok: true }>(`/api/v1/auth/disconnect/${brandId}/${platform}`, {
+    method: "DELETE",
+  });
+}
+
 export function getCampaigns(brandId: number) {
   return apiRequest<{ campaigns: CampaignRecord[] }>(`/api/v1/campaigns/${brandId}`);
+}
+
+export function getCampaignStats(brandId: number) {
+  return apiRequest<CampaignStatsResponse>(`/api/v1/campaigns/${brandId}/stats`);
+}
+
+export function deleteCampaign(campaignId: number) {
+  return apiRequest<{ ok: true; campaign_id: number }>(`/api/v1/campaigns/${campaignId}`, {
+    method: "DELETE",
+  });
 }
 
 export function saveCampaign(payload: CampaignPayload) {
@@ -593,4 +650,8 @@ export function scoreCreative(payload: CreativeScorePayload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getToolSummary(toolId: string, brandId: number) {
+  return apiRequest<ToolSummaryResponse>(`/api/v1/tools/${toolId}/summary?brand_id=${brandId}`);
 }
