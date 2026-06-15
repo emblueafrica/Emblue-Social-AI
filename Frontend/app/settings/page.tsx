@@ -47,18 +47,41 @@ function isValidProviderUrl(value: string): boolean {
   }
 }
 
+function writeConnectWindowStatus(connectWindow: Window | null, message: string) {
+  if (!connectWindow) return;
+  try {
+    connectWindow.document.title = "Connecting account";
+    const body = connectWindow.document.body;
+    body.textContent = message;
+    body.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    body.style.padding = "24px";
+    body.style.color = "#0F172A";
+    body.style.background = "#F8FAFC";
+  } catch {
+    // Cross-window writes can fail in some browsers; the settings page still shows the error.
+  }
+}
+
 async function redirectToPlatformConnect(platformId: PlatformConnectId, brandId: number) {
-  const connectWindow = window.open("about:blank", "_blank", "noopener,noreferrer");
-  const response = await getPlatformConnectUrl(platformId, brandId);
-  if (!isValidProviderUrl(response.url)) {
-    connectWindow?.close();
-    throw new Error(platformErrorMessage);
+  const connectWindow = window.open("about:blank", "_blank");
+  writeConnectWindowStatus(connectWindow, "Opening secure connection...");
+
+  try {
+    const response = await getPlatformConnectUrl(platformId, brandId);
+    if (!isValidProviderUrl(response.url)) {
+      writeConnectWindowStatus(connectWindow, platformErrorMessage);
+      throw new Error(platformErrorMessage);
+    }
+    if (connectWindow) {
+      connectWindow.opener = null;
+      connectWindow.location.assign(response.url);
+      return;
+    }
+    window.open(response.url, "_blank", "noopener,noreferrer");
+  } catch (error) {
+    writeConnectWindowStatus(connectWindow, getErrorMessage(error));
+    throw error;
   }
-  if (connectWindow) {
-    connectWindow.location.href = response.url;
-    return;
-  }
-  window.open(response.url, "_blank", "noopener,noreferrer");
 }
 
 function getPlatformLabel(platformId: PlatformConnectId) {
