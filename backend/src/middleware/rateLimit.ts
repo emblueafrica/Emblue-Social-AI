@@ -19,6 +19,7 @@ const ONE_MINUTE = 60_000;
 const FIFTEEN_MINUTES = 15 * 60_000;
 
 const GENERAL_LIMIT: LimitRule = { limit: 60, windowMs: ONE_MINUTE, scope: 'ip' };
+const SESSION_LIMIT: LimitRule = { limit: 120, windowMs: ONE_MINUTE, scope: 'identity' };
 const AUTH_LIMIT: LimitRule = { limit: 5, windowMs: FIFTEEN_MINUTES, scope: 'ip' };
 const AI_LIMIT: LimitRule = { limit: 10, windowMs: ONE_MINUTE, scope: 'identity' };
 const UPLOAD_LIMIT: LimitRule = { limit: 5, windowMs: ONE_MINUTE, scope: 'ip' };
@@ -44,6 +45,7 @@ function isAiPath(path: string): boolean {
 }
 
 function limitForPath(path: string): LimitRule {
+  if (path === '/api/v1/auth/me' || path.startsWith('/api/v1/auth/connections/')) return SESSION_LIMIT;
   if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/onboarding')) return AUTH_LIMIT;
   if (path.includes('/upload') || path.includes('/uploads')) return UPLOAD_LIMIT;
   if (isAiPath(path)) return AI_LIMIT;

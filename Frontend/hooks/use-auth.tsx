@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { Session } from "@supabase/supabase-js";
@@ -32,15 +33,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authContext, setAuthContext] = useState<AuthMeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const authContextRef = useRef<AuthMeResponse | null>(null);
+  const lastContextTokenRef = useRef<string | null>(null);
 
   const refreshAuthContext = useCallback(async () => {
     try {
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      const token = data.session?.access_token ?? null;
+      if (!token) {
+        lastContextTokenRef.current = null;
+        authContextRef.current = null;
+        setAuthContext(null);
+        return null;
+      }
+      if (lastContextTokenRef.current === token && authContextRef.current) return authContextRef.current;
+
       const me = await getAuthMe();
+      authContextRef.current = me;
       setAuthContext(me);
+      lastContextTokenRef.current = token;
       setError(null);
       return me;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load account context.";
+      authContextRef.current = null;
       setAuthContext(null);
       setError(message);
       return null;
@@ -64,10 +81,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (alive) setLoading(false);
     });
 
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
       if (!nextSession) {
+        lastContextTokenRef.current = null;
+        authContextRef.current = null;
         setAuthContext(null);
+        setLoading(false);
+        return;
+      }
+      if (event === "INITIAL_SESSION" && lastContextTokenRef.current === nextSession.access_token) {
         setLoading(false);
         return;
       }
@@ -93,6 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setError(signInError.message);
         throw signInError;
       }
+      lastContextTokenRef.current = null;
       setSession(data.session);
       const nextContext = await refreshAuthContext();
       setLoading(false);
@@ -104,6 +128,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     setLoading(true);
     await supabase.auth.signOut();
+    lastContextTokenRef.current = null;
+    authContextRef.current = null;
     setSession(null);
     setAuthContext(null);
     setLoading(false);
