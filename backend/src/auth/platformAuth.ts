@@ -168,7 +168,7 @@ export function getXAuthUrl(brandId: number): string {
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
   });
-  return `https://x.com/i/oauth2/authorize?${params.toString()}`;
+  return `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
 }
 
 function xBasicAuthHeader(): string {
@@ -183,7 +183,7 @@ export async function handleXCallback(req: Request, res: Response): Promise<void
     const codeVerifier = data.cv;
     if (!code || !codeVerifier) throw new Error('Invalid OAuth state');
 
-    const tokenRes = await fetch('https://api.x.com/2/oauth2/token', {
+    const tokenRes = await fetch('https://api.twitter.com/2/oauth2/token', {
       method: 'POST',
       headers: {
         Authorization: `Basic ${xBasicAuthHeader()}`,
@@ -208,7 +208,7 @@ export async function handleXCallback(req: Request, res: Response): Promise<void
       throw new Error(tokenData.error_description ?? tokenData.error ?? 'X token exchange failed');
     }
 
-    const meRes = await fetch('https://api.x.com/2/users/me', {
+    const meRes = await fetch('https://api.twitter.com/2/users/me', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const meData = (await meRes.json()) as { data?: { id: string; username: string } };
