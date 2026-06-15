@@ -48,6 +48,7 @@ export function getMetaAuthUrl(brandId: number): string {
 
 type MetaTokenResponse = { access_token?: string; expires_in?: number; error?: { message: string } };
 type MetaPage = { id: string; name: string; access_token: string };
+type MetaUserResponse = { id?: string; name?: string; error?: { message: string } };
 
 /**
  * Resolve and store the connected accounts behind a Meta login. Comment and
@@ -56,7 +57,7 @@ type MetaPage = { id: string; name: string; access_token: string };
  * the Instagram business account linked to that Page. Page tokens derived from
  * a long-lived user token do not expire, so they are stored with no expiry.
  */
-async function persistMetaConnections(brandId: number, userToken: string): Promise<string> {
+async function persistMetaConnections(brandId: number, userToken: string, platformUserId: string | null): Promise<string> {
   const pagesRes = await fetch(
     `https://graph.facebook.com/v19.0/me/accounts?fields=id,name,access_token&access_token=${userToken}`,
   );
@@ -68,14 +69,14 @@ async function persistMetaConnections(brandId: number, userToken: string): Promi
     await upsertConnectedAccount(
       brandId, 'instagram', userToken, null,
       new Date(Date.now() + 60 * 24 * 3600 * 1000),
-      'Meta account', '', 'instagram_basic',
+      'Meta account', '', 'instagram_basic', platformUserId,
     );
     return 'Meta account';
   }
 
   await upsertConnectedAccount(
     brandId, 'facebook', page.access_token, null, null,
-    page.name, page.id, 'pages_manage_engagement,pages_messaging',
+    page.name, page.id, 'pages_manage_engagement,pages_messaging', platformUserId,
   );
 
   // An Instagram business account may be linked to the Page; it shares the Page token.
@@ -99,7 +100,7 @@ async function persistMetaConnections(brandId: number, userToken: string): Promi
 
   await upsertConnectedAccount(
     brandId, 'instagram', page.access_token, null, null,
-    igHandle, igId, 'instagram_manage_comments,instagram_manage_messages',
+    igHandle, igId, 'instagram_manage_comments,instagram_manage_messages', platformUserId,
   );
 
   return igHandle;
@@ -130,9 +131,19 @@ export async function handleMetaCallback(req: Request, res: Response): Promise<v
       `&client_secret=${process.env.META_APP_SECRET}&fb_exchange_token=${tokenData.access_token}`,
     );
     const llData = (await llRes.json()) as MetaTokenResponse;
-    const longLivedToken = llData.access_token ?? tokenData.access_token;
+    if (llData.error || !llData.access_token) {
+      throw new Error(llData.error?.message ?? 'Meta long-lived token exchange failed');
+    }
 
-    const handle = await persistMetaConnections(brandId, longLivedToken);
+    const meRes = await fetch(
+      `https://graph.facebook.com/v19.0/me?fields=id,name&access_token=${llData.access_token}`,
+    );
+    const meData = (await meRes.json()) as MetaUserResponse;
+    if (meData.error || !meData.id) {
+      throw new Error(meData.error?.message ?? 'Meta user lookup failed');
+    }
+
+    const handle = await persistMetaConnections(brandId, llData.access_token, meData.id);
     redirectSuccess(res, 'instagram', handle);
   } catch (err) {
     console.error('[Auth] Meta callback error:', (err as Error).message);

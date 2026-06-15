@@ -66,10 +66,10 @@ function verifyMetaSignedRequest(signedRequest: unknown): MetaSignedRequestPaylo
 
 function dataDeletionCode(payload: MetaSignedRequestPayload): string {
   const subject = payload.user_id ?? payload.profile_id ?? 'unknown';
-  return createHmac('sha256', process.env.META_APP_SECRET ?? 'missing')
+  return `del_${createHmac('sha256', process.env.META_APP_SECRET ?? 'missing')
     .update(`meta-data-deletion:${subject}`)
     .digest('hex')
-    .slice(0, 24);
+    .slice(0, 24)}`;
 }
 
 router.get('/me', async (req: Request, res: Response) => {
@@ -126,7 +126,7 @@ router.post('/meta/deauthorize', async (req: Request, res: Response): Promise<vo
       await prisma.connectedAccount.updateMany({
         where: {
           platform: { in: ['facebook', 'instagram'] as never[] },
-          accountIdExt: externalId,
+          platformUserId: externalId,
         },
         data: {
           isActive: false,
@@ -135,7 +135,7 @@ router.post('/meta/deauthorize', async (req: Request, res: Response): Promise<vo
       });
     }
 
-    res.json({ ok: true });
+    res.sendStatus(200);
   } catch (err) {
     sendServerError(res, 'Meta deauthorize callback failed', err);
   }
@@ -151,7 +151,7 @@ router.post('/meta/data-deletion', async (req: Request, res: Response): Promise<
       await prisma.connectedAccount.updateMany({
         where: {
           platform: { in: ['facebook', 'instagram'] as never[] },
-          accountIdExt: externalId,
+          platformUserId: externalId,
         },
         data: {
           isActive: false,
@@ -164,7 +164,7 @@ router.post('/meta/data-deletion', async (req: Request, res: Response): Promise<
     }
 
     res.json({
-      url: `${getPublicBaseUrl(req)}/api/v1/auth/meta/data-deletion-status/${confirmationCode}`,
+      url: `${getPublicBaseUrl(req)}/api/v1/auth/meta/data-deletion-status?id=${encodeURIComponent(confirmationCode)}`,
       confirmation_code: confirmationCode,
     });
   } catch (err) {
@@ -172,9 +172,10 @@ router.post('/meta/data-deletion', async (req: Request, res: Response): Promise<
   }
 });
 
-router.get('/meta/data-deletion-status/:confirmation_code', (req: Request, res: Response): void => {
+router.get('/meta/data-deletion-status', (req: Request, res: Response): void => {
+  const confirmationCode = typeof req.query['id'] === 'string' ? req.query['id'] : '';
   res.json({
-    confirmation_code: req.params['confirmation_code'],
+    confirmation_code: confirmationCode,
     status: 'completed',
   });
 });

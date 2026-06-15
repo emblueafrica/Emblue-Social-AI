@@ -25,7 +25,7 @@ const PUBLIC_PATHS: PublicPath[] = [
   { method: 'GET', path: '/api/v1/health' },
   { method: 'GET', prefix: '/api/v1/auth/x/callback' },
   { method: 'GET', prefix: '/api/v1/auth/meta/callback' },
-  { method: 'GET', prefix: '/api/v1/auth/meta/data-deletion-status/' },
+  { method: 'GET', path: '/api/v1/auth/meta/data-deletion-status' },
   { method: 'GET', prefix: '/api/v1/auth/tiktok/callback' },
   { method: 'GET', prefix: '/api/v1/l/' },
   { method: 'GET', prefix: '/api/v1/rt/webhook/' },
