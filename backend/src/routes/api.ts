@@ -12,6 +12,8 @@ import prisma from '../db/prisma';
 import { generateKpiReportPdf } from '../reports/pdf';
 import { canAccessBrandId, requireBrandAccess } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
+import { getMissingToolIds } from '../tools/access';
+import { isToolId, TOOL_REGISTRY } from '../tools/registry';
 import {
   persistAgent1Result, persistAgent2Result, persistAgent3Result,
   insertKpiSnapshot, persistAgent10Result, insertWarRoomSnapshot,
@@ -28,6 +30,163 @@ import {
 } from '../utils/validation';
 
 const router = Router();
+
+router.get('/tools/:tool_id/summary', requireBrandAccess, async (req: Request, res: Response) => {
+  const toolId = req.params['tool_id'];
+  const brandId = getRequiredBrandId(req.query['brand_id']);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  if (!isToolId(toolId)) { sendValidationError(res, 'tool_id is invalid'); return; }
+
+  try {
+    const missingToolIds =
+      req.user?.platform_role === 'super_admin' || req.user?.platform_role === 'platform_admin'
+        ? []
+        : await getMissingToolIds(brandId, toolId);
+    if (missingToolIds.length) {
+      res.status(403).json({
+        error: 'Tool not enabled',
+        message: `Your current plan does not include ${TOOL_REGISTRY[toolId].name}.`,
+        tool_id: toolId,
+        missing_tool_ids: missingToolIds,
+        upgrade_url: '/settings/upgrade',
+      });
+      return;
+    }
+
+    if (toolId === 'tool_1') {
+      const [keywordGroups, searchRuns] = await Promise.all([
+        prisma.keywordGroup.count({ where: { brandId, isActive: true } }),
+        prisma.searchRun.count({ where: { brandId } }),
+      ]);
+      res.json({ keyword_groups: keywordGroups, search_runs: searchRuns });
+      return;
+    }
+
+    if (toolId === 'tool_2') {
+      const [clusters, recommendations] = await Promise.all([
+        prisma.cluster.count({ where: { brandId } }),
+        prisma.contentRecommendation.count({ where: { brandId } }),
+      ]);
+      res.json({ clusters, recommendations });
+      return;
+    }
+
+    if (toolId === 'tool_3') {
+      const [pendingQueue, suggestions] = await Promise.all([
+        prisma.approvalQueue.count({ where: { brandId, status: 'pending' } }),
+        prisma.replySuggestion.count({ where: { brandId } }),
+      ]);
+      res.json({ pending_queue: pendingQueue, suggestions });
+      return;
+    }
+
+    if (toolId === 'tool_4') {
+      const [funnels, active] = await Promise.all([
+        prisma.funnel.count({ where: { brandId } }),
+        prisma.funnel.count({ where: { brandId, isActive: true } }),
+      ]);
+      res.json({ funnels, active });
+      return;
+    }
+
+    if (toolId === 'tool_6') {
+      const [totalLinks, totals] = await Promise.all([
+        prisma.trackedLink.count({ where: { brandId } }),
+        prisma.trackedLink.aggregate({
+          where: { brandId },
+          _sum: { clicks: true, conversions: true },
+        }),
+      ]);
+      res.json({
+        total_links: totalLinks,
+        clicks: totals._sum.clicks ?? 0,
+        conversions: totals._sum.conversions ?? 0,
+      });
+      return;
+    }
+
+    if (toolId === 'tool_7') {
+      const [totalScores, avgStats, latest] = await Promise.all([
+        prisma.creativeScore.count({ where: { brandId } }),
+        prisma.creativeScore.aggregate({
+          where: { brandId },
+          _avg: { score: true },
+        }),
+        prisma.creativeScore.findFirst({
+          where: { brandId },
+          orderBy: { createdAt: 'desc' },
+          select: { grade: true, score: true, createdAt: true },
+        }),
+      ]);
+      res.json({
+        total_scores: totalScores,
+        avg_score: avgStats._avg.score ?? null,
+        latest_grade: latest?.grade ?? null,
+        latest_score: latest?.score ?? null,
+        latest_created_at: latest?.createdAt ?? null,
+      });
+      return;
+    }
+
+    if (toolId === 'tool_8') {
+      const latest = await prisma.insightRun.findFirst({
+        where: { brandId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          messagesProcessed: true,
+          faqsFound: true,
+          painPoints: true,
+          summary: true,
+          createdAt: true,
+        },
+      });
+      res.json({
+        messages_processed: latest?.messagesProcessed ?? 0,
+        faqs_found: latest?.faqsFound ?? 0,
+        pain_points: latest?.painPoints ?? 0,
+        summary: latest?.summary ?? null,
+        latest_created_at: latest?.createdAt ?? null,
+      });
+      return;
+    }
+
+    if (toolId === 'tool_9') {
+      const latest = await prisma.warRoom.findFirst({
+        where: { brandId },
+        orderBy: { createdAt: 'desc' },
+        select: { health: true, summary: true, alerts: true, createdAt: true },
+      });
+      res.json({
+        health: latest?.health ?? null,
+        summary: latest?.summary ?? null,
+        alerts_count: Array.isArray(latest?.alerts) ? latest.alerts.length : 0,
+        latest_created_at: latest?.createdAt ?? null,
+      });
+      return;
+    }
+
+    if (toolId === 'tool_10') {
+      const [campaigns, active, totals] = await Promise.all([
+        prisma.engageCampaign.count({ where: { brandId } }),
+        prisma.engageCampaign.count({ where: { brandId, isActive: true } }),
+        prisma.engageCampaign.aggregate({
+          where: { brandId },
+          _sum: { totalSent: true },
+        }),
+      ]);
+      res.json({
+        campaigns,
+        active,
+        total_sent: totals._sum.totalSent ?? 0,
+      });
+      return;
+    }
+
+    sendValidationError(res, 'tool_id is invalid');
+  } catch (err) {
+    sendServerError(res, 'Tool summary failed', err);
+  }
+});
 
 // ── INGEST ────────────────────────────────────────────────────────────────────
 router.post('/ingest', requireBrandAccess, requireToolAccess('tool_1'), async (req: Request, res: Response) => {

@@ -1,106 +1,109 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Search,
-  Layers,
-  MessageSquare,
-  MessageCircle,
-  Link2,
-  Palette,
-  Lightbulb,
-  Gauge,
-  Users,
   AlertCircle,
+  BarChart3,
+  Gauge,
+  Layers,
+  Link2,
+  Lock,
+  MessageCircle,
+  MessageSquare,
+  Palette,
+  Search,
+  Users,
 } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
-import { PlatformLogo, type PlatformLogoName } from "@/components/PlatformLogo";
+import { PlatformLogo } from "@/components/PlatformLogo";
 import { useAuth } from "@/hooks/use-auth";
 import { isB2CClient, isPlatformAdmin } from "@/lib/access";
-import { ApiError, getDashboardSummary, getToolAccess } from "@/lib/api";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  ResponsiveContainer,
-  CartesianGrid,
-} from "recharts";
+import { ApiError, getCampaignStats, getToolAccess } from "@/lib/api";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis } from "recharts";
 
+const TOOL_META = [
+  { id: "tool_1", label: "Tool 1", title: "Advanced Listening", icon: Search, color: "bg-primary" },
+  { id: "tool_2", label: "Tool 2", title: "Search & Clusters", icon: Layers, color: "bg-brand-pink" },
+  { id: "tool_3", label: "Tool 3", title: "AI Reply Engine", icon: MessageCircle, color: "bg-foreground" },
+  { id: "tool_4", label: "Tool 4", title: "Comment to DM Funnel", icon: MessageSquare, color: "bg-foreground" },
+  { id: "tool_6", label: "Tool 6", title: "Attribution & Links", icon: Link2, color: "bg-primary" },
+  { id: "tool_7", label: "Tool 7", title: "Creative Predictor", icon: Palette, color: "bg-brand-pink" },
+  { id: "tool_8", label: "Tool 8", title: "Comment Mining", icon: BarChart3, color: "bg-brand-pink" },
+  { id: "tool_9", label: "Tool 9", title: "Campaign War Room", icon: Gauge, color: "bg-foreground" },
+  { id: "tool_10", label: "Tool 10", title: "Engage the Engager", icon: Users, color: "bg-primary" },
+] as const;
 
-
-const tools = [
-  { n: "Tool 1", title: "Advanced Listening", value: "124K", sub: "msgs processed", icon: Search, color: "bg-primary" },
-  { n: "Tool 2", title: "Search & Clusters", value: "6", sub: "active clusters", icon: Layers, color: "bg-brand-pink" },
-  { n: "Tool 3", title: "AI Reply Engine", value: "342", sub: "replies today", icon: MessageCircle, color: "bg-foreground" },
-  { n: "Tool 4", title: "Comment → DM Funnel", value: "89", sub: "conversions", icon: MessageSquare, color: "bg-foreground" },
-  { n: "Tool 5", title: "Attribution & Links", value: "$24.8K", sub: "revenue tracked", icon: Link2, color: "bg-primary" },
-  { n: "Tool 6", title: "Creative Predictor", value: "B+", sub: "avg creative grade", icon: Palette, color: "bg-brand-pink" },
-  { n: "Tool 7", title: "Comment Mining", value: "38", sub: "FAQs extracted", icon: Lightbulb, color: "bg-brand-pink" },
-  { n: "Tool 8", title: "Campaign War Room", value: "80%", sub: "campaign health", icon: Gauge, color: "bg-foreground" },
-  { n: "Tool 9", title: "Engage the Engager", value: "847", sub: "personalised replies", icon: Users, color: "bg-primary" },
-];
-
-const chartData = [
-  { name: "Wk1", v: 12 },
-  { name: "Wk2", v: 40 },
-  { name: "Wk3", v: 55 },
-  { name: "Wk4", v: 75 },
-];
-
-const topTools = [
-  { name: "Engage the Engagers", value: "847 Fires" },
-  { name: "Complaint Handler", value: "342 Replies" },
-  { name: "DM Funnel - CTA", value: "89 Converts" },
-  { name: "Purchase Intent", value: "$9.8K Rev" },
-];
-
-const sentiments = [
-  { name: "Instagram", platform: "instagram", pct: 67, label: "67% Positive", positive: true },
-  { name: "Tiktok", platform: "tiktok", pct: 71, label: "71% Positive", positive: true },
-  { name: "X / Twitter", platform: "x", pct: 48, label: "48% Positive", positive: false },
-  { name: "Facebook", platform: "facebook", pct: 67, label: "67% Positive", positive: true },
-] satisfies { name: string; platform: PlatformLogoName; pct: number; label: string; positive: boolean }[];
+const PLATFORM_LABELS: Record<string, string> = {
+  instagram: "Instagram",
+  facebook: "Facebook",
+  tiktok: "TikTok",
+  x: "X",
+};
 
 export default function Dashboard() {
   const router = useRouter();
   const { activeBrandId, authContext } = useAuth();
+
   useEffect(() => {
     if (isPlatformAdmin(authContext)) router.replace("/admin");
     if (isB2CClient(authContext)) router.replace("/client-portal");
   }, [authContext, router]);
-  const summaryQuery = useQuery({
-    queryKey: ["dashboard-summary", activeBrandId],
-    queryFn: () => getDashboardSummary(activeBrandId!),
-    enabled: Boolean(activeBrandId),
-    retry: false,
-  });
-  useQuery({
+
+  const accessQuery = useQuery({
     queryKey: ["tool-access", activeBrandId],
     queryFn: getToolAccess,
     enabled: Boolean(activeBrandId),
     retry: false,
   });
 
-  const summary = summaryQuery.data;
-  const summaryError = summaryQuery.error;
-  const lockedError =
-    summaryError instanceof ApiError && summaryError.status === 403
-      ? summaryError
-      : null;
+  const statsQuery = useQuery({
+    queryKey: ["campaign-stats", activeBrandId],
+    queryFn: () => getCampaignStats(activeBrandId!),
+    enabled: Boolean(activeBrandId),
+    retry: false,
+  });
 
-  const formatCount = (value: number | null | undefined, fallback: string) =>
-    typeof value === "number" ? value.toLocaleString() : fallback;
-  const formatScore = (value: number | null | undefined, fallback: string) =>
-    typeof value === "number" ? `${Math.round(value)}%` : fallback;
+  const lockedError =
+    (statsQuery.error instanceof ApiError && statsQuery.error.status === 403 ? statsQuery.error : null) ??
+    (accessQuery.error instanceof ApiError && accessQuery.error.status === 403 ? accessQuery.error : null);
+
+  const summary = statsQuery.data?.summary;
+  const totalMessages = summary?.total_messages ?? 0;
+  const totalReplies = summary?.replies_sent ?? 0;
+  const revenueAttributed = statsQuery.data?.attribution?.revenue ?? summary?.revenue_attributed ?? null;
+  const responseTime = summary?.avg_response_time_minutes;
+  const messageVolume = statsQuery.data?.message_volume ?? [];
+  const chartData = messageVolume.map((item) => ({
+    name: item.d,
+    total: item.total,
+    classified: item.classified,
+  }));
+
+  const toolCards = useMemo(() => {
+    const enabled = new Set(accessQuery.data?.enabled ?? []);
+    return TOOL_META.map((tool) => ({
+      ...tool,
+      enabled: enabled.has(tool.id),
+    }));
+  }, [accessQuery.data?.enabled]);
+
+  const topPlatforms = useMemo(() => {
+    return [...(statsQuery.data?.stats ?? [])]
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 4);
+  }, [statsQuery.data?.stats]);
+
+  const latestSentiment = useMemo(() => {
+    const rows = statsQuery.data?.sentiment ?? [];
+    return rows.at(-1) ?? null;
+  }, [statsQuery.data?.sentiment]);
 
   return (
     <div className="min-h-screen flex bg-muted/30">
       <Sidebar activeLabel="Performance" />
-
       <div className="flex-1 flex flex-col min-w-0">
         <DashHeader title="Overall Performance Dashboard" />
 
@@ -120,138 +123,142 @@ export default function Dashboard() {
             />
           )}
 
-          {summaryQuery.isError && !lockedError && (
+          {statsQuery.isError && !lockedError && (
             <DashboardNotice
               title="Dashboard data unavailable"
-              body={summaryError instanceof Error ? summaryError.message : "Unable to load dashboard summary."}
+              body={statsQuery.error instanceof Error ? statsQuery.error.message : "Unable to load dashboard data."}
             />
           )}
 
-          {/* KPI cards */}
+          {accessQuery.isError && !lockedError && (
+            <DashboardNotice
+              title="Tool access unavailable"
+              body={accessQuery.error instanceof Error ? accessQuery.error.message : "Unable to load tool access."}
+            />
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            <KpiCard
-              color="bg-primary"
-              label="Total Messages Processed"
-              value={summaryQuery.isLoading ? "..." : formatCount(summary?.total_messages, "124K")}
-              delta={summary ? "Live from backend" : "Fallback sample"}
-              up={Boolean(summary)}
-            />
-            <KpiCard
-              color="bg-brand-pink"
-              label="Total Replies Sent"
-              value={summaryQuery.isLoading ? "..." : formatCount(summary?.replies_sent, "18,420")}
-              delta={summary ? "Live from backend" : "Fallback sample"}
-              up={Boolean(summary)}
-            />
-            <KpiCard color="bg-brand-olive" label="Revenue Attributed" value="$24,810" delta="↑ 22% vs last month" up />
-            <KpiCard color="bg-destructive" label="Avg Response Time" value="1.8m" delta="↓ from 38m manual" />
+            <KpiCard color="bg-primary" label="Total Messages Processed" value={formatCount(totalMessages)} delta="Last 30 days" />
+            <KpiCard color="bg-brand-pink" label="Total Replies Sent" value={formatCount(totalReplies)} delta="Sent via live workflows" />
+            <KpiCard color="bg-brand-olive" label="Revenue Attributed" value={formatMoney(revenueAttributed)} delta="Tracked attribution revenue" />
+            <KpiCard color="bg-destructive" label="Avg Response Time" value={formatTime(responseTime)} delta="Live when timing data is available" />
           </div>
 
-          {summary && (
-            <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <MiniScore label="Listening Score" value={formatScore(summary.listening_kpi, "N/A")} />
-              <MiniScore label="Reply Score" value={formatScore(summary.reply_kpi, "N/A")} />
-              <MiniScore label="Funnel Score" value={formatScore(summary.funnel_kpi, "N/A")} />
-            </section>
-          )}
+          <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <MiniScore label="Listening Score" value={formatScore(summary?.listening_score)} />
+            <MiniScore label="Reply Score" value={formatScore(summary?.reply_score)} />
+            <MiniScore label="Funnel Score" value={formatScore(summary?.funnel_score)} />
+          </section>
 
-          {/* Tools grid */}
           <section className="bg-card rounded-2xl p-6 md:p-8 shadow-sm">
-            <h2 className="text-lg font-bold mb-6">All Tools Performance</h2>
+            <h2 className="text-lg font-bold mb-6">Tool Access</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {tools.map((t) => (
-                <div key={t.n} className="border border-border rounded-2xl p-5 hover:shadow-md transition">
+              {toolCards.map((tool) => (
+                <div key={tool.id} className="border border-border rounded-2xl p-5">
                   <div className="flex items-start justify-between mb-3">
                     <div>
-                      <p className="text-xs text-muted-foreground">{t.n}</p>
-                      <p className="font-semibold mt-0.5">{t.title}</p>
+                      <p className="text-xs text-muted-foreground">{tool.label}</p>
+                      <p className="font-semibold mt-0.5">{tool.title}</p>
                     </div>
-                    <div className={`size-10 rounded-full ${t.color} flex items-center justify-center text-white`}>
-                      <t.icon className="size-5" />
+                    <div className={`size-10 rounded-full ${tool.color} flex items-center justify-center text-white`}>
+                      <tool.icon className="size-5" />
                     </div>
                   </div>
-                  <p className="text-2xl font-bold">{t.value}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{t.sub}</p>
+                  <p className="text-2xl font-bold">{tool.enabled ? "Enabled" : "Locked"}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {tool.enabled ? "Available for this brand plan" : "Not included in this subscription"}
+                  </p>
                 </div>
               ))}
             </div>
           </section>
 
-          {/* Revenue + Top tools */}
           <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 bg-card rounded-2xl p-6 md:p-8 shadow-sm">
               <div className="flex items-start justify-between mb-6">
                 <div>
-                  <h2 className="text-lg font-bold">Revenue attributed — last 4 weeks</h2>
-                  <p className="text-2xl font-bold mt-3">$24,810</p>
-                  <p className="text-xs text-success mt-1">↑ 18% vs last month</p>
+                  <h2 className="text-lg font-bold">Message volume - last 7 days</h2>
+                  <p className="text-2xl font-bold mt-3">{formatCount(totalMessages)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">Classified vs total captured conversations</p>
                 </div>
                 <div className="text-right">
-                  <span className="inline-block bg-success/15 text-success text-xs font-semibold px-3 py-1 rounded-full">
-                    +22% vs last month
-                  </span>
-                  <p className="text-xs text-muted-foreground mt-3">Best week</p>
-                  <p className="text-sm font-semibold">Wk 4 - $24.8k</p>
+                  <p className="text-xs text-muted-foreground">Replies sent</p>
+                  <p className="text-sm font-semibold">{formatCount(totalReplies)}</p>
                 </div>
               </div>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="oklch(0.92 0.01 265)" />
-                    <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                    <YAxis axisLine={false} tickLine={false} tickFormatter={(v) => `${v}k`} />
-                    <Bar dataKey="v" fill="var(--brand-soft)" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              {chartData.length ? (
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="oklch(0.92 0.01 265)" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                      <YAxis axisLine={false} tickLine={false} />
+                      <Bar dataKey="total" fill="#cbd5e1" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="classified" fill="var(--brand-soft)" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <EmptySurface label="No message-volume data returned yet." />
+              )}
             </div>
 
             <div className="bg-card rounded-2xl p-6 md:p-8 shadow-sm">
-              <h2 className="text-lg font-bold mb-5">Top Performing Tools</h2>
-              <ul className="space-y-4">
-                {topTools.map((t) => (
-                  <li key={t.name} className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-3">
-                      <AlertCircle className="size-5 text-primary" />
-                      <span>{t.name}</span>
-                    </div>
-                    <span className="font-semibold">{t.value}</span>
-                  </li>
-                ))}
-              </ul>
+              <h2 className="text-lg font-bold mb-5">Top Platforms</h2>
+              {topPlatforms.length ? (
+                <ul className="space-y-4">
+                  {topPlatforms.map((platform) => (
+                    <li key={platform.platform} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-3">
+                        <PlatformLogo platform={(platform.platform as "instagram" | "facebook" | "tiktok" | "x")} size={18} />
+                        <span>{PLATFORM_LABELS[platform.platform] ?? platform.platform}</span>
+                      </div>
+                      <span className="font-semibold">{formatCount(platform.total)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptySurface label="No platform activity has been recorded yet." />
+              )}
             </div>
           </section>
 
-          {/* Sentiment */}
           <section className="bg-card rounded-2xl p-6 md:p-8 shadow-sm">
-            <h2 className="text-lg font-bold mb-6">Platform Sentiment Health</h2>
-            <div className="space-y-5">
-              {sentiments.map((s) => (
-                <div key={s.name}>
-                  <div className="flex items-center justify-between mb-2 text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="size-6 rounded-md flex items-center justify-center">
-                        <PlatformLogo platform={s.platform} size={20} />
-                      </span>
-                      <span className="font-medium">{s.name}</span>
+            <h2 className="text-lg font-bold mb-6">Latest Sentiment Snapshot</h2>
+            {latestSentiment ? (
+              <div className="space-y-5">
+                {[
+                  { name: "Positive", value: latestSentiment.pos, className: "bg-success" },
+                  { name: "Neutral", value: latestSentiment.neu, className: "bg-slate-400" },
+                  { name: "Negative", value: latestSentiment.neg, className: "bg-yellow-500" },
+                ].map((item) => {
+                  const total = latestSentiment.pos + latestSentiment.neu + latestSentiment.neg;
+                  const pct = total > 0 ? Math.round((item.value / total) * 100) : 0;
+                  return (
+                    <div key={item.name}>
+                      <div className="flex items-center justify-between mb-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className={`size-3 rounded-full ${item.className}`} />
+                          <span className="font-medium">{item.name}</span>
+                        </div>
+                        <span className="text-xs font-semibold text-muted-foreground">
+                          {formatCount(item.value)} messages - {pct}%
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div className={`h-full ${item.className} rounded-full`} style={{ width: `${pct}%` }} />
+                      </div>
                     </div>
-                    <span className={`text-xs font-semibold ${s.positive ? "text-success" : "text-yellow-600"}`}>
-                      {s.label}
-                    </span>
-                  </div>
-                  <div className="h-2 rounded-full bg-muted overflow-hidden">
-                    <div
-                      className={`h-full ${s.positive ? "bg-success" : "bg-yellow-500"} rounded-full`}
-                      style={{ width: `${s.pct}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <EmptySurface label="No sentiment data returned yet." />
+            )}
           </section>
 
           <div className="lg:hidden">
-            <Link href="/" className="text-sm text-primary font-semibold">← Back to login</Link>
+            <Link href="/" className="text-sm text-primary font-semibold">Back to login</Link>
           </div>
         </main>
       </div>
@@ -259,25 +266,41 @@ export default function Dashboard() {
   );
 }
 
+function formatCount(value: number | null | undefined) {
+  return typeof value === "number" ? value.toLocaleString() : "0";
+}
+
+function formatScore(value: number | null | undefined) {
+  return typeof value === "number" ? `${Math.round(value)}%` : "N/A";
+}
+
+function formatMoney(value: number | null | undefined) {
+  if (value === null || value === undefined) return "N/A";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function formatTime(value: number | null | undefined) {
+  if (value === null || value === undefined) return "N/A";
+  return `${value.toFixed(value >= 10 ? 0 : 1)}m`;
+}
+
 function KpiCard({
   color,
   label,
   value,
   delta,
-  up,
 }: {
   color: string;
   label: string;
   value: string;
   delta: string;
-  up?: boolean;
 }) {
   return (
     <div className="bg-card rounded-2xl p-5 shadow-sm relative overflow-hidden">
       <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${color}`} />
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="text-3xl font-bold mt-2">{value}</p>
-      <p className={`text-xs mt-2 ${up ? "text-success" : "text-destructive"}`}>{delta}</p>
+      <p className="text-xs mt-2 text-muted-foreground">{delta}</p>
     </div>
   );
 }
@@ -287,7 +310,7 @@ function MiniScore({ label, value }: { label: string; value: string }) {
     <div className="rounded-2xl bg-card p-5 shadow-sm">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-2 text-3xl font-bold">{value}</p>
-      <p className="mt-2 text-xs text-success">Live from backend</p>
+      <p className="mt-2 text-xs text-muted-foreground">Latest backend KPI snapshot</p>
     </div>
   );
 }
@@ -307,5 +330,13 @@ function DashboardNotice({
       <p className="mt-1 text-sm">{body}</p>
       {action && <p className="mt-3 text-xs font-semibold">{action}</p>}
     </section>
+  );
+}
+
+function EmptySurface({ label }: { label: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-border p-6 text-sm text-muted-foreground">
+      {label}
+    </div>
   );
 }

@@ -7,9 +7,8 @@ import { ArrowRight, CheckCircle2, Lock, PlugZap, Play, RefreshCw } from "lucide
 import { DashHeader, Sidebar } from "@/components/dashboard/Sidebar";
 import {
   createAttributionLink,
-  getFunnels,
-  getKeywordGroups,
   getToolAccess,
+  getToolSummary,
   runClustering,
   runCommentMining,
   runStrategy,
@@ -76,11 +75,14 @@ export function ToolWorkspacePage({
         brand_id: activeBrandId,
         dest_url: url.trim(),
         platform: platform as Platform,
-        campaign: "Workspace test link",
+        campaign: "workspace-link",
         content_type: "social",
       });
     },
-    onSuccess: setLastResult,
+    onSuccess: (data) => {
+      setLastResult(data);
+      void summaryQuery.refetch();
+    },
   });
 
   const creativeMutation = useMutation({
@@ -92,10 +94,13 @@ export function ToolWorkspacePage({
         platform: platform as Platform,
         caption: caption.trim(),
         format: "post",
-        objective: "brand awareness",
+        objective: "engagement",
       });
     },
-    onSuccess: setLastResult,
+    onSuccess: (data) => {
+      setLastResult(data);
+      void summaryQuery.refetch();
+    },
   });
 
   useEffect(() => {
@@ -259,11 +264,9 @@ function useToolSummary(toolId: string, brandId: number | null, enabled: boolean
     queryKey: ["tool-summary", toolId, brandId],
     queryFn: () => {
       if (!brandId) throw new Error("No active brand workspace.");
-      if (toolId === "tool_1") return getKeywordGroups(brandId);
-      if (toolId === "tool_4") return getFunnels(brandId);
-      return Promise.resolve({ ok: true });
+      return getToolSummary(toolId, brandId);
     },
-    enabled: Boolean(brandId) && enabled && (toolId === "tool_1" || toolId === "tool_4"),
+    enabled: Boolean(brandId) && enabled,
     retry: false,
   });
 }
@@ -293,14 +296,35 @@ function getToolActions(toolId: string): ToolAction[] {
 }
 
 function summarizeToolData(toolId: string, data: unknown) {
-  if (!data || typeof data !== "object") return toolId === "tool_1" || toolId === "tool_4" ? "No data" : "Ready";
-  if ("keyword_groups" in data && Array.isArray((data as { keyword_groups?: unknown[] }).keyword_groups)) {
-    return `${(data as { keyword_groups: unknown[] }).keyword_groups.length} groups`;
+  if (!data || typeof data !== "object") return toolId === "tool_1" || toolId === "tool_4" ? "No data" : "No linked summary";
+  if ("keyword_groups" in data && typeof (data as { keyword_groups?: unknown }).keyword_groups === "number") {
+    return `${(data as { keyword_groups: number }).keyword_groups} groups`;
   }
-  if ("funnels" in data && Array.isArray((data as { funnels?: unknown[] }).funnels)) {
-    return `${(data as { funnels: unknown[] }).funnels.length} funnels`;
+  if ("clusters" in data && typeof (data as { clusters?: unknown }).clusters === "number") {
+    return `${(data as { clusters: number }).clusters} clusters`;
   }
-  return "Ready";
+  if ("pending_queue" in data && typeof (data as { pending_queue?: unknown }).pending_queue === "number") {
+    return `${(data as { pending_queue: number }).pending_queue} pending`;
+  }
+  if ("funnels" in data && typeof (data as { funnels?: unknown }).funnels === "number") {
+    return `${(data as { funnels: number }).funnels} funnels`;
+  }
+  if ("total_links" in data && typeof (data as { total_links?: unknown }).total_links === "number") {
+    return `${(data as { total_links: number }).total_links} links`;
+  }
+  if ("total_scores" in data && typeof (data as { total_scores?: unknown }).total_scores === "number") {
+    return `${(data as { total_scores: number }).total_scores} scores`;
+  }
+  if ("messages_processed" in data && typeof (data as { messages_processed?: unknown }).messages_processed === "number") {
+    return `${(data as { messages_processed: number }).messages_processed} messages`;
+  }
+  if ("health" in data && typeof (data as { health?: unknown }).health === "string") {
+    return String((data as { health: string }).health);
+  }
+  if ("campaigns" in data && typeof (data as { campaigns?: unknown }).campaigns === "number") {
+    return `${(data as { campaigns: number }).campaigns} campaigns`;
+  }
+  return "No linked summary";
 }
 
 function getWorkflowSteps(toolId: string) {

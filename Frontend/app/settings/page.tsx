@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ExternalLink, PlugZap } from "lucide-react";
 import { DashHeader, Sidebar } from "@/components/dashboard/Sidebar";
 import { useAuth } from "@/hooks/use-auth";
-import { getConnections, getPlatformConnectUrl, getToolAccess } from "@/lib/api";
+import { disconnectPlatform, getConnections, getPlatformConnectUrl, getToolAccess } from "@/lib/api";
 import { isB2CClient } from "@/lib/access";
 
 const platforms = [
@@ -25,6 +25,11 @@ function isPlatformConnectId(value: string): value is PlatformConnectId {
 
 function getConnectionPlatformIds(platformId: PlatformConnectId): string[] {
   return platformId === "meta" ? ["meta", "facebook", "instagram"] : [platformId];
+}
+
+function getDisconnectPlatformId(platformId: PlatformConnectId): "facebook" | "x" | "tiktok" {
+  if (platformId === "meta") return "facebook";
+  return platformId;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -117,6 +122,27 @@ export default function SettingsPage() {
     enabled: Boolean(activeBrandId),
     retry: false,
   });
+  const disconnectMutation = useMutation({
+    mutationFn: async (platformId: PlatformConnectId) => {
+      if (!activeBrandId) throw new Error("No active brand selected.");
+      return disconnectPlatform(activeBrandId, getDisconnectPlatformId(platformId));
+    },
+    onSuccess: async (_data, platformId) => {
+      setConnectState({
+        platformId: null,
+        error: null,
+        success: `${getPlatformLabel(platformId)} disconnected.`,
+      });
+      await connectionsQuery.refetch();
+    },
+    onError: (error, platformId) => {
+      setConnectState({
+        platformId: null,
+        success: null,
+        error: `${getPlatformLabel(platformId)}: ${getErrorMessage(error)}`,
+      });
+    },
+  });
 
   useEffect(() => {
     if (isB2CClient(authContext)) router.replace("/client-portal/settings");
@@ -165,6 +191,11 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleDisconnect(platformId: PlatformConnectId) {
+    setConnectState({ platformId, error: null, success: null });
+    await disconnectMutation.mutateAsync(platformId);
+  }
+
   if (isB2CClient(authContext)) return null;
 
   return (
@@ -188,7 +219,7 @@ export default function SettingsPage() {
                   const connectionPlatformIds = getConnectionPlatformIds(platform.id);
                   const connection = connectionsQuery.data?.connections.find((item) => connectionPlatformIds.includes(item.platform));
                   const connected = Boolean(connection?.is_active);
-                  const isConnecting = connectState.platformId === platform.id;
+                  const isPendingAction = connectState.platformId === platform.id;
                   return (
                     <div key={platform.id} className="flex items-center justify-between gap-4 rounded-lg border p-4">
                       <div className="flex items-center gap-3">
@@ -200,15 +231,27 @@ export default function SettingsPage() {
                           </p>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleConnect(platform.id)}
-                        disabled={!activeBrandId || isConnecting}
-                        className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <ExternalLink className="size-4" />
-                        {isConnecting ? "Opening..." : connected ? "Reconnect" : "Connect"}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleConnect(platform.id)}
+                          disabled={!activeBrandId || isPendingAction}
+                          className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <ExternalLink className="size-4" />
+                          {isPendingAction && !connected ? "Opening..." : connected ? "Reconnect" : "Connect"}
+                        </button>
+                        {connected ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleDisconnect(platform.id)}
+                            disabled={isPendingAction}
+                            className="inline-flex items-center gap-2 rounded-md border border-destructive/30 px-3 py-2 text-sm font-semibold text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isPendingAction ? "Disconnecting..." : "Disconnect"}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                   );
                 })}
