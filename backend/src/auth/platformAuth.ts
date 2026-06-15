@@ -17,11 +17,11 @@ function frontendBaseUrl(): string {
 }
 
 function redirectSuccess(res: Response, platform: string, handle: string): void {
-  res.redirect(`${frontendBaseUrl()}/client?auth=success&platform=${platform}&handle=${encodeURIComponent(handle)}`);
+  res.redirect(`${frontendBaseUrl()}/settings?auth=success&platform=${platform}&handle=${encodeURIComponent(handle)}`);
 }
 
 function redirectError(res: Response, reason: string): void {
-  res.redirect(`${frontendBaseUrl()}/client?auth=error&reason=${encodeURIComponent(reason)}`);
+  res.redirect(`${frontendBaseUrl()}/settings?auth=error&reason=${encodeURIComponent(reason)}`);
 }
 
 // ── META (INSTAGRAM + FACEBOOK) ───────────────────────────────────────────────
