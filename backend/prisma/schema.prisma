@@ -548,6 +548,7 @@ model ConnectedAccount {
   tokenExpiresAt DateTime? @map("token_expires_at") @db.Timestamptz(6)
   accountHandle  String?   @map("account_handle")
   accountIdExt   String?   @map("account_id_ext")
+  platformUserId String?   @map("platform_user_id")
   scope          String?
   isActive       Boolean   @default(true) @map("is_active")
   connectedAt    DateTime  @default(now()) @map("connected_at") @db.Timestamptz(6)

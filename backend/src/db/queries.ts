@@ -373,7 +373,8 @@ export async function upsertConnectedAccount(
   expiresAt: Date | null,
   handle: string,
   accountIdExt: string,
-  scope: string
+  scope: string,
+  platformUserId: string | null = null
 ): Promise<void> {
   await prisma.connectedAccount.upsert({
     where: {
@@ -388,6 +389,7 @@ export async function upsertConnectedAccount(
       tokenExpiresAt: expiresAt,
       accountHandle: handle,
       accountIdExt,
+      platformUserId,
       scope,
       isActive: true,
       updatedAt: new Date(),
@@ -400,6 +402,7 @@ export async function upsertConnectedAccount(
       tokenExpiresAt: expiresAt,
       accountHandle: handle,
       accountIdExt,
+      platformUserId,
       scope,
       isActive: true,
     },
@@ -412,6 +415,7 @@ export type ConnectedAccountRecord = {
   tokenExpiresAt: Date | null;
   accountHandle: string | null;
   accountIdExt: string | null;
+  platformUserId: string | null;
   scope: string | null;
 };
 
@@ -428,6 +432,7 @@ export async function getConnectedAccountRecord(
       tokenExpiresAt: true,
       accountHandle: true,
       accountIdExt: true,
+      platformUserId: true,
       scope: true,
     },
   });

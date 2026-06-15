@@ -1,5 +1,6 @@
 // src/routes/auth.ts
 import { Router, Request, Response } from 'express';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   getMetaAuthUrl,
   handleMetaCallback,
@@ -16,6 +17,60 @@ import { requireToolAccess } from '../middleware/toolAccess';
 import { getRequiredBrandId, isPlatform, sendServerError, sendValidationError } from '../utils/validation';
 
 const router = Router();
+
+type MetaSignedRequestPayload = {
+  user_id?: string;
+  profile_id?: string;
+  issued_at?: number;
+  algorithm?: string;
+};
+
+function getPublicBaseUrl(req: Request): string {
+  const configured = process.env.API_PUBLIC_URL ?? process.env.BACKEND_URL;
+  if (configured) return configured.trim().replace(/\/+$/, '');
+  return `${req.protocol}://${req.get('host')}`.replace(/\/+$/, '');
+}
+
+function base64UrlDecode(value: string): Buffer {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+  return Buffer.from(padded, 'base64');
+}
+
+function verifyMetaSignedRequest(signedRequest: unknown): MetaSignedRequestPayload {
+  if (typeof signedRequest !== 'string' || !signedRequest.includes('.')) {
+    throw new Error('signed_request is required');
+  }
+  if (!process.env.META_APP_SECRET) {
+    throw new Error('META_APP_SECRET is required');
+  }
+
+  const [encodedSignature, encodedPayload] = signedRequest.split('.');
+  if (!encodedSignature || !encodedPayload) throw new Error('Invalid signed_request');
+
+  const payload = JSON.parse(base64UrlDecode(encodedPayload).toString('utf8')) as MetaSignedRequestPayload;
+  if (payload.algorithm && payload.algorithm.toUpperCase() !== 'HMAC-SHA256') {
+    throw new Error('Unsupported signed_request algorithm');
+  }
+
+  const expected = createHmac('sha256', process.env.META_APP_SECRET)
+    .update(encodedPayload)
+    .digest();
+  const actual = base64UrlDecode(encodedSignature);
+
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw new Error('Invalid signed_request signature');
+  }
+
+  return payload;
+}
+
+function dataDeletionCode(payload: MetaSignedRequestPayload): string {
+  const subject = payload.user_id ?? payload.profile_id ?? 'unknown';
+  return `del_${createHmac('sha256', process.env.META_APP_SECRET ?? 'missing')
+    .update(`meta-data-deletion:${subject}`)
+    .digest('hex')
+    .slice(0, 24)}`;
+}
 
 router.get('/me', async (req: Request, res: Response) => {
   if (!req.user) {
@@ -61,6 +116,68 @@ router.get('/meta/connect', requireBrandAccess, (req: Request, res: Response) =>
 
 router.get('/meta/callback', (req: Request, res: Response) => {
   void handleMetaCallback(req, res);
+});
+router.post('/meta/deauthorize', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const payload = verifyMetaSignedRequest(req.body?.signed_request);
+    const externalId = payload.user_id ?? payload.profile_id;
+
+    if (externalId) {
+      await prisma.connectedAccount.updateMany({
+        where: {
+          platform: { in: ['facebook', 'instagram'] as never[] },
+          platformUserId: externalId,
+        },
+        data: {
+          isActive: false,
+          updatedAt: new Date(),
+        },
+      });
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    sendServerError(res, 'Meta deauthorize callback failed', err);
+  }
+});
+
+router.post('/meta/data-deletion', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const payload = verifyMetaSignedRequest(req.body?.signed_request);
+    const externalId = payload.user_id ?? payload.profile_id;
+    const confirmationCode = dataDeletionCode(payload);
+
+    if (externalId) {
+      await prisma.connectedAccount.updateMany({
+        where: {
+          platform: { in: ['facebook', 'instagram'] as never[] },
+          platformUserId: externalId,
+        },
+        data: {
+          isActive: false,
+          accessToken: '',
+          refreshToken: null,
+          tokenExpiresAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+    }
+
+    res.json({
+      url: `${getPublicBaseUrl(req)}/api/v1/auth/meta/data-deletion-status?id=${encodeURIComponent(confirmationCode)}`,
+      confirmation_code: confirmationCode,
+    });
+  } catch (err) {
+    sendServerError(res, 'Meta data deletion callback failed', err);
+  }
+});
+
+router.get('/meta/data-deletion-status', (req: Request, res: Response): void => {
+  const confirmationCode = typeof req.query['id'] === 'string' ? req.query['id'] : '';
+  res.json({
+    confirmation_code: confirmationCode,
+    status: 'completed',
+  });
 });
 
 // ── X OAUTH ───────────────────────────────────────────────────────────────────
