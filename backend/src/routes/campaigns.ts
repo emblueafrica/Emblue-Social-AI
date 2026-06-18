@@ -451,14 +451,17 @@ router.post('/post-urls/run', requireBrandRole('client_owner'), requireBrandAcce
     return;
   }
 
+  const campaignId = body.campaign_id ?? String(Date.now());
+
   res.json({
     ok:         true,
     message:    `Processing ${validated.length} post URLs`,
+    campaign_id: campaignId,
     post_count: validated.length,
   });
 
   const config: CampaignConfig = {
-    id:                   body.campaign_id ?? `post-${Date.now()}`,
+    id:                   campaignId,
     brand_id:             brandId,
     tone:                 body.tone,
     reply_template:       body.reply_template,
@@ -470,6 +473,81 @@ router.post('/post-urls/run', requireBrandRole('client_owner'), requireBrandAcce
   };
 
   void runPostUrlCampaign(brandId, config, validated, credentials);
+});
+
+router.get('/post-urls/status/:brand_id/:campaign_id', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.params['brand_id']);
+  const campaignId = typeof req.params['campaign_id'] === 'string' ? req.params['campaign_id'] : '';
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  if (!/^\d+$/.test(campaignId)) { sendValidationError(res, 'campaign_id must be the numeric ID returned by post-urls/run'); return; }
+
+  try {
+    const [urls, engagers] = await Promise.all([
+      prisma.campaignPostUrl.findMany({
+        where: { brandId, campaignId: BigInt(campaignId) },
+        orderBy: { submittedAt: 'desc' },
+        select: {
+          platform: true,
+          postUrl: true,
+          status: true,
+          totalFetched: true,
+          errorMsg: true,
+          submittedAt: true,
+          completedAt: true,
+        },
+      }),
+      prisma.campaignPostEngager.findMany({
+        where: { brandId, campaignId },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        select: {
+          platform: true,
+          action: true,
+          authorHandle: true,
+          status: true,
+          processedAt: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+    const sent = engagers.filter(item => item.status === 'sent').length;
+    const manual = engagers.filter(item => item.status === 'manual_copy').length;
+    const queued = engagers.filter(item => item.status === 'queued_for_approval').length;
+    const errors = engagers.filter(item => item.status === 'error').length + urls.filter(item => item.status === 'error').length;
+    const fetched = urls.reduce((sum, item) => sum + (item.totalFetched ?? 0), 0);
+    res.json({
+      campaign_id: campaignId,
+      summary: {
+        post_urls: urls.length,
+        fetched,
+        engagers: engagers.length,
+        sent,
+        manual,
+        queued,
+        errors,
+        complete: urls.length > 0 && urls.every(item => item.status === 'complete' || item.status === 'error'),
+      },
+      post_urls: urls.map(item => ({
+        platform: item.platform,
+        url: item.postUrl,
+        status: item.status,
+        total_fetched: item.totalFetched ?? 0,
+        error: item.errorMsg,
+        submitted_at: item.submittedAt,
+        completed_at: item.completedAt,
+      })),
+      engagers: engagers.slice(0, 25).map(item => ({
+        platform: item.platform,
+        action: item.action,
+        author_handle: item.authorHandle,
+        status: item.status,
+        created_at: item.createdAt,
+        processed_at: item.processedAt,
+      })),
+    });
+  } catch (err) {
+    sendServerError(res, 'Post URL campaign status lookup failed', err);
+  }
 });
 
 router.get('/:brand_id', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {

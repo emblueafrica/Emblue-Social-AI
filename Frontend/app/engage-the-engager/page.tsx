@@ -11,6 +11,7 @@ import {
   ApiError,
   deleteCampaign,
   getCampaigns,
+  getPostUrlCampaignStatus,
   preflightXCampaign,
   publishXCampaignPost,
   runPostUrlCampaign,
@@ -122,6 +123,8 @@ export default function EngageTheEngager() {
   const [xTweetUrl, setXTweetUrl] = useState("");
   const [xPostText, setXPostText] = useState("");
   const [xPreflightResult, setXPreflightResult] = useState<string | null>(null);
+  const [lastPostUrlCampaignId, setLastPostUrlCampaignId] = useState<string | null>(null);
+  const [xPublishResult, setXPublishResult] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
@@ -133,6 +136,14 @@ export default function EngageTheEngager() {
     queryFn: () => getCampaigns(activeBrandId!),
     enabled: Boolean(activeBrandId),
     retry: false,
+  });
+
+  const postUrlStatusQuery = useQuery({
+    queryKey: ["post-url-campaign-status", activeBrandId, lastPostUrlCampaignId],
+    queryFn: () => getPostUrlCampaignStatus(activeBrandId!, lastPostUrlCampaignId!),
+    enabled: Boolean(activeBrandId && lastPostUrlCampaignId),
+    retry: false,
+    refetchInterval: (query) => query.state.data?.summary.complete ? false : 5000,
   });
 
   const saveCampaignMutation = useMutation({
@@ -269,8 +280,9 @@ export default function EngageTheEngager() {
         reply_template: postTemplate.trim(),
         cta_link: postCtaLink.trim() || undefined,
       });
+      setLastPostUrlCampaignId(result.campaign_id);
       setApiNotice(null);
-      setToast(result.message);
+      setToast(`${result.message}. Tracking run ${result.campaign_id}.`);
     } catch (error) {
       setApiNotice(apiErrorMessage(error));
     }
@@ -322,6 +334,8 @@ export default function EngageTheEngager() {
         text,
         reply_to_url: xTweetUrl.trim() || undefined,
       });
+      const publishUrl = result.message_id ? `https://x.com/i/web/status/${result.message_id}` : null;
+      setXPublishResult(publishUrl ? `Published: ${publishUrl}` : "Published to X, but no message ID was returned.");
       setApiNotice(null);
       setToast(result.reply_to_tweet_id ? "X reply published." : "X post published.");
     } catch (error) {
@@ -470,6 +484,16 @@ export default function EngageTheEngager() {
                 >
                   {xPublishMutation.isPending ? "Publishing..." : xTweetUrl.trim() ? "Publish X reply" : "Publish X post"}
                 </button>
+                {xPublishResult && (
+                  <a
+                    href={xPublishResult.replace(/^Published:\s*/, "")}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block rounded-lg bg-muted/50 p-3 text-sm font-medium text-primary hover:underline"
+                  >
+                    {xPublishResult}
+                  </a>
+                )}
               </div>
             </div>
           </Surface>
@@ -540,6 +564,60 @@ export default function EngageTheEngager() {
               </button>
               <span className="text-sm text-muted-foreground">The backend will reject runs until allocation equals 100%.</span>
             </div>
+
+            {lastPostUrlCampaignId && (
+              <div className="mt-6 rounded-xl border bg-muted/30 p-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-sm font-bold">Run status: {lastPostUrlCampaignId}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {postUrlStatusQuery.isFetching ? "Refreshing status..." : postUrlStatusQuery.data?.summary.complete ? "Complete" : "Processing"}
+                    </p>
+                  </div>
+                  <button onClick={() => void postUrlStatusQuery.refetch()} className="rounded-lg border bg-background px-3 py-2 text-sm font-medium hover:bg-muted">
+                    Refresh status
+                  </button>
+                </div>
+
+                {postUrlStatusQuery.data && (
+                  <div className="mt-4 space-y-4">
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+                      <MiniStat label="Fetched" value={postUrlStatusQuery.data.summary.fetched} />
+                      <MiniStat label="Engagers" value={postUrlStatusQuery.data.summary.engagers} />
+                      <MiniStat label="Sent" value={postUrlStatusQuery.data.summary.sent} />
+                      <MiniStat label="Queued" value={postUrlStatusQuery.data.summary.queued} />
+                      <MiniStat label="Manual" value={postUrlStatusQuery.data.summary.manual} />
+                      <MiniStat label="Errors" value={postUrlStatusQuery.data.summary.errors} />
+                    </div>
+                    <div className="space-y-2">
+                      {postUrlStatusQuery.data.post_urls.map((item) => (
+                        <div key={`${item.platform}-${item.url}`} className="rounded-lg border bg-background p-3 text-sm">
+                          <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                            <span className="truncate font-semibold">{item.platform.toUpperCase()} · {item.url}</span>
+                            <span className="text-muted-foreground">{item.status} · {item.total_fetched} fetched</span>
+                          </div>
+                          {item.error && <p className="mt-2 text-xs text-destructive">{item.error}</p>}
+                        </div>
+                      ))}
+                    </div>
+                    {postUrlStatusQuery.data.engagers.length > 0 && (
+                      <div className="space-y-2">
+                        {postUrlStatusQuery.data.engagers.slice(0, 5).map((item) => (
+                          <div key={`${item.platform}-${item.author_handle}-${item.created_at}`} className="flex items-center justify-between rounded-lg border bg-background p-3 text-sm">
+                            <span>{item.author_handle || "unknown"} · {item.action}</span>
+                            <span className="text-muted-foreground">{item.status || "pending"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {postUrlStatusQuery.error && (
+                  <p className="mt-3 text-sm text-destructive">{apiErrorMessage(postUrlStatusQuery.error)}</p>
+                )}
+              </div>
+            )}
           </Surface>
         </main>
 
@@ -596,6 +674,15 @@ function Kpi({ color, label, value, sub }: { color: string; label: string; value
       <p className="text-sm text-muted-foreground">{label}</p>
       <p className="text-3xl font-bold mt-2">{value}</p>
       <p className="text-xs mt-2 text-muted-foreground">{sub}</p>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border bg-background p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-bold">{value}</p>
     </div>
   );
 }
