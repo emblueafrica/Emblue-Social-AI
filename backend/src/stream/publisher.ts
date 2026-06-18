@@ -43,10 +43,10 @@ export async function publishReply(payload: PublishPayload): Promise<PublishResu
       } catch (err) { result.error = (err as Error).message; }
     }
   } else if (platform === "x") {
-    const xToken = process.env.X_OAUTH_TOKEN ?? token;
+    const xToken = token;
     if (!xToken) { result.error = "No X token"; } else {
       try {
-        const r = await fetch("https://api.twitter.com/2/tweets", {
+        const r = await fetch("https://api.x.com/2/tweets", {
           method: "POST",
           headers: { "Authorization": `Bearer ${xToken}`, "Content-Type": "application/json" },
           body: JSON.stringify({ text: reply_text, ...(payload.tweet_id && { reply: { in_reply_to_tweet_id: payload.tweet_id } }) })
@@ -57,7 +57,7 @@ export async function publishReply(payload: PublishPayload): Promise<PublishResu
       } catch (err) { result.error = (err as Error).message; }
     }
   } else if (platform === "tiktok") {
-    const tikToken = process.env.TIKTOK_ACCESS_TOKEN ?? token;
+    const tikToken = token;
     if (!tikToken) { result.error = "No TikTok token"; } else {
       try {
         const r = await fetch("https://open.tiktokapis.com/v2/comment/reply/post/", {

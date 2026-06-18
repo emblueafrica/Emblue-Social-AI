@@ -27,11 +27,6 @@ function getConnectionPlatformIds(platformId: PlatformConnectId): string[] {
   return platformId === "meta" ? ["meta", "facebook", "instagram"] : [platformId];
 }
 
-function getDisconnectPlatformId(platformId: PlatformConnectId): "facebook" | "x" | "tiktok" {
-  if (platformId === "meta") return "facebook";
-  return platformId;
-}
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : platformErrorMessage;
 }
@@ -42,7 +37,6 @@ function isValidProviderUrl(value: string): boolean {
     return url.protocol === "https:" && [
       "facebook.com",
       "www.facebook.com",
-      "twitter.com",
       "x.com",
       "www.tiktok.com",
       "open-api.tiktok.com",
@@ -125,7 +119,14 @@ export default function SettingsPage() {
   const disconnectMutation = useMutation({
     mutationFn: async (platformId: PlatformConnectId) => {
       if (!activeBrandId) throw new Error("No active brand selected.");
-      return disconnectPlatform(activeBrandId, getDisconnectPlatformId(platformId));
+      if (platformId === "meta") {
+        await Promise.all([
+          disconnectPlatform(activeBrandId, "facebook"),
+          disconnectPlatform(activeBrandId, "instagram"),
+        ]);
+        return { ok: true };
+      }
+      return disconnectPlatform(activeBrandId, platformId);
     },
     onSuccess: async (_data, platformId) => {
       setConnectState({

@@ -370,6 +370,37 @@ router.post('/warroom/snapshot', requireBrandAccess, requireToolAccess('tool_9')
 });
 
 // ── ATTRIBUTION LINKS ─────────────────────────────────────────────────────────
+router.get('/attribution/links/:brand_id', requireBrandAccess, requireToolAccess('tool_6'), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.params['brand_id']);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+
+  try {
+    const rows = await prisma.trackedLink.findMany({
+      where: { brandId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+    const baseUrl = (process.env.LINK_BASE_URL ?? process.env.FRONTEND_URL ?? '').replace(/\/+$/, '');
+    res.json({
+      links: rows.map(row => ({
+        link_id: Number(row.linkId),
+        brand_id: row.brandId,
+        short_code: row.shortCode,
+        tracked_url: baseUrl ? `${baseUrl}/r/${row.shortCode}` : `/r/${row.shortCode}`,
+        dest_url: row.destUrl,
+        campaign: row.campaign,
+        platform: row.platform,
+        content_type: row.contentType,
+        clicks: row.clicks,
+        conversions: row.conversions,
+        created_at: row.createdAt,
+      })),
+    });
+  } catch (err) {
+    sendServerError(res, 'Attribution link lookup failed', err);
+  }
+});
+
 router.post('/attribution/links', requireBrandAccess, requireToolAccess('tool_6'), async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const brandId = getRequiredBrandId(body.brand_id);

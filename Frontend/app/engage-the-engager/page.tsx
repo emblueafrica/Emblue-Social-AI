@@ -48,12 +48,12 @@ const seedDraft = (over: Partial<CampaignDraft>): CampaignDraft => ({
   ctaLink: "",
   imageUrl: "",
   threshold: 85,
-  allocation: { instagram: 50, facebook: 30, tiktok: 20 },
+  allocation: { instagram: 40, facebook: 25, tiktok: 20, x: 15 },
   ...over,
 });
 
 function mapCampaignRecord(record: CampaignRecord): Campaign {
-  const allocation = record.platform_allocation ?? { instagram: 50, facebook: 30, tiktok: 20 };
+  const allocation = record.platform_allocation ?? { instagram: 40, facebook: 25, tiktok: 20, x: 15 };
   const platforms = Array.from(
     new Set(
       [
@@ -79,6 +79,7 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
       instagram: allocation.instagram ?? 0,
       facebook: allocation.facebook ?? 0,
       tiktok: allocation.tiktok ?? 0,
+      x: allocation.x ?? 0,
     },
   });
 
@@ -113,8 +114,9 @@ export default function EngageTheEngager() {
   const queryClient = useQueryClient();
   const { activeBrandId } = useAuth();
   const [posts, setPosts] = useState<PostRow[]>([{ id: nextId++, platform: "instagram", url: "" }]);
-  const [allocation, setAllocation] = useState({ instagram: 50, facebook: 30, tiktok: 20 });
+  const [allocation, setAllocation] = useState({ instagram: 40, facebook: 25, tiktok: 20, x: 15 });
   const [postTemplate, setPostTemplate] = useState("");
+  const [postCtaLink, setPostCtaLink] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
@@ -165,7 +167,7 @@ export default function EngageTheEngager() {
     const match = campaign.stat.match(/^(\d+)/);
     return sum + (match ? Number(match[1]) : 0);
   }, 0);
-  const allocationTotal = allocation.instagram + allocation.facebook + allocation.tiktok;
+  const allocationTotal = allocation.instagram + allocation.facebook + allocation.tiktok + allocation.x;
 
   const toPayload = (campaign: CampaignDraft): CampaignPayload => ({
     ...(editingId && editingId > 0 ? { campaign_id: editingId } : {}),
@@ -243,13 +245,22 @@ export default function EngageTheEngager() {
       setApiNotice("Platform allocation must equal 100% before running.");
       return;
     }
+    if (!postTemplate.trim()) {
+      setApiNotice("Add a reply template before running so the campaign can post automatically.");
+      return;
+    }
+    if (/\{\{\s*link\s*\}\}/.test(postTemplate) && !postCtaLink.trim()) {
+      setApiNotice("Add a CTA link or remove {{link}} from the reply template.");
+      return;
+    }
 
     try {
       const result = await runPostUrlMutation.mutateAsync({
         brand_id: activeBrandId,
         post_urls: validPosts,
         platform_allocation: allocation,
-        reply_template: postTemplate,
+        reply_template: postTemplate.trim(),
+        cta_link: postCtaLink.trim() || undefined,
       });
       setApiNotice(null);
       setToast(result.message);
@@ -385,13 +396,21 @@ export default function EngageTheEngager() {
               ))}
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3 mt-6">
+            <div className="grid gap-4 md:grid-cols-4 mt-6">
               <NumberField label="Instagram %" value={allocation.instagram} onChange={(value) => setAllocation((current) => ({ ...current, instagram: value }))} />
               <NumberField label="Facebook %" value={allocation.facebook} onChange={(value) => setAllocation((current) => ({ ...current, facebook: value }))} />
               <NumberField label="TikTok %" value={allocation.tiktok} onChange={(value) => setAllocation((current) => ({ ...current, tiktok: value }))} />
+              <NumberField label="X %" value={allocation.x} onChange={(value) => setAllocation((current) => ({ ...current, x: value }))} />
             </div>
 
             <div className="mt-2 text-sm text-muted-foreground">Allocation total: {allocationTotal}%</div>
+
+            <input
+              value={postCtaLink}
+              onChange={(event) => setPostCtaLink(event.target.value)}
+              placeholder="CTA link used for {{link}}"
+              className="mt-6 w-full rounded-lg border bg-background px-3 py-2 text-sm"
+            />
 
             <textarea
               value={postTemplate}

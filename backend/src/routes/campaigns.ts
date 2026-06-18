@@ -4,6 +4,7 @@ import prisma from '../db/prisma';
 import { mapEngageCampaign, toInputJson } from '../db/mappers';
 import { engageEngager, runPostUrlCampaign, extractPostId, fillVariables } from '../stream/engageEngagers';
 import { getValidToken } from '../auth/platformAuth';
+import { getConnectedAccountRecord } from '../db/queries';
 import { CampaignConfig, PostUrlItem, Credentials, Platform } from '../types';
 import { canAccessBrandId, requireBrandAccess, requireBrandRole } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
@@ -100,7 +101,7 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
           autoFireThreshold: body.auto_fire_threshold ?? 85,
           maxPerHour: body.max_per_hour ?? 50,
           isActive: body.is_active ?? true,
-          platformAllocation: toInputJson(body.platform_allocation ?? { instagram: 34, facebook: 33, tiktok: 33 }),
+          platformAllocation: toInputJson(body.platform_allocation ?? { instagram: 25, facebook: 25, tiktok: 25, x: 25 }),
           updatedAt: new Date(),
         },
       });
@@ -122,7 +123,7 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
           autoFireThreshold: body.auto_fire_threshold ?? 85,
           maxPerHour: body.max_per_hour ?? 50,
           isActive: body.is_active ?? true,
-          platformAllocation: toInputJson(body.platform_allocation ?? { instagram: 34, facebook: 33, tiktok: 33 }),
+          platformAllocation: toInputJson(body.platform_allocation ?? { instagram: 25, facebook: 25, tiktok: 25, x: 25 }),
         },
       });
       result = mapEngageCampaign(row);
@@ -181,8 +182,8 @@ router.post('/:campaign_id/preview', requireBrandAccess, requireToolAccess('tool
 
     const config = mapEngageCampaign(row);
     const text = fillVariables(
-      config.reply_template ?? `Hey @{{handle}}! Thank you for engaging. Check this out: {{link}}`,
-      { handle: sample_handle, link: config.cta_link ?? '', brand: '' }
+      config.reply_template ?? `Hey {{handle}}! Thank you for engaging. Check this out: {{link}}`,
+      { handle: sample_handle.startsWith('@') ? sample_handle : `@${sample_handle}`, link: config.cta_link ?? '', brand: '' }
     );
     res.json({ preview: text, image_url: config.image_url, cta_link: config.cta_link });
   } catch (err) {
@@ -211,6 +212,11 @@ router.post('/engage-now', requireBrandRole('client_owner'), requireBrandAccess,
   }
 
   try {
+    const metaToken =
+      body.platform === 'instagram' || body.platform === 'facebook'
+        ? await getValidToken(brandId, body.platform)
+        : null;
+
     const config: CampaignConfig = {
       brand_id: brandId,
       name: 'manual',
@@ -221,9 +227,9 @@ router.post('/engage-now', requireBrandRole('client_owner'), requireBrandAccess,
     };
 
     const credentials: Credentials = {
-      META_PAGE_ACCESS_TOKEN: await getValidToken(brandId, body.platform),
-      X_OAUTH_TOKEN: process.env.X_OAUTH_TOKEN,
-      TIKTOK_ACCESS_TOKEN: process.env.TIKTOK_ACCESS_TOKEN,
+      META_PAGE_ACCESS_TOKEN: metaToken,
+      X_OAUTH_TOKEN: body.platform === 'x' ? await getValidToken(brandId, 'x') : null,
+      TIKTOK_ACCESS_TOKEN: body.platform === 'tiktok' ? await getValidToken(brandId, 'tiktok') : null,
     };
 
     const result = await engageEngager(brandId, {
@@ -248,7 +254,7 @@ router.post('/post-urls/run', requireBrandRole('client_owner'), requireBrandAcce
     brand_id:           number;
     campaign_id?:       string;
     post_urls:          PostUrlItem[];
-    platform_allocation?: { instagram?: number; facebook?: number; tiktok?: number };
+    platform_allocation?: { instagram?: number; facebook?: number; tiktok?: number; x?: number };
     tone?:              string;
     reply_template?:    string;
     cta_link?:          string;
@@ -263,7 +269,7 @@ router.post('/post-urls/run', requireBrandRole('client_owner'), requireBrandAcce
     return;
   }
 
-  const alloc = body.platform_allocation ?? { instagram: 34, facebook: 33, tiktok: 33 };
+  const alloc = body.platform_allocation ?? { instagram: 25, facebook: 25, tiktok: 25, x: 25 };
   const allocationResult = validateAllocationTotal(alloc);
   if (!allocationResult.ok) {
     res.status(400).json({ error: allocationResult.message });
@@ -274,6 +280,57 @@ router.post('/post-urls/run', requireBrandRole('client_owner'), requireBrandAcce
     ...p,
     post_id_ext: extractPostId(p.platform, p.url),
   })).filter(p => isPlatform(p.platform) && isHttpUrl(p.url) && p.post_id_ext);
+
+  if (!validated.length) {
+    sendValidationError(res, 'No valid post URLs were provided. Check platform selection and URL format.');
+    return;
+  }
+
+  let credentials: Credentials;
+  try {
+    const [instagramAccount, metaToken, tiktokToken, xAccount, xToken] = await Promise.all([
+      getConnectedAccountRecord(brandId, 'instagram'),
+      getValidToken(brandId, 'instagram').then(token => token ?? getValidToken(brandId, 'facebook')),
+      getValidToken(brandId, 'tiktok'),
+      getConnectedAccountRecord(brandId, 'x'),
+      getValidToken(brandId, 'x'),
+    ]);
+    credentials = {
+      META_PAGE_ACCESS_TOKEN: metaToken,
+      META_IG_USER_ID: instagramAccount?.accountIdExt ?? null,
+      TIKTOK_ACCESS_TOKEN: tiktokToken,
+      X_OAUTH_TOKEN: xToken,
+    };
+
+    const platforms = new Set(validated.map(item => item.platform));
+    const diagnostics: string[] = [];
+    if ((platforms.has('instagram') || platforms.has('facebook')) && !metaToken) {
+      diagnostics.push('Meta is not connected for this brand. Connect a Facebook Page with a linked Instagram Business/Creator account.');
+    }
+    if (platforms.has('instagram') && !instagramAccount?.accountIdExt) {
+      diagnostics.push('Instagram Business/Creator account ID is missing. Reconnect Meta after linking Instagram to a Facebook Page.');
+    }
+    if (platforms.has('tiktok') && !tiktokToken) {
+      diagnostics.push('TikTok is not connected for this brand.');
+    }
+    if (platforms.has('x') && !xToken) {
+      diagnostics.push('X is not connected for this brand.');
+    }
+    if (platforms.has('x') && !xAccount?.refreshToken) {
+      diagnostics.push('X token is not refreshable. Reconnect X with offline.access enabled.');
+    }
+    if (diagnostics.length) {
+      res.status(409).json({
+        error: 'Campaign preflight failed',
+        message: diagnostics[0],
+        diagnostics,
+      });
+      return;
+    }
+  } catch (err) {
+    sendServerError(res, 'Campaign preflight failed', err);
+    return;
+  }
 
   res.json({
     ok:         true,
@@ -291,12 +348,6 @@ router.post('/post-urls/run', requireBrandRole('client_owner'), requireBrandAcce
     auto_fire_threshold:  body.auto_fire_threshold ?? 85,
     max_per_hour:         body.max_per_hour ?? 50,
     platform_allocation:  alloc,
-  };
-
-  const credentials: Credentials = {
-    META_PAGE_ACCESS_TOKEN: await getValidToken(brandId, 'instagram'),
-    TIKTOK_ACCESS_TOKEN:    process.env.TIKTOK_ACCESS_TOKEN,
-    X_OAUTH_TOKEN:          process.env.X_OAUTH_TOKEN,
   };
 
   void runPostUrlCampaign(brandId, config, validated, credentials);

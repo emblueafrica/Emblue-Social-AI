@@ -107,9 +107,11 @@ model Brand {
   tone              String?
   watchlistKeywords String[]         @default([]) @map("watchlist_keywords")
   ownerUserId       String?          @map("owner_user_id") @db.Uuid
+  managedByUserId   String?          @map("managed_by_user_id") @db.Uuid
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
 
+  @@index([managedByUserId], map: "idx_brands_managed_by")
   @@map("brands")
 }
 

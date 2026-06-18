@@ -81,6 +81,18 @@ router.get('/me', async (req: Request, res: Response) => {
   const activeMembership = req.user.brand_id
     ? req.user.brand_memberships.find(item => item.brand_id === req.user!.brand_id)
     : null;
+  const activeBrandRecord = activeMembership
+    ? await prisma.brand.findUnique({
+        where: { brandId: activeMembership.brand_id },
+        select: { managedByUserId: true },
+      })
+    : null;
+  const activeManagedBy = activeBrandRecord?.managedByUserId
+    ? await prisma.appUser.findUnique({
+        where: { userId: activeBrandRecord.managedByUserId },
+        select: { userId: true, email: true, fullName: true },
+      })
+    : null;
 
   res.json({
     user: {
@@ -97,6 +109,12 @@ router.get('/me', async (req: Request, res: Response) => {
       name: activeMembership.brand_name,
       slug: activeMembership.brand_slug,
       role: activeMembership.role,
+      managed_by_user_id: activeBrandRecord?.managedByUserId ?? null,
+      managed_by: activeManagedBy ? {
+        user_id: activeManagedBy.userId,
+        email: activeManagedBy.email,
+        full_name: activeManagedBy.fullName,
+      } : null,
     } : null,
     pending_signup_status: req.user.pending_signup_status ?? null,
   });

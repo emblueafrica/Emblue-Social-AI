@@ -48,6 +48,7 @@ export function getMetaAuthUrl(brandId: number): string {
 
 type MetaTokenResponse = { access_token?: string; expires_in?: number; error?: { message: string } };
 type MetaPage = { id: string; name: string; access_token: string };
+type MetaInstagramAccount = { id: string; username: string };
 type MetaUserResponse = { id?: string; name?: string; error?: { message: string } };
 
 /**
@@ -58,52 +59,62 @@ type MetaUserResponse = { id?: string; name?: string; error?: { message: string 
  * a long-lived user token do not expire, so they are stored with no expiry.
  */
 async function persistMetaConnections(brandId: number, userToken: string, platformUserId: string | null): Promise<string> {
+  return persistStrictMetaConnections(brandId, userToken, platformUserId);
+}
+
+async function persistStrictMetaConnections(brandId: number, userToken: string, platformUserId: string | null): Promise<string> {
   const pagesRes = await fetch(
     `https://graph.facebook.com/v19.0/me/accounts?fields=id,name,access_token&access_token=${userToken}`,
   );
   const pagesData = (await pagesRes.json()) as { data?: MetaPage[]; error?: { message: string } };
-  const page = pagesData.data?.[0];
-
-  if (!page) {
-    // No managed Page — fall back to the long-lived user token under `instagram`.
-    await upsertConnectedAccount(
-      brandId, 'instagram', userToken, null,
-      new Date(Date.now() + 60 * 24 * 3600 * 1000),
-      'Meta account', '', 'instagram_basic', platformUserId,
-    );
-    return 'Meta account';
+  if (!pagesRes.ok || pagesData.error) {
+    throw new Error(pagesData.error?.message ?? 'Meta Page lookup failed');
   }
 
-  await upsertConnectedAccount(
-    brandId, 'facebook', page.access_token, null, null,
-    page.name, page.id, 'pages_manage_engagement,pages_messaging', platformUserId,
-  );
+  const pages = pagesData.data ?? [];
+  if (pages.length === 0) {
+    throw new Error('No Facebook Page found. Connect with a Facebook user that has full control of the Page linked to the Instagram professional account.');
+  }
 
-  // An Instagram business account may be linked to the Page; it shares the Page token.
-  let igHandle = page.name;
-  let igId = page.id;
-  try {
-    const igRes = await fetch(
-      `https://graph.facebook.com/v19.0/${page.id}` +
-      `?fields=instagram_business_account{id,username}&access_token=${page.access_token}`,
-    );
-    const igData = (await igRes.json()) as {
-      instagram_business_account?: { id: string; username: string };
-    };
-    if (igData.instagram_business_account) {
-      igHandle = igData.instagram_business_account.username;
-      igId = igData.instagram_business_account.id;
+  let selected: { page: MetaPage; instagram: MetaInstagramAccount } | null = null;
+  for (const page of pages) {
+    try {
+      const igRes = await fetch(
+        `https://graph.facebook.com/v19.0/${page.id}` +
+        `?fields=instagram_business_account{id,username}&access_token=${page.access_token}`,
+      );
+      const igData = (await igRes.json()) as {
+        instagram_business_account?: MetaInstagramAccount;
+        error?: { message: string };
+      };
+      if (igData.error) {
+        console.warn(`[Auth] Meta IG lookup failed for page ${page.id}:`, igData.error.message);
+        continue;
+      }
+      if (igData.instagram_business_account) {
+        selected = { page, instagram: igData.instagram_business_account };
+        break;
+      }
+    } catch (err) {
+      console.warn(`[Auth] Meta IG lookup failed for page ${page.id}:`, (err as Error).message);
     }
-  } catch {
-    /* IG linkage is best-effort */
+  }
+
+  if (!selected) {
+    throw new Error('No linked Instagram professional account found. Link an Instagram Business or Creator account to a Facebook Page, then reconnect Meta.');
   }
 
   await upsertConnectedAccount(
-    brandId, 'instagram', page.access_token, null, null,
-    igHandle, igId, 'instagram_manage_comments,instagram_manage_messages', platformUserId,
+    brandId, 'facebook', selected.page.access_token, null, null,
+    selected.page.name, selected.page.id, 'pages_manage_engagement,pages_messaging,pages_read_engagement', platformUserId,
   );
 
-  return igHandle;
+  await upsertConnectedAccount(
+    brandId, 'instagram', selected.page.access_token, null, null,
+    selected.instagram.username, selected.instagram.id, 'instagram_basic,instagram_manage_comments,instagram_manage_messages', platformUserId,
+  );
+
+  return selected.instagram.username;
 }
 
 export async function handleMetaCallback(req: Request, res: Response): Promise<void> {
@@ -321,7 +332,7 @@ async function refreshPlatformToken(
 ): Promise<RefreshedToken | null> {
   if (platform === 'x') {
     if (!refreshToken) return null;
-    const res = await fetch('https://api.twitter.com/2/oauth2/token', {
+    const res = await fetch('https://api.x.com/2/oauth2/token', {
       method: 'POST',
       headers: {
         Authorization: `Basic ${xBasicAuthHeader()}`,

@@ -53,7 +53,7 @@ async function fetchXMentions(
 ): Promise<RawMessage[]> {
   try {
     const res  = await fetch(
-      `https://api.twitter.com/2/users/${accountId}/mentions` +
+      `https://api.x.com/2/users/${accountId}/mentions` +
       `?tweet.fields=created_at,public_metrics&max_results=100`,
       { headers: { Authorization: `Bearer ${bearerToken}` } }
     );
@@ -68,7 +68,7 @@ async function fetchXMentions(
       kind:          'mention',
       text:          t.text,
       author_handle: null,
-      url:           `https://twitter.com/i/web/status/${t.id}`,
+      url:           `https://x.com/i/web/status/${t.id}`,
       metrics: {
         likes:   t.public_metrics?.like_count ?? 0,
         replies: 0, shares: 0, views: 0,
@@ -113,8 +113,7 @@ export async function syncAllPlatforms(brandId: number): Promise<SyncResult> {
             rawItems.push(...comments);
           }
         } else if (account.platform === 'x') {
-          const bearer = process.env.X_BEARER_TOKEN ?? account.accessToken;
-          rawItems = account.accountIdExt ? await fetchXMentions(bearer, account.accountIdExt) : [];
+          rawItems = account.accountIdExt ? await fetchXMentions(account.accessToken, account.accountIdExt) : [];
         }
 
         if (rawItems.length > 0) {

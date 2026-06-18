@@ -48,6 +48,12 @@ export type AuthMeResponse = {
     name: string;
     slug: string;
     role: string;
+    managed_by_user_id?: string | null;
+    managed_by?: {
+      user_id: string;
+      email: string;
+      full_name?: string | null;
+    } | null;
   } | null;
   pending_signup_status: string | null;
 };
@@ -110,6 +116,12 @@ export type ToolAccessResponse = {
     brand_id: number;
     name: string;
     slug: string;
+    managed_by_user_id?: string | null;
+    managed_by?: {
+      user_id: string;
+      email: string;
+      full_name?: string | null;
+    } | null;
   };
 };
 
@@ -161,9 +173,30 @@ export type AdminBrand = {
   campaign_objective?: string | null;
   tone?: string | null;
   owner_user_id?: string | null;
+  managed_by_user_id?: string | null;
+  managed_by?: {
+    user_id: string;
+    email: string;
+    full_name?: string | null;
+  } | null;
   members: { user_id: string; role: string }[];
   enabled_tools: string[];
   plan: string | null;
+  connection_status?: {
+    meta: {
+      connected: boolean;
+      facebook_connected: boolean;
+      instagram_connected: boolean;
+      account_handle?: string | null;
+      diagnostics: string[];
+    };
+    x: {
+      connected: boolean;
+      account_handle?: string | null;
+      refreshable: boolean;
+      diagnostics: string[];
+    };
+  };
   created_at: string;
   updated_at: string;
 };
@@ -378,6 +411,47 @@ export type FunnelRecord = {
   created_at: string;
 };
 
+export type ListeningRun = {
+  run_id: number;
+  brand_id: number;
+  group_id?: number | null;
+  status: string;
+  mode: string;
+  keywords: string[];
+  platforms: string[];
+  result_count?: number | null;
+  error?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+};
+
+export type ListeningFeedItem = {
+  result_id: number;
+  platform: string;
+  author_handle?: string | null;
+  text?: string | null;
+  url?: string | null;
+  sentiment?: string | null;
+  intent?: string | null;
+  urgency_score?: number | null;
+  matched_keyword?: string | null;
+  created_at: string;
+};
+
+export type TrackedLinkRecord = {
+  link_id: number;
+  brand_id?: number | null;
+  short_code: string;
+  tracked_url: string;
+  dest_url: string;
+  campaign?: string | null;
+  platform?: Platform | null;
+  content_type?: string | null;
+  clicks: number;
+  conversions: number;
+  created_at: string;
+};
+
 export type ToolActionResult = Record<string, unknown>;
 export type ToolSummaryResponse = Record<string, unknown>;
 
@@ -481,9 +555,10 @@ export function approveSignupRequest(
   payload: {
     account_type: "b2b_licensed" | "b2c_managed";
     plan_id: "starter" | "growth" | "enterprise";
+    managed_by_user_id?: string | null;
   },
 ) {
-  return apiRequest<{ ok: true; brand_id: number; enabled: string[] }>(
+  return apiRequest<{ ok: true; brand_id: number; managed_by_user_id?: string | null; enabled: string[] }>(
     `/api/v1/admin/signup-requests/${requestId}/approve`,
     { method: "POST", body: JSON.stringify(payload) },
   );
@@ -501,9 +576,10 @@ export function updateBrandAccess(
   payload: {
     account_type: "b2b_licensed" | "b2c_managed" | "internal";
     plan_id: "starter" | "growth" | "enterprise";
+    managed_by_user_id?: string | null;
   },
 ) {
-  return apiRequest<{ ok: true; brand_id: number; account_type: string; plan: string; enabled: string[] }>(
+  return apiRequest<{ ok: true; brand_id: number; account_type: string; managed_by_user_id?: string | null; plan: string; enabled: string[] }>(
     `/api/v1/admin/brands/${brandId}/access`,
     { method: "PUT", body: JSON.stringify(payload) },
   );
@@ -606,8 +682,74 @@ export function getKeywordGroups(brandId: number) {
   return apiRequest<{ keyword_groups: KeywordGroup[] }>(`/api/v1/listening/keyword-groups/${brandId}`);
 }
 
+export function createKeywordGroup(payload: {
+  brand_id: number;
+  name: string;
+  keywords: string[];
+  platforms: string[];
+  mode?: "realtime" | "historical" | "both";
+}) {
+  return apiRequest<{ ok: true; keyword_group: KeywordGroup }>("/api/v1/listening/keyword-groups", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function runListeningSearch(payload: {
+  brand_id: number;
+  group_id?: number;
+  keywords?: string[];
+  platforms?: string[];
+  mode?: "realtime" | "historical";
+}) {
+  return apiRequest<{ ok: true; run_id: number; status: string }>("/api/v1/listening/search", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getListeningRuns(brandId: number) {
+  return apiRequest<{ runs: ListeningRun[] }>(`/api/v1/listening/runs/${brandId}`);
+}
+
+export function getListeningFeed(brandId: number) {
+  return apiRequest<{ feed: ListeningFeedItem[] }>(`/api/v1/listening/feed/${brandId}`);
+}
+
 export function getFunnels(brandId: number) {
   return apiRequest<{ funnels: FunnelRecord[] }>(`/api/v1/funnels/${brandId}`);
+}
+
+export function createFunnel(payload: {
+  brand_id: number;
+  name: string;
+  platform?: string;
+  keywords: string[];
+  trigger_actions: string[];
+  max_per_hour?: number;
+  delay_sec?: number;
+  dest_url?: string;
+  is_active?: boolean;
+}) {
+  return apiRequest<{ ok: true; funnel: FunnelRecord }>("/api/v1/funnels", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createFunnelTemplate(funnelId: number, payload: { name: string; body: string; cta_link?: string }) {
+  return apiRequest<ToolActionResult>(`/api/v1/funnels/${funnelId}/templates`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function runFunnel(funnelId: number) {
+  return apiRequest<ToolActionResult>(`/api/v1/funnels/${funnelId}/run`, { method: "POST" });
+}
+
+export function toggleFunnel(funnelId: number) {
+  return apiRequest<{ ok: true; funnel_id: number; is_active: boolean }>(`/api/v1/funnels/${funnelId}/toggle`, { method: "POST" });
 }
 
 export function runClustering(brandId: number, timeWindowDays = 7) {
@@ -643,6 +785,10 @@ export function createAttributionLink(payload: AttributionLinkPayload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getAttributionLinks(brandId: number) {
+  return apiRequest<{ links: TrackedLinkRecord[] }>(`/api/v1/attribution/links/${brandId}`);
 }
 
 export function scoreCreative(payload: CreativeScorePayload) {

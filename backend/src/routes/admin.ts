@@ -73,6 +73,23 @@ function parseOptionalBrandRole(value: unknown): BrandRole | null | undefined {
   return undefined;
 }
 
+function parseOptionalUserId(value: unknown): string | null | undefined {
+  if (value === null || value === undefined || value === '') return null;
+  const userId = cleanString(value);
+  if (!userId) return null;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)
+    ? userId
+    : undefined;
+}
+
+async function isActivePlatformAdminUserId(userId: string): Promise<boolean> {
+  const platformUser = await prisma.platformUser.findFirst({
+    where: { userId, role: 'platform_admin', isActive: true },
+    select: { userId: true },
+  });
+  return Boolean(platformUser);
+}
+
 function defaultClientRoleForAccountType(accountType: BrandAccountType): BrandRole {
   return accountType === 'b2b_licensed' ? 'client_owner' : 'client_viewer';
 }
@@ -81,6 +98,13 @@ function isClientRoleAllowedForAccountType(role: BrandRole, accountType: BrandAc
   if (accountType === 'b2b_licensed') return role === 'client_owner' || role === 'client_member';
   if (accountType === 'b2c_managed') return role === 'client_viewer' || role === 'client_approver';
   return role === 'client_viewer';
+}
+
+function hasScope(scope: string | null | undefined, required: string): boolean {
+  return String(scope ?? '')
+    .split(/[,\s]+/)
+    .map(item => item.trim())
+    .includes(required);
 }
 
 function parseWatchlistKeywords(value: unknown): string[] {
@@ -272,7 +296,10 @@ router.get('/brands', requirePlatformRole('super_admin', 'platform_admin'), asyn
       take: 200,
     });
     const brandIds = brands.map(brand => brand.brandId);
-    const [memberships, toolRows] = await Promise.all([
+    const managedByUserIds = Array.from(new Set(
+      brands.map(brand => brand.managedByUserId).filter((userId): userId is string => Boolean(userId))
+    ));
+    const [memberships, toolRows, connectionRows] = await Promise.all([
       prisma.brandMembership.findMany({
         where: { brandId: { in: brandIds }, isActive: true },
         select: { brandId: true, userId: true, role: true },
@@ -281,12 +308,56 @@ router.get('/brands', requirePlatformRole('super_admin', 'platform_admin'), asyn
         where: { brandId: { in: brandIds }, isActive: true },
         select: { brandId: true, toolId: true, planName: true, expiresAt: true },
       }),
+      prisma.connectedAccount.findMany({
+        where: { brandId: { in: brandIds } },
+        select: {
+          brandId: true,
+          platform: true,
+          accountHandle: true,
+          isActive: true,
+          tokenExpiresAt: true,
+          scope: true,
+          refreshToken: true,
+          connectedAt: true,
+        },
+      }),
     ]);
+    const managedUsers = managedByUserIds.length
+      ? await prisma.appUser.findMany({
+          where: { userId: { in: managedByUserIds } },
+          select: { userId: true, email: true, fullName: true },
+        })
+      : [];
+    const managedUserById = new Map(managedUsers.map(user => [user.userId, user]));
 
     res.json({
       brands: brands.map(brand => {
         const brandTools = toolRows.filter(row => row.brandId === brand.brandId);
+        const brandConnections = connectionRows.filter(row => row.brandId === brand.brandId);
+        const now = Date.now();
+        const facebook = brandConnections.find(row => row.platform === 'facebook' && row.isActive);
+        const instagram = brandConnections.find(row => row.platform === 'instagram' && row.isActive);
+        const x = brandConnections.find(row => row.platform === 'x' && row.isActive);
+        const metaDiagnostics: string[] = [];
+        if (!facebook && !instagram) metaDiagnostics.push('Meta not connected');
+        if (facebook && !instagram) metaDiagnostics.push('Facebook Page connected, but no linked Instagram Business/Creator account was stored');
+        if (instagram && !facebook) metaDiagnostics.push('Instagram account connected, but Facebook Page record is missing');
+        if ((facebook?.tokenExpiresAt && facebook.tokenExpiresAt.getTime() <= now) || (instagram?.tokenExpiresAt && instagram.tokenExpiresAt.getTime() <= now)) {
+          metaDiagnostics.push('Meta token is expired; reconnect Meta');
+        }
+        if (instagram && !hasScope(instagram.scope, 'instagram_manage_comments')) {
+          metaDiagnostics.push('Missing instagram_manage_comments permission');
+        }
+        if (facebook && !hasScope(facebook.scope, 'pages_messaging')) {
+          metaDiagnostics.push('Missing pages_messaging permission');
+        }
+        const xDiagnostics: string[] = [];
+        if (!x) xDiagnostics.push('X not connected');
+        if (x?.tokenExpiresAt && x.tokenExpiresAt.getTime() <= now) xDiagnostics.push('X token is expired; reconnect X');
+        if (x && !x.refreshToken) xDiagnostics.push('X token is not refreshable; reconnect with offline.access');
+        if (x && !hasScope(x.scope, 'tweet.write')) xDiagnostics.push('Missing tweet.write permission');
         const plans = Array.from(new Set(brandTools.map(row => row.planName).filter(Boolean)));
+        const managedBy = brand.managedByUserId ? managedUserById.get(brand.managedByUserId) : null;
         return {
           brand_id: brand.brandId,
           name: brand.name,
@@ -295,11 +366,32 @@ router.get('/brands', requirePlatformRole('super_admin', 'platform_admin'), asyn
           campaign_objective: brand.campaignObjective,
           tone: brand.tone,
           owner_user_id: brand.ownerUserId,
+          managed_by_user_id: brand.managedByUserId,
+          managed_by: managedBy ? {
+            user_id: managedBy.userId,
+            email: managedBy.email,
+            full_name: managedBy.fullName,
+          } : null,
           members: memberships
             .filter(row => row.brandId === brand.brandId)
             .map(row => ({ user_id: row.userId, role: row.role })),
           enabled_tools: brandTools.map(row => row.toolId).filter(isToolId),
           plan: plans.length === 1 ? plans[0] : plans.length > 1 ? 'custom' : null,
+          connection_status: {
+            meta: {
+              connected: Boolean(facebook && instagram),
+              facebook_connected: Boolean(facebook),
+              instagram_connected: Boolean(instagram),
+              account_handle: instagram?.accountHandle ?? facebook?.accountHandle ?? null,
+              diagnostics: metaDiagnostics,
+            },
+            x: {
+              connected: Boolean(x),
+              account_handle: x?.accountHandle ?? null,
+              refreshable: Boolean(x?.refreshToken),
+              diagnostics: xDiagnostics,
+            },
+          },
           created_at: brand.createdAt,
           updated_at: brand.updatedAt,
         };
@@ -356,6 +448,25 @@ router.post('/signup-requests/:request_id/approve', requirePlatformRole('super_a
       sendValidationError(res, `membership_role ${membershipRole} is not allowed for account_type ${accountType}`);
       return;
     }
+
+    const requestedManagedByUserId = parseOptionalUserId(body.managed_by_user_id ?? body.managedByUserId);
+    if (requestedManagedByUserId === undefined) {
+      sendValidationError(res, 'managed_by_user_id must be a valid user UUID');
+      return;
+    }
+    let managedByUserId: string | null = null;
+    if (accountType === 'b2c_managed') {
+      managedByUserId = requestedManagedByUserId ?? (req.user.platform_role === 'platform_admin' ? req.user.id : null);
+      if (!managedByUserId) {
+        sendValidationError(res, 'managed_by_user_id is required when approving a B2C managed client');
+        return;
+      }
+      if (!await isActivePlatformAdminUserId(managedByUserId)) {
+        sendValidationError(res, 'managed_by_user_id must belong to an active platform_admin');
+        return;
+      }
+    }
+
     const effectivePlanId = planId ?? 'starter';
     const plan = getPlanDefinition(effectivePlanId);
     const planName = accountType === 'b2c_managed' ? 'b2c_managed' : plan?.id ?? 'starter';
@@ -373,6 +484,7 @@ router.post('/signup-requests/:request_id/approve', requirePlatformRole('super_a
           tone: cleanString(body.tone) ?? 'professional and friendly',
           watchlistKeywords: parseWatchlistKeywords(body.watchlist_keywords ?? body.watchlistKeywords),
           ownerUserId: signupRequest.userId,
+          managedByUserId,
         },
       });
 
@@ -439,6 +551,7 @@ router.post('/signup-requests/:request_id/approve', requirePlatformRole('super_a
         metadata: {
           account_type: accountType,
           membership_role: membershipRole,
+          managed_by_user_id: managedByUserId,
           plan_name: planName,
           tool_ids: toolIds,
           expires_at: expiresAt?.toISOString() ?? null,
@@ -457,6 +570,7 @@ router.post('/signup-requests/:request_id/approve', requirePlatformRole('super_a
       brand_id: brand.brandId,
       account_type: accountType,
       membership_role: membershipRole,
+      managed_by_user_id: managedByUserId,
       plan_name: planName,
       provisioned: provisioned.length,
       enabled: provisioned,
@@ -744,11 +858,39 @@ router.put('/brands/:brand_id/access', requirePlatformRole('super_admin', 'platf
   const enabled = getDefaultToolIdsForAccountType(accountType, effectivePlanId, extraToolIds ?? []);
 
   try {
+    const existingBrand = await prisma.brand.findUnique({
+      where: { brandId },
+      select: { brandId: true, managedByUserId: true },
+    });
+    if (!existingBrand) {
+      res.status(404).json({ error: 'Brand not found' });
+      return;
+    }
+
+    const requestedManagedByUserId = parseOptionalUserId(body.managed_by_user_id ?? body.managedByUserId);
+    if (requestedManagedByUserId === undefined) {
+      sendValidationError(res, 'managed_by_user_id must be a valid user UUID');
+      return;
+    }
+    let managedByUserId: string | null = null;
+    if (accountType === 'b2c_managed') {
+      managedByUserId = requestedManagedByUserId ?? existingBrand.managedByUserId ?? (req.user.platform_role === 'platform_admin' ? req.user.id : null);
+      if (!managedByUserId) {
+        sendValidationError(res, 'managed_by_user_id is required for B2C managed brands');
+        return;
+      }
+      if (!await isActivePlatformAdminUserId(managedByUserId)) {
+        sendValidationError(res, 'managed_by_user_id must belong to an active platform_admin');
+        return;
+      }
+    }
+
     const brand = await prisma.$transaction(async tx => {
       const updatedBrand = await tx.brand.update({
         where: { brandId },
         data: {
           accountType,
+          managedByUserId,
           updatedAt: new Date(),
         },
       });
@@ -786,6 +928,7 @@ router.put('/brands/:brand_id/access', requirePlatformRole('super_admin', 'platf
         brandId,
         metadata: {
           account_type: accountType,
+          managed_by_user_id: managedByUserId,
           plan_name: planName,
           enabled_tools: enabled,
         },
@@ -798,6 +941,7 @@ router.put('/brands/:brand_id/access', requirePlatformRole('super_admin', 'platf
       ok: true,
       brand_id: brand.brandId,
       account_type: brand.accountType,
+      managed_by_user_id: brand.managedByUserId,
       plan: planName,
       enabled,
     });
