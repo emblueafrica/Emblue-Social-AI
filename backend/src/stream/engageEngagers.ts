@@ -234,8 +234,15 @@ async function sendXReply(replyText: string, tweetId: string | null | undefined,
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: replyText, ...(tweetId && { reply: { in_reply_to_tweet_id: tweetId } }) })
     });
-    const d = await r.json() as { data?: { id: string }; errors?: { message: string }[] };
-    if (!r.ok || d.errors) throw new Error(d.errors?.[0]?.message ?? `X ${r.status}`);
+    const d = await r.json() as {
+      data?: { id: string };
+      errors?: { message?: string; detail?: string }[];
+      title?: string;
+      detail?: string;
+    };
+    if (!r.ok || d.errors || !d.data?.id) {
+      throw new Error(d.errors?.[0]?.message ?? d.errors?.[0]?.detail ?? d.detail ?? d.title ?? `X ${r.status}`);
+    }
     return { success: true, tweet_id: d.data?.id };
   } catch (err) { return { manual_copy: true, text: replyText, error: (err as Error).message }; }
 }

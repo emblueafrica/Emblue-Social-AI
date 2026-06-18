@@ -334,8 +334,13 @@ export default function EngageTheEngager() {
         text,
         reply_to_url: xTweetUrl.trim() || undefined,
       });
+      if (!result.message_id) {
+        setXPublishResult(null);
+        setApiNotice("X accepted the request response but did not return a post ID. Treat this as not posted and check backend logs.");
+        return;
+      }
       const publishUrl = result.message_id ? `https://x.com/i/web/status/${result.message_id}` : null;
-      setXPublishResult(publishUrl ? `Published: ${publishUrl}` : "Published to X, but no message ID was returned.");
+      setXPublishResult(`Published: ${publishUrl}`);
       setApiNotice(null);
       setToast(result.reply_to_tweet_id ? "X reply published." : "X post published.");
     } catch (error) {
