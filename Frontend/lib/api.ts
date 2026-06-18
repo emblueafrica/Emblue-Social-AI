@@ -387,6 +387,37 @@ export type XCampaignPreflightResponse = {
   diagnostics: string[];
 };
 
+export type PostUrlCampaignStatus = {
+  campaign_id: string;
+  summary: {
+    post_urls: number;
+    fetched: number;
+    engagers: number;
+    sent: number;
+    manual: number;
+    queued: number;
+    errors: number;
+    complete: boolean;
+  };
+  post_urls: {
+    platform: Platform;
+    url: string;
+    status?: string | null;
+    total_fetched: number;
+    error?: string | null;
+    submitted_at: string;
+    completed_at?: string | null;
+  }[];
+  engagers: {
+    platform: Platform;
+    action: string;
+    author_handle?: string | null;
+    status?: string | null;
+    created_at: string;
+    processed_at?: string | null;
+  }[];
+};
+
 export type ApprovalQueueItem = {
   brand_id: number;
   platform: Platform;
@@ -674,13 +705,17 @@ export function toggleCampaign(campaignId: number) {
 }
 
 export function runPostUrlCampaign(payload: PostUrlCampaignPayload) {
-  return apiRequest<{ ok: true; message: string; post_count: number }>(
+  return apiRequest<{ ok: true; message: string; campaign_id: string; post_count: number }>(
     "/api/v1/campaigns/post-urls/run",
     {
       method: "POST",
       body: JSON.stringify(payload),
     },
   );
+}
+
+export function getPostUrlCampaignStatus(brandId: number, campaignId: string) {
+  return apiRequest<PostUrlCampaignStatus>(`/api/v1/campaigns/post-urls/status/${brandId}/${campaignId}`);
 }
 
 export function preflightXCampaign(payload: { brand_id: number; tweet_url?: string }) {
