@@ -367,6 +367,26 @@ export type PostUrlCampaignPayload = {
   max_per_hour?: number;
 };
 
+export type XCampaignPreflightResponse = {
+  ok: boolean;
+  connected: boolean;
+  account_handle?: string | null;
+  refreshable: boolean;
+  scopes: {
+    tweet_read: boolean;
+    tweet_write: boolean;
+    users_read: boolean;
+    offline_access: boolean;
+  };
+  recent_search: {
+    checked: boolean;
+    ok: boolean;
+    engager_count?: number;
+    error?: string;
+  };
+  diagnostics: string[];
+};
+
 export type ApprovalQueueItem = {
   brand_id: number;
   platform: Platform;
@@ -661,6 +681,20 @@ export function runPostUrlCampaign(payload: PostUrlCampaignPayload) {
       body: JSON.stringify(payload),
     },
   );
+}
+
+export function preflightXCampaign(payload: { brand_id: number; tweet_url?: string }) {
+  return apiRequest<XCampaignPreflightResponse>("/api/v1/campaigns/x/preflight", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function publishXCampaignPost(payload: { brand_id: number; text: string; reply_to_url?: string }) {
+  return apiRequest<{ ok: true; platform: "x"; message_id?: string; reply_to_tweet_id?: string | null }>("/api/v1/campaigns/x/post", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getApprovalQueue(brandId: number) {
