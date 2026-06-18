@@ -14,14 +14,14 @@ export type CampaignDraft = {
   ctaLink: string;
   imageUrl: string;
   threshold: number;
-  allocation: { instagram: number; facebook: number; tiktok: number };
+  allocation: { instagram: number; facebook: number; tiktok: number; x: number };
 };
 
 const PLATFORMS: { id: Platform; label: string; icon: React.ReactNode }[] = [
   { id: "instagram", label: "Instagram", icon: <PlatformLogo platform="instagram" size={16} /> },
   { id: "facebook", label: "Facebook", icon: <PlatformLogo platform="facebook" size={16} /> },
   { id: "tiktok", label: "TikTok", icon: <PlatformLogo platform="tiktok" size={16} /> },
-  { id: "x", label: "X/Twitter", icon: <PlatformLogo platform="x" size={16} /> },
+  { id: "x", label: "X", icon: <PlatformLogo platform="x" size={16} /> },
 ];
 
 const TONES = [
@@ -62,7 +62,7 @@ export function NewCampaignModal({
   const [ctaLink, setCtaLink] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [threshold, setThreshold] = useState(85);
-  const [allocation, setAllocation] = useState({ instagram: 50, facebook: 30, tiktok: 20 });
+  const [allocation, setAllocation] = useState({ instagram: 40, facebook: 25, tiktok: 20, x: 15 });
   const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
@@ -97,14 +97,18 @@ export function NewCampaignModal({
 
   const removeKeyword = (k: string) => setKeywords((arr) => arr.filter((x) => x !== k));
 
-  const total = allocation.instagram + allocation.facebook + allocation.tiktok;
+  const total = allocation.instagram + allocation.facebook + allocation.tiktok + allocation.x;
   const allocOk = total === 100;
   const valid = name.trim() && platforms.length && template.trim() && allocOk;
+  const sampleReply = (template || "Hey {{handle}}! Thanks for engaging with our post. Here's something special for you: {{link}}")
+    .replace(/@\{\{\s*handle\s*\}\}/g, "@tunde_Lagos")
+    .replace(/\{\{\s*handle\s*\}\}/g, "@tunde_Lagos")
+    .replace(/\{\{\s*link\s*\}\}/g, ctaLink || "https://example.com/campaign");
 
   const reset = () => {
     setName(""); setPlatforms([]); setKeywords([]); setKwInput("");
     setTone(""); setMaxPerHour(10); setTemplate(""); setCtaLink("");
-    setImageUrl(""); setThreshold(85); setAllocation({ instagram: 50, facebook: 30, tiktok: 20 });
+    setImageUrl(""); setThreshold(85); setAllocation({ instagram: 40, facebook: 25, tiktok: 20, x: 15 });
     setShowPreview(false);
   };
 
@@ -300,8 +304,7 @@ export function NewCampaignModal({
               <div className="rounded-xl bg-accent/40 p-4">
                 <p className="text-sm font-semibold mb-1">Sample Reply</p>
                 <p className="text-sm">
-                  Hey <span className="text-primary font-semibold">@tunde_Lagos</span>! Thanks for engaging with our post. Here's something special for you:{" "}
-                  <span className="text-primary underline">{ctaLink || "https://bit.ly/MTNxSUPEREAGLES"}</span>
+                  {sampleReply}
                 </p>
                 <p className="text-xs text-muted-foreground mt-2">
                   → Sent as Instagram DM with branded image attached
@@ -322,7 +325,7 @@ export function NewCampaignModal({
                 <span className="text-destructive text-sm font-semibold">{total}% ✗ must = 100%</span>
               )}
             </div>
-            {(["instagram", "facebook", "tiktok"] as const).map((key) => (
+            {(["instagram", "facebook", "tiktok", "x"] as const).map((key) => (
               <div key={key} className="flex items-center gap-3 py-2">
                 <div className="w-28 flex items-center gap-2 text-sm font-medium capitalize">
                   <PlatformLogo platform={key} size={16} />

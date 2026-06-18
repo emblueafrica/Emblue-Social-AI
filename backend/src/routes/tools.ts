@@ -21,11 +21,34 @@ router.get('/my-access', async (req: Request, res: Response): Promise<void> => {
   try {
     const enabled = await getEnabledToolIds(brandId);
     const membership = req.user?.brand_memberships.find(item => item.brand_id === brandId);
-    const brand = membership ? null : await prisma.brand.findUnique({
+    const brand = await prisma.brand.findUnique({
       where: { brandId },
-      select: { brandId: true, accountType: true, name: true, slug: true },
+      select: { brandId: true, accountType: true, name: true, slug: true, managedByUserId: true },
     });
     const accountType = membership?.account_type ?? brand?.accountType;
+    const managedBy = brand?.managedByUserId
+      ? await prisma.appUser.findUnique({
+          where: { userId: brand.managedByUserId },
+          select: { userId: true, email: true, fullName: true },
+        })
+      : null;
+    const brandPayload = brand ? {
+      brand_id: brand.brandId,
+      name: brand.name,
+      slug: brand.slug,
+      managed_by_user_id: brand.managedByUserId,
+      managed_by: managedBy ? {
+        user_id: managedBy.userId,
+        email: managedBy.email,
+        full_name: managedBy.fullName,
+      } : null,
+    } : membership ? {
+      brand_id: membership.brand_id,
+      name: membership.brand_name,
+      slug: membership.brand_slug,
+      managed_by_user_id: null,
+      managed_by: null,
+    } : undefined;
     const tools = ALL_TOOL_IDS.map(toolId => ({
       id: toolId,
       name: TOOL_REGISTRY[toolId].name,
@@ -38,6 +61,7 @@ router.get('/my-access', async (req: Request, res: Response): Promise<void> => {
         enabled,
         tools,
         account_type: accountType,
+        brand: brandPayload,
       });
       return;
     }
@@ -54,15 +78,7 @@ router.get('/my-access', async (req: Request, res: Response): Promise<void> => {
       })),
       tools,
       account_type: accountType,
-      brand: membership ? {
-        brand_id: membership.brand_id,
-        name: membership.brand_name,
-        slug: membership.brand_slug,
-      } : brand ? {
-        brand_id: brand.brandId,
-        name: brand.name,
-        slug: brand.slug,
-      } : undefined,
+      brand: brandPayload,
     });
   } catch (err) {
     sendServerError(res, 'Tool access lookup failed', err);

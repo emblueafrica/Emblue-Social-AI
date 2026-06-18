@@ -15,6 +15,7 @@ import {
   getSignupRequests,
   rejectSignupRequest,
   updateBrandAccess,
+  type AdminUser,
   type AdminBrand,
   type SignupRequest,
 } from "@/lib/api";
@@ -30,6 +31,7 @@ export default function AdminPage() {
   const queryClient = useQueryClient();
   const [selectedPlans, setSelectedPlans] = useState<Record<number, PlanId>>({});
   const [selectedAccountTypes, setSelectedAccountTypes] = useState<Record<number, AccountType>>({});
+  const [selectedManagedAdmins, setSelectedManagedAdmins] = useState<Record<number, string>>({});
 
   useEffect(() => {
     if (authContext && !isPlatformAdmin(authContext)) router.replace("/dashboard");
@@ -49,11 +51,14 @@ export default function AdminPage() {
   };
 
   const approveMutation = useMutation({
-    mutationFn: (request: SignupRequest) =>
-      approveSignupRequest(request.request_id, {
-        account_type: selectedAccountTypes[request.request_id] === "b2c_managed" ? "b2c_managed" : "b2b_licensed",
+    mutationFn: (request: SignupRequest) => {
+      const accountType = selectedAccountTypes[request.request_id] === "b2c_managed" ? "b2c_managed" : "b2b_licensed";
+      return approveSignupRequest(request.request_id, {
+        account_type: accountType,
         plan_id: selectedPlans[request.request_id] ?? "starter",
-      }),
+        managed_by_user_id: accountType === "b2c_managed" ? selectedManagedAdmins[request.request_id] ?? platformAdmins[0]?.user_id ?? null : null,
+      });
+    },
     onSuccess: invalidateAdmin,
   });
 
@@ -63,11 +68,14 @@ export default function AdminPage() {
   });
 
   const accessMutation = useMutation({
-    mutationFn: (brand: AdminBrand) =>
-      updateBrandAccess(brand.brand_id, {
-        account_type: selectedAccountTypes[brand.brand_id] ?? brand.account_type,
+    mutationFn: (brand: AdminBrand) => {
+      const accountType = selectedAccountTypes[brand.brand_id] ?? brand.account_type;
+      return updateBrandAccess(brand.brand_id, {
+        account_type: accountType,
         plan_id: selectedPlans[brand.brand_id] ?? (normalizePlan(brand.plan) ?? "starter"),
-      }),
+        managed_by_user_id: accountType === "b2c_managed" ? selectedManagedAdmins[brand.brand_id] ?? brand.managed_by_user_id ?? platformAdmins[0]?.user_id ?? null : null,
+      });
+    },
     onSuccess: invalidateAdmin,
   });
 
@@ -76,6 +84,7 @@ export default function AdminPage() {
   const requests = requestsQuery.data?.requests ?? [];
   const users = usersQuery.data?.users ?? [];
   const auditLogs = auditQuery.data?.audit_logs ?? [];
+  const platformAdmins = users.filter((user) => user.status === "active" && user.platform_roles.includes("platform_admin"));
 
   const status = useMemo(() => {
     if (approveMutation.isPending || rejectMutation.isPending || accessMutation.isPending) return "Saving changes...";
@@ -108,6 +117,7 @@ export default function AdminPage() {
                     <th className="py-3 pr-4">Company</th>
                     <th className="py-3 pr-4">Contact</th>
                     <th className="py-3 pr-4">Account</th>
+                    <th className="py-3 pr-4">Managed by</th>
                     <th className="py-3 pr-4">Plan</th>
                     <th className="py-3 pr-4">Actions</th>
                   </tr>
@@ -121,6 +131,14 @@ export default function AdminPage() {
                         <AccountTypeSelect
                           value={selectedAccountTypes[request.request_id] ?? request.requested_account_type}
                           onChange={(value) => setSelectedAccountTypes((current) => ({ ...current, [request.request_id]: value }))}
+                        />
+                      </td>
+                      <td className="py-3 pr-4">
+                        <ManagedAdminSelect
+                          admins={platformAdmins}
+                          disabled={(selectedAccountTypes[request.request_id] ?? request.requested_account_type) !== "b2c_managed"}
+                          value={selectedManagedAdmins[request.request_id] ?? platformAdmins[0]?.user_id ?? ""}
+                          onChange={(value) => setSelectedManagedAdmins((current) => ({ ...current, [request.request_id]: value }))}
                         />
                       </td>
                       <td className="py-3 pr-4">
@@ -138,7 +156,7 @@ export default function AdminPage() {
                       </td>
                     </tr>
                   ))}
-                  {!requests.length && <EmptyRow colSpan={5} label="No pending signup requests." />}
+                  {!requests.length && <EmptyRow colSpan={6} label="No pending signup requests." />}
                 </tbody>
               </table>
             </div>
@@ -157,7 +175,7 @@ export default function AdminPage() {
                       {brand.account_type.replace(/_/g, " ")}
                     </span>
                   </div>
-                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <AccountTypeSelect
                       value={selectedAccountTypes[brand.brand_id] ?? brand.account_type}
                       onChange={(value) => setSelectedAccountTypes((current) => ({ ...current, [brand.brand_id]: value }))}
@@ -167,10 +185,24 @@ export default function AdminPage() {
                       value={selectedPlans[brand.brand_id] ?? normalizePlan(brand.plan) ?? "starter"}
                       onChange={(value) => setSelectedPlans((current) => ({ ...current, [brand.brand_id]: value }))}
                     />
+                    <ManagedAdminSelect
+                      admins={platformAdmins}
+                      disabled={(selectedAccountTypes[brand.brand_id] ?? brand.account_type) !== "b2c_managed"}
+                      value={selectedManagedAdmins[brand.brand_id] ?? brand.managed_by_user_id ?? platformAdmins[0]?.user_id ?? ""}
+                      onChange={(value) => setSelectedManagedAdmins((current) => ({ ...current, [brand.brand_id]: value }))}
+                    />
                   </div>
                   <p className="mt-3 text-xs text-muted-foreground">
                     Enabled tools: {brand.enabled_tools.length ? brand.enabled_tools.join(", ") : "none"}
                   </p>
+                  {brand.connection_status && (
+                    <ConnectionStatus status={brand.connection_status} />
+                  )}
+                  {brand.account_type === "b2c_managed" && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Managed by: {brand.managed_by?.full_name || brand.managed_by?.email || "Unassigned"}
+                    </p>
+                  )}
                   <button
                     onClick={() => accessMutation.mutate(brand)}
                     className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
@@ -286,6 +318,73 @@ function AccountTypeSelect({
       <option value="b2c_managed">B2C managed</option>
       <option value="internal">Internal</option>
     </select>
+  );
+}
+
+function ManagedAdminSelect({
+  admins,
+  disabled,
+  value,
+  onChange,
+}: {
+  admins: AdminUser[];
+  disabled: boolean;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select
+      value={value}
+      disabled={disabled || admins.length === 0}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-55"
+    >
+      {admins.length ? (
+        admins.map((admin) => (
+          <option key={admin.user_id} value={admin.user_id}>
+            {admin.full_name || admin.email}
+          </option>
+        ))
+      ) : (
+        <option value="">No platform admins</option>
+      )}
+    </select>
+  );
+}
+
+function ConnectionStatus({ status }: { status: NonNullable<AdminBrand["connection_status"]> }) {
+  const rows = [
+    {
+      label: "Meta",
+      connected: status.meta.connected,
+      handle: status.meta.account_handle,
+      diagnostics: status.meta.diagnostics,
+    },
+    {
+      label: "X",
+      connected: status.x.connected,
+      handle: status.x.account_handle,
+      diagnostics: status.x.diagnostics,
+    },
+  ];
+
+  return (
+    <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+      {rows.map((row) => (
+        <div key={row.label} className="rounded-md border bg-background p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold">{row.label}</span>
+            <span className={row.connected ? "text-emerald-600" : "text-amber-600"}>
+              {row.connected ? "Connected" : "Needs setup"}
+            </span>
+          </div>
+          <p className="mt-1 truncate text-muted-foreground">{row.handle || "No account handle"}</p>
+          {row.diagnostics.length > 0 && (
+            <p className="mt-2 leading-5 text-muted-foreground">{row.diagnostics[0]}</p>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 

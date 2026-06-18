@@ -38,12 +38,20 @@ function alreadySent(brandId: number, platform: string, authorId: string, campai
 
 // ── VARIABLE SUBSTITUTION ─────────────────────────────────────────────────────
 export function fillVariables(text: string, vars: Record<string, string> = {}): string {
+  const handle = vars['handle'] ?? '';
   return text
-    .replace(/\{\{handle\}\}/g,  vars['handle']  ?? '')
-    .replace(/\{\{link\}\}/g,    vars['link']    ?? '')
-    .replace(/\{\{brand\}\}/g,   vars['brand']   ?? '')
-    .replace(/\{\{keyword\}\}/g, vars['keyword'] ?? '')
-    .replace(/\{\{action\}\}/g,  vars['action']  ?? '');
+    .replace(/@\{\{\s*handle\s*\}\}/g, handle.startsWith('@') ? handle : `@${handle}`)
+    .replace(/\{\{\s*handle\s*\}\}/g,  handle)
+    .replace(/\{\{\s*link\s*\}\}/g,    vars['link']    ?? '')
+    .replace(/\{\{\s*brand\s*\}\}/g,   vars['brand']   ?? '')
+    .replace(/\{\{\s*keyword\s*\}\}/g, vars['keyword'] ?? '')
+    .replace(/\{\{\s*action\s*\}\}/g,  vars['action']  ?? '');
+}
+
+function formatMentionHandle(handle: string | null | undefined): string {
+  const cleaned = (handle ?? '').trim();
+  if (!cleaned) return '';
+  return cleaned.startsWith('@') ? cleaned : `@${cleaned}`;
 }
 
 // ── DB HELPERS ────────────────────────────────────────────────────────────────
@@ -221,7 +229,7 @@ async function sendTikTokCommentReply(
 async function sendXReply(replyText: string, tweetId: string | null | undefined, token: string | null | undefined): Promise<PlatformSendResult> {
   if (!token) return { manual_copy: true, text: replyText };
   try {
-    const r = await fetch('https://api.twitter.com/2/tweets', {
+    const r = await fetch('https://api.x.com/2/tweets', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: replyText, ...(tweetId && { reply: { in_reply_to_tweet_id: tweetId } }) })
@@ -236,9 +244,10 @@ async function sendXReply(replyText: string, tweetId: string | null | undefined,
 async function generateReply(
   event: EngageEvent, config: CampaignConfig & { brand_id: number }, trackedLink: string | null, action: string
 ): Promise<string> {
+  const mentionHandle = formatMentionHandle(event.author_handle);
   if (config.reply_template) {
     return fillVariables(config.reply_template, {
-      handle:  `@${event.author_handle}`,
+      handle:  mentionHandle,
       link:    trackedLink ?? '',
       brand:   config.brand_name ?? '',
       keyword: event.matched_keyword ?? '',
@@ -260,13 +269,13 @@ async function generateReply(
 
     const replies = result.replies ?? result.suggestions ?? [];
     const best    = replies.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
-    let text = best?.text ?? best?.reply_text ?? `Hey @${event.author_handle}! Thanks for engaging 🙌`;
+    let text = best?.text ?? best?.reply_text ?? `Hey ${mentionHandle}! Thanks for engaging 🙌`;
 
     if (trackedLink && !text.includes(trackedLink)) text = text.trimEnd() + `\n${trackedLink}`;
-    if (!text.toLowerCase().includes(event.author_handle.toLowerCase())) text = `Hey @${event.author_handle}! ` + text;
+    if (mentionHandle && !text.toLowerCase().includes(mentionHandle.toLowerCase())) text = `Hey ${mentionHandle}! ` + text;
     return text;
   } catch {
-    return config.fallback_template ?? `Hey @${event.author_handle}! Thank you ${action === 'liked' ? 'for the like' : 'for your comment'} 🙌 ${trackedLink ?? ''}`;
+    return config.fallback_template ?? `Hey ${mentionHandle}! Thank you ${action === 'liked' ? 'for the like' : 'for your comment'} 🙌 ${trackedLink ?? ''}`;
   }
 }
 
@@ -419,14 +428,101 @@ export async function fetchTikTokPostEngagers(videoId: string, token: string | n
   return engagers;
 }
 
+export async function fetchXPostEngagers(tweetId: string, token: string | null | undefined): Promise<Engager[]> {
+  if (!token) return [];
+
+  const params = new URLSearchParams({
+    query: `conversation_id:${tweetId}`,
+    'tweet.fields': 'author_id,created_at,conversation_id',
+    expansions: 'author_id',
+    'user.fields': 'username,name',
+    max_results: '100',
+  });
+
+  const r = await fetch(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const d = await r.json() as {
+    data?: { id: string; text: string; author_id: string; created_at?: string }[];
+    includes?: { users?: { id: string; username?: string; name?: string }[] };
+    errors?: { message?: string; detail?: string }[];
+    title?: string;
+    detail?: string;
+  };
+  if (!r.ok || d.errors) {
+    const message = d.errors?.[0]?.message ?? d.errors?.[0]?.detail ?? d.detail ?? d.title ?? `X search ${r.status}`;
+    if (r.status === 401) {
+      throw new Error(`X authorization failed. Reconnect X and confirm the app has tweet.read, tweet.write, users.read and offline.access scopes. ${message}`);
+    }
+    if (r.status === 403) {
+      throw new Error(`X recent search is not available for this token or API plan. Enable the required X API access for post URL campaigns, or use manual campaign input. ${message}`);
+    }
+    if (r.status === 429) {
+      throw new Error(`X recent search rate limit reached. Retry after the X API window resets. ${message}`);
+    }
+    throw new Error(message);
+  }
+
+  const users = new Map((d.includes?.users ?? []).map(user => [user.id, user]));
+  return (d.data ?? [])
+    .filter(tweet => tweet.id !== tweetId)
+    .map(tweet => {
+      const user = users.get(tweet.author_id);
+      return {
+        platform: 'x' as Platform,
+        action: 'commented' as const,
+        author_id: tweet.author_id,
+        author_handle: user?.username ?? user?.name ?? tweet.author_id,
+        text: tweet.text ?? '',
+        timestamp: tweet.created_at,
+        raw_comment_id: tweet.id,
+        raw_tweet_id: tweet.id,
+      };
+    });
+}
+
 export function extractPostId(platform: Platform, url: string): string | null {
   try {
-    if (platform === 'instagram') return url.match(/instagram\.com\/p\/([A-Za-z0-9_-]+)/)?.[1] ?? null;
+    if (platform === 'instagram') return (url.match(/instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/))?.[1] ?? null;
     if (platform === 'facebook')  return (url.match(/\/posts\/(\d+)/) ?? url.match(/fbid=(\d+)/) ?? url.match(/\/videos\/(\d+)/))?.[1] ?? null;
     if (platform === 'tiktok')    return url.match(/\/video\/(\d+)/)?.[1] ?? null;
     if (platform === 'x')         return url.match(/\/status\/(\d+)/)?.[1] ?? null;
     return null;
   } catch { return null; }
+}
+
+export async function resolveInstagramMediaId(shortcodeOrMediaId: string, token: string | null | undefined, igUserId: string | null | undefined): Promise<string> {
+  if (/^\d+$/.test(shortcodeOrMediaId)) return shortcodeOrMediaId;
+  if (!token) throw new Error('Meta token is missing; reconnect Meta before running Instagram post URL campaigns');
+  if (!igUserId) throw new Error('Instagram Business/Creator account ID is missing; reconnect Meta after linking Instagram to a Facebook Page');
+
+  let url: string | null = `https://graph.facebook.com/v19.0/${igUserId}/media?fields=id,permalink,timestamp&limit=100&access_token=${token}`;
+  let scanned = 0;
+  while (url && scanned < 500) {
+    const response = await fetch(url);
+    const body = await response.json() as {
+      data?: { id: string; permalink?: string }[];
+      paging?: { next?: string };
+      error?: { message?: string };
+    };
+    if (!response.ok || body.error) {
+      throw new Error(body.error?.message ?? `Instagram media lookup failed (${response.status})`);
+    }
+    for (const media of body.data ?? []) {
+      scanned += 1;
+      const permalink = media.permalink ?? '';
+      if (
+        permalink.includes(`/p/${shortcodeOrMediaId}`) ||
+        permalink.includes(`/reel/${shortcodeOrMediaId}`) ||
+        permalink.includes(`/tv/${shortcodeOrMediaId}`)
+      ) {
+        return media.id;
+      }
+    }
+    url = body.paging?.next ?? null;
+  }
+
+  throw new Error('Could not resolve Instagram post URL to a media ID. Confirm the post belongs to the connected Instagram professional account.');
 }
 
 export function applyPlatformAllocation(engagersByPlatform: Record<string, Engager[]>, allocation: PlatformAllocation): Engager[] {
@@ -444,8 +540,8 @@ export async function runPostUrlCampaign(
   brandId: number, config: CampaignConfig, postUrls: PostUrlItem[], credentials: Credentials
 ): Promise<PostCampaignResults> {
   const campaignId  = String(config.id ?? config.campaign_id ?? 'post-campaign');
-  const allocation  = config.platform_allocation ?? { instagram: 34, facebook: 33, tiktok: 33 };
-  const engagersByPlatform: Record<string, Engager[]> = { instagram: [], facebook: [], tiktok: [] };
+  const allocation  = config.platform_allocation ?? { instagram: 25, facebook: 25, tiktok: 25, x: 25 };
+  const engagersByPlatform: Record<string, Engager[]> = { instagram: [], facebook: [], tiktok: [], x: [] };
   const progress = { total_fetched: 0, posts_processed: 0, errors: [] as string[] };
 
   for (const postUrl of postUrls) {
@@ -455,9 +551,13 @@ export async function runPostUrlCampaign(
 
     try {
       let engagers: Engager[] = [];
-      if      (postUrl.platform === 'instagram') engagers = await fetchInstagramPostEngagers(postId, credentials.META_PAGE_ACCESS_TOKEN, postUrl.include_commenters, postUrl.include_likers);
+      if      (postUrl.platform === 'instagram') {
+        const mediaId = await resolveInstagramMediaId(postId, credentials.META_PAGE_ACCESS_TOKEN, credentials.META_IG_USER_ID);
+        engagers = await fetchInstagramPostEngagers(mediaId, credentials.META_PAGE_ACCESS_TOKEN, postUrl.include_commenters, postUrl.include_likers);
+      }
       else if (postUrl.platform === 'facebook')  engagers = await fetchFacebookPostEngagers(postId, credentials.META_PAGE_ACCESS_TOKEN, postUrl.include_commenters, postUrl.include_likers);
       else if (postUrl.platform === 'tiktok')    { engagers = await fetchTikTokPostEngagers(postId, credentials.TIKTOK_ACCESS_TOKEN); engagers.forEach(e => { e.raw_video_id = postId; }); }
+      else if (postUrl.platform === 'x')         engagers = await fetchXPostEngagers(postId, credentials.X_OAUTH_TOKEN);
       await Promise.all(engagers.map(engager => persistCampaignEngager(brandId, campaignId, engager)));
       engagersByPlatform[postUrl.platform]?.push(...engagers);
       progress.total_fetched += engagers.length;
@@ -477,7 +577,7 @@ export async function runPostUrlCampaign(
   const results = { sent: 0, queued: 0, skipped: 0, manual: 0, total_errors: 0 };
   for (const engager of allocated) {
     try {
-      const r = await engageEngager(brandId, { platform: engager.platform, author_handle: engager.author_handle, author_id: engager.author_id, comment_id: engager.raw_comment_id, post_id: engager.raw_video_id, text: engager.text, action: engager.action }, config, credentials);
+      const r = await engageEngager(brandId, { platform: engager.platform, author_handle: engager.author_handle, author_id: engager.author_id, comment_id: engager.raw_comment_id, post_id: engager.raw_video_id, tweet_id: engager.raw_tweet_id ?? engager.raw_comment_id, text: engager.text, action: engager.action }, config, credentials);
       if      (r.status === 'sent')              results.sent++;
       else if (r.status === 'queued_for_approval') results.queued++;
       else if (r.status === 'manual_copy')        results.manual++;

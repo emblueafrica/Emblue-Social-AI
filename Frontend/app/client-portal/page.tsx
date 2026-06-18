@@ -37,11 +37,12 @@ export default function ClientPortalPage() {
   const summary = data?.summary;
   const trendData = buildTrendData(data?.campaign_metrics ?? []);
   const platformBreakdown = buildPlatformBreakdown(data?.campaign_metrics ?? []);
+  const managerName = authContext?.active_brand?.managed_by?.full_name || authContext?.active_brand?.managed_by?.email || "the emblue managed-service team";
 
   return (
     <PortalShell
       title="Overview"
-      subtitle={data?.brand.campaign_objective ?? "A read-only view of campaign progress, responses, engagement and KPI movement."}
+      subtitle={data?.brand.campaign_objective ?? `Your account is managed by ${managerName}. This portal is view-only for progress, reports and KPI movement.`}
     >
       <div className="space-y-6">
         {summaryQuery.isError && (
@@ -49,6 +50,18 @@ export default function ClientPortalPage() {
             {summaryQuery.error instanceof Error ? summaryQuery.error.message : "Unable to load client dashboard."}
           </div>
         )}
+
+        <PortalCard className="flex flex-col gap-2 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-bold text-[var(--portal-text)]">Managed-service account</p>
+            <p className="mt-1 text-sm text-[var(--portal-text-muted)]">
+              Your account is managed by {managerName}. Campaign setup, posting and account connections are handled by the platform team.
+            </p>
+          </div>
+          <span className="w-fit rounded-full bg-[var(--portal-blue-soft)] px-3 py-1 text-xs font-bold text-[var(--portal-blue)]">
+            View only
+          </span>
+        </PortalCard>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <PortalStatCard label="Messages tracked" value={formatNumber(summary?.total_messages)} tone="blue" detail="Captured in the last 30 days" />

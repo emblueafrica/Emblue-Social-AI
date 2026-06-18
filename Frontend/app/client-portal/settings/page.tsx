@@ -14,6 +14,11 @@ export default function PortalSettingsPage() {
     enabled: Boolean(activeBrandId),
     retry: false,
   });
+  const manager =
+    accessQuery.data?.brand?.managed_by ??
+    authContext?.active_brand?.managed_by ??
+    null;
+  const managerName = manager?.full_name || manager?.email || "emblue managed-service team";
 
   return (
     <PortalShell title="Settings" subtitle="Read-only account details for your managed-service workspace.">
@@ -24,13 +29,14 @@ export default function PortalSettingsPage() {
             <Info label="Account type" value={authContext?.active_brand?.account_type?.replace(/_/g, " ") ?? "Managed client"} />
             <Info label="Role" value={authContext?.active_brand?.role?.replace(/_/g, " ") ?? "Client viewer"} />
             <Info label="Brand ID" value={String(authContext?.active_brand?.brand_id ?? activeBrandId ?? "N/A")} />
+            <Info label="Managed by" value={managerName} />
           </dl>
         </PortalSection>
 
         <PortalCard className="p-5">
           <h2 className="text-base font-bold text-[var(--portal-text)]">Access model</h2>
           <p className="mt-2 text-sm leading-6 text-[var(--portal-text-muted)]">
-            B2C clients use this portal to review campaign progress. Tool access is handled by the emblue managed-service team.
+            B2C clients use this portal to review campaign progress. Posting, campaign edits, account connections and tool access are handled by {managerName}.
           </p>
           <div className="mt-5 rounded-[var(--portal-radius-input)] bg-[var(--portal-blue-soft)] p-4">
             <p className="text-xs font-semibold text-[var(--portal-text-muted)]">Current plan</p>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info, Check } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
@@ -26,80 +26,6 @@ type QueueItem = {
   tags: { label: string; cls: string }[];
   category: string;
 };
-
-const ITEMS: QueueItem[] = [
-  {
-    id: 1,
-    handle: "@kemiwears",
-    platform: "instagram",
-    confidence: 58,
-    ago: "4m ago",
-    preview: "Hi Kemi! We're so sorry to hear about your experience....",
-    original: "I've been trying to get in touch with your team for 3 days and no one is responding. This is really frustrating.",
-    reply: "Hi Kemi! We're so sorry to hear about your experience. Our team should have responded sooner — that's not the service we pride ourselves on. Could you DM us your account details? We'd love to resolve this personally.",
-    tags: [
-      { label: "Keyword Surge", cls: "bg-pink-100 text-pink-700" },
-      { label: "Complaint", cls: "bg-indigo-100 text-indigo-700" },
-    ],
-    category: "COMPLAINT",
-  },
-  {
-    id: 2, handle: "@tunde_Lagos", platform: "x", confidence: 58, ago: "4m ago",
-    preview: "tunde_Lagos We're so sorry to hear about your....",
-    original: "Hey team, any update on my order? It's been 5 days.",
-    reply: "Hi tunde_Lagos! We're so sorry to hear about your wait. Let us look into your order right now and get back to you shortly.",
-    tags: [{ label: "Order Status", cls: "bg-indigo-100 text-indigo-700" }],
-    category: "COMPLAINT",
-  },
-  {
-    id: 3, handle: "@oluwa.fin", platform: "tiktok", confidence: 58, ago: "4m ago",
-    preview: "Hi oluwa We're so sorry to hear about your ....",
-    original: "Why does the app keep crashing on iOS?",
-    reply: "Hi oluwa! We're so sorry to hear about your experience. Our team is shipping a fix this week — DM us your device info and we'll keep you posted.",
-    tags: [{ label: "Bug Report", cls: "bg-indigo-100 text-indigo-700" }],
-    category: "BUG",
-  },
-  {
-    id: 4, handle: "@adunni.so", platform: "facebook", confidence: 58, ago: "4m ago",
-    preview: "Hi adunni! We're so sorry to hear about your ....",
-    original: "My discount code isn't working at checkout.",
-    reply: "Hi adunni! We're so sorry to hear about your experience. We've reset your code — try again and let us know if it still doesn't apply.",
-    tags: [{ label: "Discount", cls: "bg-amber-100 text-amber-700" }],
-    category: "SUPPORT",
-  },
-  {
-    id: 5, handle: "@chinwe.code", platform: "x", confidence: 58, ago: "4m ago",
-    preview: "Hi chinwe! We're so sorry to hear about your ....",
-    original: "Shipping took way longer than promised.",
-    reply: "Hi chinwe! We're so sorry to hear about your delay. We're crediting your account — check your inbox in the next hour.",
-    tags: [{ label: "Shipping", cls: "bg-amber-100 text-amber-700" }],
-    category: "COMPLAINT",
-  },
-  {
-    id: 6, handle: "@nene_pr", platform: "instagram", confidence: 58, ago: "4m ago",
-    preview: "Hi nene! We're so sorry to hear about your experience....",
-    original: "PR contact please — would love to collab.",
-    reply: "Hi nene! We're so sorry to hear about your experience reaching us. Our PR team will be in touch within 24 hours.",
-    tags: [{ label: "PR", cls: "bg-emerald-100 text-emerald-700" }],
-    category: "OUTREACH",
-  },
-  {
-    id: 7, handle: "@luxe.ng", platform: "x", confidence: 58, ago: "4m ago",
-    preview: "Hi luxe! We're so sorry to hear about your experience....",
-    original: "Item arrived damaged.",
-    reply: "Hi luxe! We're so sorry to hear about your damaged item. We're sending a replacement out today at no charge.",
-    tags: [{ label: "Damaged", cls: "bg-pink-100 text-pink-700" }],
-    category: "COMPLAINT",
-  },
-  {
-    id: 8, handle: "@bimbowears", platform: "instagram", confidence: 58, ago: "4m ago",
-    preview: "Hi bimbo! We're so sorry to hear about your ....",
-    original: "Love the brand but checkout is slow.",
-    reply: "Hi bimbo! We're so sorry to hear about your experience. One-click checkout ships next week — thanks for sticking with us.",
-    tags: [{ label: "Feedback", cls: "bg-indigo-100 text-indigo-700" }],
-    category: "FEEDBACK",
-  },
-];
 
 const SORTS = ["Confidence", "Time in queue", "Platform"];
 
@@ -149,8 +75,7 @@ export default function ApprovalQueue() {
   const queryClient = useQueryClient();
   const { activeBrandId } = useAuth();
   const [sort, setSort] = useState("Confidence");
-  const [selectedId, setSelectedId] = useState<number>(1);
-  const [fallbackItems, setFallbackItems] = useState(ITEMS);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [toast, setToast] = useState<{ handle: string } | null>(null);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
@@ -162,8 +87,7 @@ export default function ApprovalQueue() {
     staleTime: 10_000,
   });
 
-  const liveItems = queueQuery.data?.queue.map(mapApprovalItem) ?? [];
-  const items = queueQuery.data ? liveItems : fallbackItems;
+  const items = queueQuery.data?.queue.map(mapApprovalItem) ?? [];
 
   const approveMutation = useMutation({
     mutationFn: ({ brandId, index, replyText }: { brandId: number; index: number; replyText?: string }) =>
@@ -175,6 +99,16 @@ export default function ApprovalQueue() {
 
   const selected = items.find((i) => i.id === selectedId);
   const draftText = selected ? drafts[selected.id] ?? "" : "";
+
+  useEffect(() => {
+    if (!items.length) {
+      setSelectedId(null);
+      return;
+    }
+    if (selectedId === null || !items.some((item) => item.id === selectedId)) {
+      setSelectedId(items[0]?.id ?? null);
+    }
+  }, [items, selectedId]);
 
   const approve = async () => {
     if (!selected) return;
@@ -197,9 +131,6 @@ export default function ApprovalQueue() {
       }
     }
 
-    setFallbackItems((current) => current.filter((item) => item.id !== selected.id));
-    setToast({ handle: selected.handle });
-    setTimeout(() => setToast(null), 5000);
   };
 
   const undo = () => setToast(null);

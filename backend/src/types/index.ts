@@ -59,6 +59,7 @@ export interface Brand {
   tone?:               string;
   watchlist_keywords?: string[];
   owner_user_id?:      string;
+  managed_by_user_id?: string | null;
   created_at:          Date;
   updated_at:          Date;
 }
@@ -363,6 +364,7 @@ export interface PlatformAllocation {
 
 export interface Credentials {
   META_PAGE_ACCESS_TOKEN?: string | null;
+  META_IG_USER_ID?:        string | null;
   TIKTOK_ACCESS_TOKEN?:    string | null;
   X_OAUTH_TOKEN?:          string | null;
 }

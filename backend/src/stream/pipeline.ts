@@ -111,7 +111,7 @@ export async function processThroughPipeline(input: PipelineInput): Promise<Pipe
       const credentials: Credentials = {
         META_PAGE_ACCESS_TOKEN: platform === "instagram" || platform === "facebook" ? accessToken?.access_token : null,
         X_OAUTH_TOKEN:          platform === "x" ? accessToken?.access_token : null,
-        TIKTOK_ACCESS_TOKEN:    platform === "tiktok" ? accessToken?.access_token : process.env.TIKTOK_ACCESS_TOKEN,
+        TIKTOK_ACCESS_TOKEN:    platform === "tiktok" ? accessToken?.access_token : null,
       };
 
       const enrichedMsg: ClassifiedMessage = {
