@@ -2,7 +2,8 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../db/prisma';
 import { mapEngageCampaign, toInputJson } from '../db/mappers';
-import { engageEngager, runPostUrlCampaign, extractPostId, fillVariables } from '../stream/engageEngagers';
+import { engageEngager, fetchXPostEngagers, runPostUrlCampaign, extractPostId, fillVariables } from '../stream/engageEngagers';
+import { publishReply } from '../stream/publisher';
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { CampaignConfig, PostUrlItem, Credentials, Platform } from '../types';
@@ -50,6 +51,18 @@ function severityFor(
   if ((score ?? 0) >= 4) return { severity: 'HIGH', tag: 'Priority reply' };
   if (sentiment === 'negative') return { severity: 'HIGH', tag: 'Negative sentiment' };
   return { severity: 'MEDIUM', tag: 'Needs review' };
+}
+
+function hasScope(scope: string | null | undefined, required: string): boolean {
+  return String(scope ?? '')
+    .split(/[,\s]+/)
+    .map(item => item.trim())
+    .includes(required);
+}
+
+function extractXStatusId(url: unknown): string | null {
+  if (typeof url !== 'string' || !url.trim()) return null;
+  return extractPostId('x', url.trim());
 }
 
 // ── LIST CAMPAIGNS ────────────────────────────────────────────────────────────
@@ -249,6 +262,112 @@ router.post('/engage-now', requireBrandRole('client_owner'), requireBrandAccess,
 });
 
 // ── POST URL CAMPAIGN ─────────────────────────────────────────────────────────
+router.post('/x/preflight', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const body = req.body as { brand_id: number; tweet_url?: string };
+  const brandId = getRequiredBrandId(body.brand_id);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+
+  try {
+    const [account, token] = await Promise.all([
+      getConnectedAccountRecord(brandId, 'x'),
+      getValidToken(brandId, 'x'),
+    ]);
+    const diagnostics: string[] = [];
+    const scopes = account?.scope ?? '';
+    if (!account || !token) diagnostics.push('X is not connected for this brand.');
+    if (account && !account.refreshToken) diagnostics.push('X token is not refreshable. Reconnect X with offline.access.');
+    for (const scope of ['tweet.read', 'tweet.write', 'users.read', 'offline.access']) {
+      if (account && !hasScope(scopes, scope)) diagnostics.push(`Missing X scope: ${scope}`);
+    }
+
+    const tweetId = extractXStatusId(body.tweet_url);
+    let recentSearch: { checked: boolean; ok: boolean; engager_count?: number; error?: string } = { checked: false, ok: false };
+    if (tweetId && token) {
+      try {
+        const engagers = await fetchXPostEngagers(tweetId, token);
+        recentSearch = { checked: true, ok: true, engager_count: engagers.length };
+      } catch (err) {
+        recentSearch = { checked: true, ok: false, error: (err as Error).message };
+        diagnostics.push((err as Error).message);
+      }
+    }
+
+    res.json({
+      ok: diagnostics.length === 0,
+      connected: Boolean(account && token),
+      account_handle: account?.accountHandle ?? null,
+      refreshable: Boolean(account?.refreshToken),
+      scopes: {
+        tweet_read: hasScope(scopes, 'tweet.read'),
+        tweet_write: hasScope(scopes, 'tweet.write'),
+        users_read: hasScope(scopes, 'users.read'),
+        offline_access: hasScope(scopes, 'offline.access'),
+      },
+      recent_search: recentSearch,
+      diagnostics,
+    });
+  } catch (err) {
+    sendServerError(res, 'X campaign preflight failed', err);
+  }
+});
+
+router.post('/x/post', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const body = req.body as { brand_id: number; text?: string; reply_to_url?: string };
+  const brandId = getRequiredBrandId(body.brand_id);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  if (!text) { sendValidationError(res, 'text is required'); return; }
+  if (text.length > 280) { sendValidationError(res, 'text must be 280 characters or fewer for X'); return; }
+
+  const replyTweetId = extractXStatusId(body.reply_to_url);
+  if (body.reply_to_url && !replyTweetId) {
+    sendValidationError(res, 'reply_to_url must be a valid X/Twitter status URL');
+    return;
+  }
+
+  try {
+    const account = await getConnectedAccountRecord(brandId, 'x');
+    if (!account) {
+      res.status(409).json({
+        error: 'X is not connected',
+        message: 'Connect X for this brand before publishing X campaign posts.',
+      });
+      return;
+    }
+    if (!hasScope(account.scope, 'tweet.write')) {
+      res.status(409).json({
+        error: 'Missing X permission',
+        message: 'The connected X token is missing tweet.write. Reconnect X with write access enabled.',
+      });
+      return;
+    }
+
+    const result = await publishReply({
+      brand_id: brandId,
+      platform: 'x',
+      reply_text: text,
+      tweet_id: replyTweetId ?? undefined,
+    });
+    if (!result.success) {
+      res.status(502).json({
+        error: 'X publish failed',
+        message: result.error ?? 'X rejected the publish request.',
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      platform: 'x',
+      message_id: result.message_id,
+      reply_to_tweet_id: replyTweetId,
+    });
+  } catch (err) {
+    sendServerError(res, 'X publish failed', err);
+  }
+});
+
 router.post('/post-urls/run', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
   const body = req.body as {
     brand_id:           number;

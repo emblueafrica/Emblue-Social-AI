@@ -11,6 +11,8 @@ import {
   ApiError,
   deleteCampaign,
   getCampaigns,
+  preflightXCampaign,
+  publishXCampaignPost,
   runPostUrlCampaign,
   saveCampaign,
   toggleCampaign,
@@ -117,6 +119,9 @@ export default function EngageTheEngager() {
   const [allocation, setAllocation] = useState({ instagram: 40, facebook: 25, tiktok: 20, x: 15 });
   const [postTemplate, setPostTemplate] = useState("");
   const [postCtaLink, setPostCtaLink] = useState("");
+  const [xTweetUrl, setXTweetUrl] = useState("");
+  const [xPostText, setXPostText] = useState("");
+  const [xPreflightResult, setXPreflightResult] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
@@ -152,6 +157,8 @@ export default function EngageTheEngager() {
   });
 
   const runPostUrlMutation = useMutation({ mutationFn: runPostUrlCampaign });
+  const xPreflightMutation = useMutation({ mutationFn: preflightXCampaign });
+  const xPublishMutation = useMutation({ mutationFn: publishXCampaignPost });
 
   useEffect(() => {
     if (!toast) return;
@@ -269,6 +276,59 @@ export default function EngageTheEngager() {
     }
   };
 
+  const handleXPreflight = async () => {
+    if (!activeBrandId) {
+      setApiNotice("Connect this account to a brand workspace before testing X.");
+      return;
+    }
+    try {
+      const result = await xPreflightMutation.mutateAsync({
+        brand_id: activeBrandId,
+        tweet_url: xTweetUrl.trim() || undefined,
+      });
+      const scopeSummary = Object.entries(result.scopes)
+        .map(([key, ok]) => `${key.replace(/_/g, ".")}: ${ok ? "yes" : "no"}`)
+        .join(" | ");
+      const searchSummary = result.recent_search.checked
+        ? result.recent_search.ok
+          ? `Recent search OK (${result.recent_search.engager_count ?? 0} replies found).`
+          : `Recent search failed: ${result.recent_search.error ?? "unknown error"}`
+        : "Recent search not checked.";
+      setXPreflightResult(`${result.connected ? `Connected as ${result.account_handle || "X account"}.` : "X is not connected."} ${scopeSummary}. ${searchSummary}${result.diagnostics.length ? ` Issues: ${result.diagnostics.join(" ")}` : ""}`);
+      setApiNotice(null);
+    } catch (error) {
+      setXPreflightResult(null);
+      setApiNotice(apiErrorMessage(error));
+    }
+  };
+
+  const handleXPublish = async () => {
+    if (!activeBrandId) {
+      setApiNotice("Connect this account to a brand workspace before publishing to X.");
+      return;
+    }
+    const text = xPostText.trim();
+    if (!text) {
+      setApiNotice("Write the X post text before publishing.");
+      return;
+    }
+    if (text.length > 280) {
+      setApiNotice("X post text must be 280 characters or fewer.");
+      return;
+    }
+    try {
+      const result = await xPublishMutation.mutateAsync({
+        brand_id: activeBrandId,
+        text,
+        reply_to_url: xTweetUrl.trim() || undefined,
+      });
+      setApiNotice(null);
+      setToast(result.reply_to_tweet_id ? "X reply published." : "X post published.");
+    } catch (error) {
+      setApiNotice(apiErrorMessage(error));
+    }
+  };
+
   return (
     <div className="min-h-screen flex bg-muted/30">
       <Sidebar activeLabel="Engage the Engager" />
@@ -357,6 +417,61 @@ export default function EngageTheEngager() {
             ) : (
               <div className="py-12 text-sm text-muted-foreground">No backend campaigns found for this brand yet.</div>
             )}
+          </Surface>
+
+          <Surface>
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <PlatformLogo platform="x" size={20} />
+                  <h2 className="font-bold">X campaign test</h2>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Check the connected X account, test recent-search access with a post URL, then publish a standalone X post or reply.
+                </p>
+              </div>
+              <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
+                {xPostText.length}/280
+              </span>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_1fr]">
+              <div className="space-y-3">
+                <input
+                  value={xTweetUrl}
+                  onChange={(event) => setXTweetUrl(event.target.value)}
+                  placeholder="Optional: https://x.com/brand/status/123..."
+                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
+                />
+                <button
+                  onClick={() => void handleXPreflight()}
+                  disabled={xPreflightMutation.isPending}
+                  className="rounded-lg border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-60"
+                >
+                  {xPreflightMutation.isPending ? "Checking..." : "Check X readiness"}
+                </button>
+                {xPreflightResult && (
+                  <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">{xPreflightResult}</p>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                <textarea
+                  value={xPostText}
+                  onChange={(event) => setXPostText(event.target.value)}
+                  maxLength={280}
+                  placeholder="Write the X campaign post or reply..."
+                  className="min-h-[110px] w-full rounded-lg border bg-background px-3 py-2 text-sm"
+                />
+                <button
+                  onClick={() => void handleXPublish()}
+                  disabled={xPublishMutation.isPending || !xPostText.trim()}
+                  className="rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
+                >
+                  {xPublishMutation.isPending ? "Publishing..." : xTweetUrl.trim() ? "Publish X reply" : "Publish X post"}
+                </button>
+              </div>
+            </div>
           </Surface>
 
           <Surface>
