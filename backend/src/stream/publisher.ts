@@ -51,9 +51,18 @@ export async function publishReply(payload: PublishPayload): Promise<PublishResu
           headers: { "Authorization": `Bearer ${xToken}`, "Content-Type": "application/json" },
           body: JSON.stringify({ text: reply_text, ...(payload.tweet_id && { reply: { in_reply_to_tweet_id: payload.tweet_id } }) })
         });
-        const d = await r.json() as { data?: { id: string }; errors?: { message: string }[] };
-        if (d.errors) result.error = d.errors[0]?.message ?? "X error";
-        else { result.success = true; result.message_id = d.data?.id; }
+        const d = await r.json() as {
+          data?: { id: string };
+          errors?: { message?: string; detail?: string }[];
+          title?: string;
+          detail?: string;
+        };
+        if (!r.ok || d.errors || !d.data?.id) {
+          result.error = d.errors?.[0]?.message ?? d.errors?.[0]?.detail ?? d.detail ?? d.title ?? `X publish failed (${r.status})`;
+        } else {
+          result.success = true;
+          result.message_id = d.data.id;
+        }
       } catch (err) { result.error = (err as Error).message; }
     }
   } else if (platform === "tiktok") {
