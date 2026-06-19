@@ -10,12 +10,18 @@ import { syncAllPlatforms } from '../auth/platformSync';
 import { runActiveFunnels } from '../stream/funnelRunner';
 import { scanBrandAlerts } from '../alerts/engine';
 import { runRealtimeKeywordMonitoring } from '../listening/searchService';
+import { syncTrackedCampaignEngagements } from '../campaigns/engagementSync';
 import { broadcastToClients } from '../stream/eventQueue';
 import { hasToolAccess } from '../tools/access';
 import { ToolId } from '../tools/registry';
 
 // Track active intervals per brand
 const intervals = new Map<number, NodeJS.Timeout[]>();
+
+function campaignEngagementSyncIntervalMs(): number {
+  const parsed = Number(process.env.CAMPAIGN_ENGAGEMENT_SYNC_INTERVAL_MS ?? process.env.X_CAMPAIGN_SYNC_INTERVAL_MS);
+  return Number.isFinite(parsed) && parsed >= 60_000 ? parsed : 5 * 60 * 1000;
+}
 
 async function canRunTool(brandId: number, toolId: ToolId, jobName: string): Promise<boolean> {
   const enabled = await hasToolAccess(brandId, toolId);
@@ -159,6 +165,28 @@ async function runFunnels(brandId: number): Promise<void> {
   }
 }
 
+async function runCampaignEngagementSync(brandId: number): Promise<void> {
+  try {
+    if (!(await canRunTool(brandId, 'tool_10', 'campaign engagement sync'))) return;
+    const result = await syncTrackedCampaignEngagements(brandId);
+    if (result.checked > 0) {
+      broadcastToClients(brandId, 'post_campaign_progress', {
+        auto_sync: true,
+        checked: result.checked,
+        fetched: result.fetched,
+        captured: result.captured,
+        sent: result.sent,
+        queued: result.queued,
+        manual: result.manual,
+        errors: result.errors.length,
+      });
+    }
+    console.log(`[Scheduler] campaign engagement sync brand ${brandId}: checked ${result.checked}, captured ${result.captured}, sent ${result.sent}, queued ${result.queued}, manual ${result.manual}, errors ${result.errors.length}`);
+  } catch (err) {
+    console.error(`[Scheduler] campaign engagement sync error brand ${brandId}:`, (err as Error).message);
+  }
+}
+
 async function runAlerts(brandId: number): Promise<void> {
   try {
     if (!(await canRunTool(brandId, 'tool_1', 'alerts'))) return;
@@ -174,6 +202,7 @@ export function startAutomation(brandId: number): void {
 
   const timers: NodeJS.Timeout[] = [
     setInterval(() => void runAlerts(brandId),    2 * 60 * 1000), // 2 min
+    setInterval(() => void runCampaignEngagementSync(brandId), campaignEngagementSyncIntervalMs()),
     setInterval(() => void runSync(brandId),     5  * 60 * 1000), // 5 min
     setInterval(() => void runListening(brandId), 15 * 60 * 1000), // 15 min
     setInterval(() => void runCluster(brandId),  15 * 60 * 1000), // 15 min
@@ -190,6 +219,7 @@ export function startAutomation(brandId: number): void {
   // Run sync immediately on start
   void runSync(brandId);
   void runListening(brandId);
+  void runCampaignEngagementSync(brandId);
 }
 
 export function stopAutomation(brandId: number): void {

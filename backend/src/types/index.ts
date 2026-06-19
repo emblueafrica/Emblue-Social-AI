@@ -364,6 +364,7 @@ export interface PlatformAllocation {
 
 export interface Credentials {
   META_PAGE_ACCESS_TOKEN?: string | null;
+  META_PAGE_ID?:           string | null;
   META_IG_USER_ID?:        string | null;
   TIKTOK_ACCESS_TOKEN?:    string | null;
   X_OAUTH_TOKEN?:          string | null;
@@ -404,6 +405,7 @@ export interface PlatformSendResult {
   message_id?:  string;
   tweet_id?:    string;
   comment_id?:  string;
+  partial?:      boolean;
   manual_copy?: boolean;
   text?:        string;
   error?:       string;
