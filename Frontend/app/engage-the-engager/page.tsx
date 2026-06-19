@@ -16,6 +16,7 @@ import {
   publishXCampaignPost,
   runPostUrlCampaign,
   saveCampaign,
+  syncXReplies,
   toggleCampaign,
   type CampaignPayload,
   type CampaignRecord,
@@ -123,6 +124,7 @@ export default function EngageTheEngager() {
   const [xTweetUrl, setXTweetUrl] = useState("");
   const [xPostText, setXPostText] = useState("");
   const [xPreflightResult, setXPreflightResult] = useState<string | null>(null);
+  const [xSyncResult, setXSyncResult] = useState<string | null>(null);
   const [lastPostUrlCampaignId, setLastPostUrlCampaignId] = useState<string | null>(null);
   const [xPublishResult, setXPublishResult] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -170,6 +172,7 @@ export default function EngageTheEngager() {
   const runPostUrlMutation = useMutation({ mutationFn: runPostUrlCampaign });
   const xPreflightMutation = useMutation({ mutationFn: preflightXCampaign });
   const xPublishMutation = useMutation({ mutationFn: publishXCampaignPost });
+  const xSyncMutation = useMutation({ mutationFn: syncXReplies });
 
   useEffect(() => {
     if (!toast) return;
@@ -341,9 +344,37 @@ export default function EngageTheEngager() {
       }
       const publishUrl = result.message_id ? `https://x.com/i/web/status/${result.message_id}` : null;
       setXPublishResult(`Published: ${publishUrl}`);
+      if (publishUrl) setXTweetUrl(publishUrl);
+      setXSyncResult(null);
       setApiNotice(null);
       setToast(result.reply_to_tweet_id ? "X reply published." : "X post published.");
     } catch (error) {
+      setApiNotice(apiErrorMessage(error));
+    }
+  };
+
+  const handleXReplySync = async () => {
+    if (!activeBrandId) {
+      setApiNotice("Connect this account to a brand workspace before syncing X replies.");
+      return;
+    }
+    if (!xTweetUrl.trim()) {
+      setApiNotice("Paste the published X post URL before syncing replies.");
+      return;
+    }
+
+    try {
+      const result = await xSyncMutation.mutateAsync({
+        brand_id: activeBrandId,
+        tweet_url: xTweetUrl.trim(),
+      });
+      setXSyncResult(`${result.message} Fetched: ${result.fetched}. New: ${result.captured}. Duplicates: ${result.duplicates}.`);
+      setApiNotice(null);
+      setToast(result.queued ? `${result.queued} replies are waiting in AI Reply Engine.` : "X replies synced.");
+      await queryClient.invalidateQueries({ queryKey: ["post-url-campaign-status", activeBrandId] });
+      await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+    } catch (error) {
+      setXSyncResult(null);
       setApiNotice(apiErrorMessage(error));
     }
   };
@@ -469,8 +500,18 @@ export default function EngageTheEngager() {
                 >
                   {xPreflightMutation.isPending ? "Checking..." : "Check X readiness"}
                 </button>
+                <button
+                  onClick={() => void handleXReplySync()}
+                  disabled={xSyncMutation.isPending || !xTweetUrl.trim()}
+                  className="ml-2 rounded-lg border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-60"
+                >
+                  {xSyncMutation.isPending ? "Syncing..." : "Sync X replies"}
+                </button>
                 {xPreflightResult && (
                   <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">{xPreflightResult}</p>
+                )}
+                {xSyncResult && (
+                  <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">{xSyncResult}</p>
                 )}
               </div>
 

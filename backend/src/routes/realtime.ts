@@ -88,6 +88,12 @@ function mapApprovalRow(row: PendingApprovalRow, brandId: number): ApprovalQueue
     author: row.authorHandle ?? '',
     original: row.originalText ?? '',
     reply: row.replyText ?? '',
+    meta: {
+      author_id: row.authorId ?? null,
+      comment_id: row.commentId ?? null,
+      post_id: row.postId ?? null,
+      tweet_id: row.tweetId ?? null,
+    },
   };
 }
 
@@ -153,7 +159,14 @@ router.post('/queue/approve', requireBrandAccess, requireToolAccess('tool_3'), a
 
     const item = mapApprovalRow(row, brandId);
     const replyText = requireNonEmptyString(reply_text) ? reply_text.trim() : item.reply;
-    const publish = await publishReply({ brand_id: brandId, platform: item.platform, reply_text: replyText });
+    const publish = await publishReply({
+      brand_id: brandId,
+      platform: item.platform,
+      reply_text: replyText,
+      author_id: item.meta?.author_id ?? undefined,
+      comment_id: item.meta?.comment_id ?? item.meta?.post_id ?? undefined,
+      tweet_id: item.meta?.tweet_id ?? undefined,
+    });
 
     await prisma.approvalQueue.update({ where: { queueId: row.queueId }, data: { status: 'approved' } });
     broadcastToClients(brandId, 'reply_approved', { index, item });

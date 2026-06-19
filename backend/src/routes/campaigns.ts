@@ -6,6 +6,7 @@ import { engageEngager, fetchXPostEngagers, runPostUrlCampaign, extractPostId, f
 import { publishReply } from '../stream/publisher';
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
+import { runAgent4 } from '../agents/agent4_reply_assistant';
 import { CampaignConfig, PostUrlItem, Credentials, Platform } from '../types';
 import { canAccessBrandId, requireBrandAccess, requireBrandRole } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
@@ -63,6 +64,114 @@ function hasScope(scope: string | null | undefined, required: string): boolean {
 function extractXStatusId(url: unknown): string | null {
   if (typeof url !== 'string' || !url.trim()) return null;
   return extractPostId('x', url.trim());
+}
+
+function xStatusUrl(tweetId: string): string {
+  return `https://x.com/i/web/status/${tweetId}`;
+}
+
+async function generateXReplyDraft(brandId: number, text: string, authorHandle?: string | null): Promise<{
+  text: string;
+  tone: string | null;
+  confidence: number;
+  riskFlags: unknown[];
+}> {
+  const result = await runAgent4({
+    brand_id: brandId,
+    message: text,
+    platform: 'x',
+    tone: 'warm and professional',
+    campaign_context: {
+      objective: 'respond to inbound replies on an X campaign post',
+      action_type: 'thread_reply',
+    },
+    ruleset: {
+      tone: 'warm and professional',
+      do_not_say: [],
+      required_words: [],
+    },
+    author_handle: authorHandle ?? undefined,
+    reply_channel: 'thread_reply',
+  });
+  const best = (result.replies ?? result.suggestions ?? [])
+    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
+  const handle = authorHandle
+    ? authorHandle.startsWith('@') ? authorHandle : `@${authorHandle}`
+    : '';
+  return {
+    text: best?.text ?? best?.reply_text ?? `${handle ? `${handle} ` : ''}Thanks for reaching out. We will take a look and follow up.`,
+    tone: best?.tone ?? 'Professional',
+    confidence: Math.round(best?.confidence ?? 80),
+    riskFlags: best?.risk_flags ?? [],
+  };
+}
+
+async function persistCapturedXReply(params: {
+  brandId: number;
+  rootTweetId: string;
+  replyTweetId: string;
+  authorId: string;
+  authorHandle?: string | null;
+  text: string;
+  capturedAt?: string | null;
+}): Promise<{ created: boolean; messageId: bigint | null }> {
+  const existing = await prisma.socialMessage.findUnique({
+    where: {
+      brandId_platform_externalId: {
+        brandId: params.brandId,
+        platform: 'x',
+        externalId: params.replyTweetId,
+      },
+    },
+    select: { messageId: true },
+  });
+  if (existing) return { created: false, messageId: existing.messageId };
+
+  const row = await prisma.socialMessage.create({
+    data: {
+      brandId: params.brandId,
+      platform: 'x',
+      kind: 'reply',
+      externalId: params.replyTweetId,
+      text: params.text,
+      authorHandle: params.authorHandle ?? null,
+      authorIdHash: params.authorId,
+      url: xStatusUrl(params.replyTweetId),
+      sentiment: 'neutral',
+      urgencyScore: 2,
+      raw: {
+        source: 'x_reply_sync',
+        root_tweet_id: params.rootTweetId,
+        reply_tweet_id: params.replyTweetId,
+      },
+      rawMetrics: {},
+      capturedAt: params.capturedAt ? new Date(params.capturedAt) : new Date(),
+    },
+    select: { messageId: true },
+  });
+
+  return { created: true, messageId: row.messageId };
+}
+
+async function trackPublishedXPost(brandId: number, tweetId: string): Promise<void> {
+  try {
+    await prisma.campaignPostUrl.create({
+      data: {
+        brandId,
+        campaignId: null,
+        platform: 'x',
+        postUrl: xStatusUrl(tweetId),
+        postIdExt: tweetId,
+        includeCommenters: true,
+        includeLikers: false,
+        status: 'complete',
+        totalFetched: 0,
+        completedAt: new Date(),
+      },
+    });
+  } catch {
+    // Tracking failure must not make a successful publish look failed.
+  }
 }
 
 // ── LIST CAMPAIGNS ────────────────────────────────────────────────────────────
@@ -363,8 +472,171 @@ router.post('/x/post', requireBrandRole('client_owner'), requireBrandAccess, req
       message_id: result.message_id,
       reply_to_tweet_id: replyTweetId,
     });
+    if (result.message_id && !replyTweetId) {
+      void trackPublishedXPost(brandId, result.message_id);
+    }
   } catch (err) {
     sendServerError(res, 'X publish failed', err);
+  }
+});
+
+router.post('/x/sync-replies', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const body = req.body as { brand_id: number; tweet_url?: string; tweet_id?: string };
+  const brandId = getRequiredBrandId(body.brand_id);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+
+  const tweetId = typeof body.tweet_id === 'string' && /^\d+$/.test(body.tweet_id.trim())
+    ? body.tweet_id.trim()
+    : extractXStatusId(body.tweet_url);
+  if (!tweetId) {
+    sendValidationError(res, 'tweet_url or tweet_id must point to a valid X status');
+    return;
+  }
+
+  try {
+    const [account, token] = await Promise.all([
+      getConnectedAccountRecord(brandId, 'x'),
+      getValidToken(brandId, 'x'),
+    ]);
+    if (!account || !token) {
+      res.status(409).json({
+        error: 'X is not connected',
+        message: 'Connect X for this brand before syncing replies.',
+      });
+      return;
+    }
+    if (!hasScope(account.scope, 'tweet.read') || !hasScope(account.scope, 'users.read')) {
+      res.status(409).json({
+        error: 'Missing X permission',
+        message: 'Reconnect X with tweet.read and users.read before syncing replies.',
+      });
+      return;
+    }
+
+    const ownAccountIds = new Set(
+      [account.accountIdExt, account.platformUserId].filter((value): value is string => Boolean(value))
+    );
+    const fetched = (await fetchXPostEngagers(tweetId, token))
+      .filter(engager => !ownAccountIds.has(engager.author_id));
+
+    const campaignId = `x-sync-${tweetId}`;
+    let captured = 0;
+    let queued = 0;
+    let duplicates = 0;
+
+    for (const engager of fetched) {
+      const replyTweetId = engager.raw_tweet_id ?? engager.raw_comment_id;
+      if (!replyTweetId) {
+        duplicates += 1;
+        continue;
+      }
+
+      const saved = await persistCapturedXReply({
+        brandId,
+        rootTweetId: tweetId,
+        replyTweetId,
+        authorId: engager.author_id,
+        authorHandle: engager.author_handle,
+        text: engager.text,
+        capturedAt: engager.timestamp ?? null,
+      });
+      if (!saved.created) {
+        duplicates += 1;
+        continue;
+      }
+      captured += 1;
+
+      await prisma.campaignPostEngager.create({
+        data: {
+          brandId,
+          campaignId,
+          platform: 'x',
+          action: 'commented',
+          authorId: replyTweetId,
+          authorHandle: engager.author_handle,
+          originalText: engager.text,
+          status: 'queued_for_approval',
+          processedAt: new Date(),
+        },
+      }).catch(() => undefined);
+
+      const draft = await generateXReplyDraft(brandId, engager.text, engager.author_handle);
+      await prisma.autoEngagement.create({
+        data: {
+          brandId,
+          platform: 'x',
+          authorHandle: engager.author_handle,
+          originalText: engager.text,
+          replyText: draft.text,
+          status: 'queued_for_approval',
+          firedAt: new Date(),
+        },
+      }).catch(() => undefined);
+
+      if (saved.messageId) {
+        await prisma.replySuggestion.create({
+          data: {
+            brandId,
+            messageId: saved.messageId,
+            text: draft.text,
+            tone: draft.tone,
+            confidence: draft.confidence,
+            riskFlags: draft.riskFlags as never,
+            status: 'pending',
+          },
+        }).catch(() => undefined);
+      }
+
+      const existingQueueItem = await prisma.approvalQueue.findFirst({
+        where: {
+          brandId,
+          platform: 'x',
+          status: 'pending',
+          tweetId: replyTweetId,
+        },
+        select: { queueId: true },
+      });
+      if (!existingQueueItem) {
+        await prisma.approvalQueue.create({
+          data: {
+            brandId,
+            platform: 'x',
+            authorId: engager.author_id,
+            authorHandle: engager.author_handle,
+            originalText: engager.text,
+            replyText: draft.text,
+            tweetId: replyTweetId,
+            confidence: draft.confidence,
+            status: 'pending',
+          },
+        });
+        queued += 1;
+      }
+    }
+
+    await prisma.campaignPostUrl.updateMany({
+      where: { brandId, platform: 'x', postIdExt: tweetId },
+      data: {
+        status: 'complete',
+        totalFetched: fetched.length,
+        completedAt: new Date(),
+        errorMsg: null,
+      },
+    }).catch(() => undefined);
+
+    res.json({
+      ok: true,
+      tweet_id: tweetId,
+      fetched: fetched.length,
+      captured,
+      queued,
+      duplicates,
+      message: captured
+        ? `${captured} new X replies captured. ${queued} reply drafts are waiting in the AI Reply Engine.`
+        : 'No new X replies were found for this post.',
+    });
+  } catch (err) {
+    sendServerError(res, 'X reply sync failed', err);
   }
 });
 
@@ -512,7 +784,7 @@ router.get('/post-urls/status/:brand_id/:campaign_id', requireBrandAccess, requi
     ]);
     const sent = engagers.filter(item => item.status === 'sent').length;
     const manual = engagers.filter(item => item.status === 'manual_copy').length;
-    const queued = engagers.filter(item => item.status === 'queued_for_approval').length;
+    const queued = engagers.filter(item => item.status === 'queued_for_approval' || item.status === 'queued').length;
     const errors = engagers.filter(item => item.status === 'error').length + urls.filter(item => item.status === 'error').length;
     const fetched = urls.reduce((sum, item) => sum + (item.totalFetched ?? 0), 0);
     res.json({
@@ -640,7 +912,7 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
       stats.total += count;
       if (row.status === 'sent') stats.sent += count;
       if (row.status === 'manual_copy') stats.manual += count;
-      if (row.status === 'queued') stats.queued += count;
+      if (row.status === 'queued' || row.status === 'queued_for_approval') stats.queued += count;
       byPlatform.set(row.platform, stats);
     }
 
@@ -672,7 +944,7 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
       if (!trendKeys.includes(key)) continue;
       if (engagement.status === 'sent') sentByDay.set(key, (sentByDay.get(key) ?? 0) + 1);
       if (engagement.status === 'manual_copy') manualByDay.set(key, (manualByDay.get(key) ?? 0) + 1);
-      if (engagement.status === 'queued') queuedByDay.set(key, (queuedByDay.get(key) ?? 0) + 1);
+      if (engagement.status === 'queued' || engagement.status === 'queued_for_approval') queuedByDay.set(key, (queuedByDay.get(key) ?? 0) + 1);
     }
 
     const latestKpi = kpiSnapshots[0];
