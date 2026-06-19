@@ -49,6 +49,15 @@ function isValidProviderUrl(value: string): boolean {
   }
 }
 
+function normalizeProviderUrl(platformId: PlatformConnectId, value: string): string {
+  if (platformId !== "x") return value;
+  const url = new URL(value);
+  if (url.hostname === "twitter.com" || url.hostname === "www.twitter.com" || url.hostname === "api.twitter.com") {
+    url.hostname = "x.com";
+  }
+  return url.toString();
+}
+
 function writeConnectWindowStatus(connectWindow: Window | null, message: string) {
   if (!connectWindow) return;
   try {
@@ -70,17 +79,18 @@ async function redirectToPlatformConnect(platformId: PlatformConnectId, brandId:
 
   try {
     const response = await getPlatformConnectUrl(platformId, brandId);
-    if (!isValidProviderUrl(response.url)) {
+    const providerUrl = normalizeProviderUrl(platformId, response.url);
+    if (!isValidProviderUrl(providerUrl)) {
       const message = `Unexpected ${platformId} OAuth URL returned by backend.`;
       writeConnectWindowStatus(connectWindow, message);
       throw new Error(message);
     }
     if (connectWindow) {
       connectWindow.opener = null;
-      connectWindow.location.assign(response.url);
+      connectWindow.location.assign(providerUrl);
       return;
     }
-    window.open(response.url, "_blank", "noopener,noreferrer");
+    window.open(providerUrl, "_blank", "noopener,noreferrer");
   } catch (error) {
     writeConnectWindowStatus(connectWindow, getErrorMessage(error));
     throw error;
