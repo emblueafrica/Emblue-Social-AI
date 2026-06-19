@@ -14,6 +14,7 @@ export interface PublishPayload {
   image_url?:    string;
   tracked_link?: string;
   approval_id?:  number;
+  media_ids?:    string[];
 }
 
 export interface PublishResult {
@@ -49,7 +50,11 @@ export async function publishReply(payload: PublishPayload): Promise<PublishResu
         const r = await fetch("https://api.x.com/2/tweets", {
           method: "POST",
           headers: { "Authorization": `Bearer ${xToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ text: reply_text, ...(payload.tweet_id && { reply: { in_reply_to_tweet_id: payload.tweet_id } }) })
+          body: JSON.stringify({
+            text: reply_text,
+            ...(payload.tweet_id && { reply: { in_reply_to_tweet_id: payload.tweet_id } }),
+            ...(payload.media_ids?.length && { media: { media_ids: payload.media_ids } }),
+          })
         });
         const d = await r.json() as {
           data?: { id: string };
@@ -101,4 +106,49 @@ export async function publishReply(payload: PublishPayload): Promise<PublishResu
   }
 
   return result;
+}
+
+export async function uploadXMediaFromUrl(
+  brandId: number,
+  media: { url: string; mime_type: string; media_type: 'image' | 'video' },
+  index = 0,
+): Promise<{ success: boolean; media_id?: string; error?: string }> {
+  const token = await getValidToken(brandId, 'x');
+  if (!token) return { success: false, error: 'No X token' };
+  try {
+    const source = await fetch(media.url);
+    if (!source.ok) return { success: false, error: `Could not download campaign media (${source.status})` };
+    const bytes = await source.arrayBuffer();
+    if (bytes.byteLength > 100 * 1024 * 1024) return { success: false, error: 'X campaign media exceeds the 100MB application limit' };
+
+    const extension = media.mime_type === 'image/jpeg' ? 'jpg'
+      : media.mime_type === 'image/png' ? 'png'
+      : media.mime_type === 'image/webp' ? 'webp'
+      : media.mime_type === 'video/quicktime' ? 'mov' : 'mp4';
+    const form = new FormData();
+    form.append('media', new Blob([bytes], { type: media.mime_type }), `campaign-${index + 1}.${extension}`);
+    form.append('media_category', media.media_type === 'video' ? 'tweet_video' : 'tweet_image');
+    form.append('media_type', media.mime_type);
+
+    const response = await fetch('https://api.x.com/2/media/upload', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const body = await response.json() as {
+      data?: { id?: string; media_id?: string; media_id_string?: string };
+      media_id?: string;
+      media_id_string?: string;
+      errors?: { message?: string; detail?: string }[];
+      detail?: string;
+      title?: string;
+    };
+    const mediaId = body.data?.id ?? body.data?.media_id_string ?? body.data?.media_id ?? body.media_id_string ?? body.media_id;
+    if (!response.ok || !mediaId) {
+      return { success: false, error: body.errors?.[0]?.detail ?? body.errors?.[0]?.message ?? body.detail ?? body.title ?? `X media upload failed (${response.status})` };
+    }
+    return { success: true, media_id: mediaId };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
 }

@@ -422,6 +422,7 @@ export type XCampaignPreflightResponse = {
     tweet_read: boolean;
     tweet_write: boolean;
     users_read: boolean;
+    media_write: boolean;
     offline_access: boolean;
   };
   recent_search: {

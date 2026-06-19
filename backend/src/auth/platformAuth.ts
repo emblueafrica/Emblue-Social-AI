@@ -174,7 +174,7 @@ export function getXAuthUrl(brandId: number): string {
     response_type: 'code',
     client_id: process.env.X_CLIENT_ID ?? '',
     redirect_uri: process.env.X_REDIRECT_URI ?? '',
-    scope: 'tweet.read tweet.write users.read offline.access',
+    scope: 'tweet.read tweet.write users.read media.write offline.access',
     state: createOAuthState(brandId, { cv: codeVerifier }),
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
@@ -231,7 +231,7 @@ export async function handleXCallback(req: Request, res: Response): Promise<void
       new Date(Date.now() + (tokenData.expires_in ?? 7200) * 1000),
       meData.data?.username ?? 'x account',
       meData.data?.id ?? '',
-      'tweet.read tweet.write users.read offline.access',
+      'tweet.read tweet.write users.read media.write offline.access',
     );
 
     redirectSuccess(res, 'x', meData.data?.username ?? 'x account');
