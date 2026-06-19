@@ -267,9 +267,13 @@ export async function insertApprovalQueueItem(
     data: {
       brandId: item.brand_id,
       platform: item.platform as never,
+      authorId: item.meta?.author_id ?? null,
       authorHandle: item.author,
       originalText: item.original,
       replyText: item.reply,
+      commentId: item.meta?.comment_id ?? null,
+      postId: item.meta?.post_id ?? null,
+      tweetId: item.meta?.tweet_id ?? null,
       confidence: 80,
       status: 'pending',
     },

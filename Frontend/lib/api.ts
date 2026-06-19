@@ -387,6 +387,16 @@ export type XCampaignPreflightResponse = {
   diagnostics: string[];
 };
 
+export type XReplySyncResponse = {
+  ok: true;
+  tweet_id: string;
+  fetched: number;
+  captured: number;
+  queued: number;
+  duplicates: number;
+  message: string;
+};
+
 export type PostUrlCampaignStatus = {
   campaign_id: string;
   summary: {
@@ -727,6 +737,13 @@ export function preflightXCampaign(payload: { brand_id: number; tweet_url?: stri
 
 export function publishXCampaignPost(payload: { brand_id: number; text: string; reply_to_url?: string }) {
   return apiRequest<{ ok: true; platform: "x"; message_id?: string; reply_to_tweet_id?: string | null }>("/api/v1/campaigns/x/post", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function syncXReplies(payload: { brand_id: number; tweet_url?: string; tweet_id?: string }) {
+  return apiRequest<XReplySyncResponse>("/api/v1/campaigns/x/sync-replies", {
     method: "POST",
     body: JSON.stringify(payload),
   });

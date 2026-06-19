@@ -588,9 +588,13 @@ model ApprovalQueue {
   queueId      BigInt          @id @default(autoincrement()) @map("queue_id")
   brandId      Int?            @map("brand_id")
   platform     Platform?
+  authorId     String?         @map("author_id")
   authorHandle String?         @map("author_handle")
   originalText String?         @map("original_text")
   replyText    String?         @map("reply_text")
+  commentId    String?         @map("comment_id")
+  postId       String?         @map("post_id")
+  tweetId      String?         @map("tweet_id")
   confidence   Int?
   status       ApprovalStatus? @default(pending)
   createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)

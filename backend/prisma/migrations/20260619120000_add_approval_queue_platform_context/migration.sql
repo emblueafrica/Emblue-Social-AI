@@ -1,0 +1,5 @@
+ALTER TABLE "approval_queue"
+  ADD COLUMN IF NOT EXISTS "author_id" TEXT,
+  ADD COLUMN IF NOT EXISTS "comment_id" TEXT,
+  ADD COLUMN IF NOT EXISTS "post_id" TEXT,
+  ADD COLUMN IF NOT EXISTS "tweet_id" TEXT;
