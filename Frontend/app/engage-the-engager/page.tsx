@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronDown, Pause, Play, Plus, Trash2, X as XClose } from "lucide-react";
+import { Activity, CheckCircle2, ChevronDown, Pause, Play, Plus, RefreshCw, Trash2, X as XClose } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { NewCampaignModal, type CampaignDraft } from "@/components/dashboard/NewCampaignModal";
 import { PlatformLogo } from "@/components/PlatformLogo";
@@ -11,13 +11,16 @@ import {
   ApiError,
   activateCampaign,
   deleteCampaign,
+  getCampaignEngagements,
   getCampaigns,
+  getCampaignStatus,
   getPostUrlCampaignStatus,
   preflightXCampaign,
   preflightCampaign,
   publishXCampaignPost,
   runPostUrlCampaign,
   saveCampaign,
+  syncCampaignEngagements,
   syncXReplies,
   toggleCampaign,
   type CampaignPayload,
@@ -143,6 +146,8 @@ export default function EngageTheEngager() {
   const [xPublishResult, setXPublishResult] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingDraft, setEditingDraft] = useState<CampaignDraft | null>(null);
+  const [activityCampaignId, setActivityCampaignId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
@@ -161,6 +166,13 @@ export default function EngageTheEngager() {
     enabled: Boolean(activeBrandId && lastPostUrlCampaignId),
     retry: false,
     refetchInterval: (query) => query.state.data?.summary.complete ? false : 5000,
+  });
+
+  const activityQuery = useQuery({
+    queryKey: ["campaign-engagements", activeBrandId, activityCampaignId],
+    queryFn: () => getCampaignEngagements(activityCampaignId!, activeBrandId!),
+    enabled: Boolean(activeBrandId && activityCampaignId),
+    retry: false,
   });
 
   const saveCampaignMutation = useMutation({
@@ -188,6 +200,9 @@ export default function EngageTheEngager() {
   const xPreflightMutation = useMutation({ mutationFn: preflightXCampaign });
   const xPublishMutation = useMutation({ mutationFn: publishXCampaignPost });
   const xSyncMutation = useMutation({ mutationFn: syncXReplies });
+  const campaignSyncMutation = useMutation({
+    mutationFn: (campaignId: number) => syncCampaignEngagements(campaignId, activeBrandId!),
+  });
 
   useEffect(() => {
     if (!toast) return;
@@ -196,7 +211,6 @@ export default function EngageTheEngager() {
   }, [toast]);
 
   const campaigns = campaignsQuery.data?.campaigns.map(mapCampaignRecord) ?? [];
-  const editingCampaign = campaigns.find((campaign) => campaign.id === editingId) ?? null;
   const runningCount = campaigns.filter((campaign) => campaign.state === "running").length;
   const pausedCount = campaigns.filter((campaign) => campaign.state === "paused").length;
   const sentTotal = campaigns.reduce((sum, campaign) => {
@@ -261,6 +275,7 @@ export default function EngageTheEngager() {
       }
       const activation = await activateCampaign(campaignId, activationPayload);
       setEditingId(null);
+      setEditingDraft(null);
       setModalOpen(false);
       setApiNotice(null);
       const failures = activation.platforms.filter((platform) => !platform.success);
@@ -272,6 +287,40 @@ export default function EngageTheEngager() {
       setApiNotice(apiErrorMessage(error));
     } finally {
       setCampaignActivating(false);
+    }
+  };
+
+  const handleEditCampaign = async (campaign: Campaign) => {
+    if (!activeBrandId) return;
+    setApiNotice(null);
+    try {
+      const status = await getCampaignStatus(campaign.id, activeBrandId);
+      const existingPosts = Object.fromEntries(
+        status.bindings
+          .filter((binding) => binding.status !== "superseded" && binding.post_url)
+          .map((binding) => [binding.platform, binding.post_url]),
+      ) as Partial<Record<Platform, string>>;
+      setEditingId(campaign.id);
+      setEditingDraft({
+        ...mapCampaignRecord(status.campaign).draft,
+        existingPosts,
+        media: status.media,
+        imageUrl: status.media[0]?.url ?? status.campaign.image_url ?? "",
+      });
+      setModalOpen(true);
+    } catch (error) {
+      setApiNotice(`Could not load the saved campaign details. ${apiErrorMessage(error)}`);
+    }
+  };
+
+  const handleSyncCampaign = async (campaignId: number) => {
+    try {
+      const result = await campaignSyncMutation.mutateAsync(campaignId);
+      await activityQuery.refetch();
+      await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+      setToast(`Sync complete: ${result.captured} new, ${result.sent} sent, ${result.queued} queued.${result.errors.length ? ` ${result.errors.length} error(s).` : ""}`);
+    } catch (error) {
+      setApiNotice(apiErrorMessage(error));
     }
   };
 
@@ -509,7 +558,8 @@ export default function EngageTheEngager() {
 
                     <div className="flex items-center gap-3">
                       <span className="text-sm text-muted-foreground">{campaign.stat}</span>
-                      <button onClick={() => { setEditingId(campaign.id); setModalOpen(true); }} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">Edit</button>
+                      <button onClick={() => void handleEditCampaign(campaign)} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">Edit</button>
+                      <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Activity className="size-4" />Activity</button>
                       <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted flex items-center gap-2">
                         {campaign.state === "paused" ? <Play className="size-4" /> : <Pause className="size-4" />}
                         {campaign.state === "paused" ? "Resume" : "Pause"}
@@ -523,6 +573,46 @@ export default function EngageTheEngager() {
               </ul>
             ) : (
               <div className="py-12 text-sm text-muted-foreground">No backend campaigns found for this brand yet.</div>
+            )}
+
+            {activityCampaignId !== null && (
+              <div className="mt-5 border-t pt-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="font-semibold">Campaign engagement activity</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">Captured platform activity and the actual delivery result for each person.</p>
+                  </div>
+                  <button onClick={() => void handleSyncCampaign(activityCampaignId)} disabled={campaignSyncMutation.isPending} className="flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
+                    <RefreshCw className={`size-4 ${campaignSyncMutation.isPending ? "animate-spin" : ""}`} />
+                    {campaignSyncMutation.isPending ? "Syncing..." : "Sync now"}
+                  </button>
+                </div>
+
+                {activityQuery.isLoading && <p className="py-6 text-sm text-muted-foreground">Loading campaign activity...</p>}
+                {activityQuery.error && <p className="py-4 text-sm text-destructive">{apiErrorMessage(activityQuery.error)}</p>}
+                {activityQuery.data && (
+                  <div className="mt-4 space-y-4">
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+                      {Object.entries(activityQuery.data.summary).map(([label, value]) => <MiniStat key={label} label={label} value={value} />)}
+                    </div>
+                    {activityQuery.data.bindings.map((binding) => (
+                      <div key={`${binding.platform}-${binding.url}`} className="border-l-2 border-primary pl-3 text-xs">
+                        <p className="break-all font-medium">{binding.platform.toUpperCase()} - {binding.url}</p>
+                        <p className="mt-1 text-muted-foreground">{binding.status ?? "pending"} - {binding.total_fetched} fetched{binding.error ? ` - ${binding.error}` : ""}</p>
+                      </div>
+                    ))}
+                    <p className="text-xs text-muted-foreground">{activityQuery.data.platform_capabilities.x}</p>
+                    {activityQuery.data.engagers.length ? (
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[680px] text-left text-sm">
+                          <thead className="border-b text-xs text-muted-foreground"><tr><th className="py-2 pr-3">Person</th><th className="py-2 pr-3">Platform</th><th className="py-2 pr-3">Action</th><th className="py-2 pr-3">Message</th><th className="py-2">Delivery</th></tr></thead>
+                          <tbody className="divide-y">{activityQuery.data.engagers.map((item) => <tr key={item.id}><td className="py-3 pr-3 font-medium">{item.author_handle || "Unknown"}</td><td className="py-3 pr-3 capitalize">{item.platform}</td><td className="py-3 pr-3 capitalize">{item.action}</td><td className="max-w-sm py-3 pr-3"><span className="block truncate">{item.original_text || "No message text"}</span></td><td className="py-3 font-medium capitalize">{(item.status || "pending").replaceAll("_", " ")}</td></tr>)}</tbody>
+                        </table>
+                      </div>
+                    ) : <p className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No engagement has been captured yet. Use Sync now after someone replies to the tracked post.</p>}
+                  </div>
+                )}
+              </div>
             )}
           </Surface>
 
@@ -727,12 +817,13 @@ export default function EngageTheEngager() {
         <NewCampaignModal
           open={modalOpen}
           brandId={activeBrandId}
-          initial={editingCampaign?.draft ?? undefined}
+          initial={editingDraft ?? undefined}
           saving={saveCampaignMutation.isPending || campaignActivating}
           errorMessage={apiNotice}
           onClose={() => {
             setModalOpen(false);
             setEditingId(null);
+            setEditingDraft(null);
           }}
           onSave={(campaign) => void handleSaveCampaign(campaign)}
         />
