@@ -54,6 +54,20 @@ function formatMentionHandle(handle: string | null | undefined): string {
   return cleaned.startsWith('@') ? cleaned : `@${cleaned}`;
 }
 
+function approvalMeta(event: EngageEvent): {
+  comment_id?: string | null;
+  post_id?: string | null;
+  tweet_id?: string | null;
+  author_id?: string | null;
+} {
+  return {
+    author_id: event.author_id ?? null,
+    comment_id: event.comment_id ?? null,
+    post_id: event.post_id ?? null,
+    tweet_id: event.tweet_id ?? event.comment_id ?? null,
+  };
+}
+
 // ── DB HELPERS ────────────────────────────────────────────────────────────────
 async function getTrackedLink(brandId: number, campaignId: string): Promise<string | null> {
   try {
@@ -192,6 +206,48 @@ async function sendInstagramDM(
   } catch (err) { return { manual_copy: true, text, error: (err as Error).message }; }
 }
 
+async function sendInstagramCommentReply(
+  commentId: string, replyText: string, token: string | null | undefined
+): Promise<PlatformSendResult> {
+  if (!commentId) return { manual_copy: true, text: replyText, reason: 'No Instagram comment ID' };
+  if (!token) return { manual_copy: true, text: replyText, reason: 'No Meta token' };
+  try {
+    const r = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: replyText }),
+    });
+    const d = await r.json() as { id?: string; error?: { message?: string } };
+    if (!r.ok || d.error) throw new Error(d.error?.message ?? `IG comment reply ${r.status}`);
+    return { success: true, comment_id: d.id };
+  } catch (err) {
+    return { manual_copy: true, text: replyText, error: (err as Error).message };
+  }
+}
+
+async function sendInstagramPrivateReply(
+  pageId: string | null | undefined, commentId: string | null | undefined, replyText: string, token: string | null | undefined
+): Promise<PlatformSendResult> {
+  if (!pageId || !commentId) return { manual_copy: true, text: replyText, reason: 'No Meta Page ID or Instagram comment ID' };
+  if (!token) return { manual_copy: true, text: replyText, reason: 'No Meta token' };
+  try {
+    const r = await fetch(`https://graph.facebook.com/v19.0/${pageId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { comment_id: commentId },
+        message: { text: replyText },
+        messaging_type: 'RESPONSE',
+      }),
+    });
+    const d = await r.json() as { message_id?: string; error?: { message?: string } };
+    if (!r.ok || d.error) throw new Error(d.error?.message ?? `IG private reply ${r.status}`);
+    return { success: true, message_id: d.message_id };
+  } catch (err) {
+    return { manual_copy: true, text: replyText, error: (err as Error).message };
+  }
+}
+
 async function sendFacebookDM(
   recipientId: string, text: string, imageUrl: string | null | undefined, token: string | null | undefined
 ): Promise<PlatformSendResult> {
@@ -205,6 +261,48 @@ async function sendFacebookDM(
     if (!r.ok || d.error) throw new Error(d.error?.message ?? `FB DM ${r.status}`);
     return { success: true, message_id: d.message_id };
   } catch (err) { return { manual_copy: true, text, error: (err as Error).message }; }
+}
+
+async function sendFacebookCommentReply(
+  commentId: string, replyText: string, token: string | null | undefined
+): Promise<PlatformSendResult> {
+  if (!commentId) return { manual_copy: true, text: replyText, reason: 'No Facebook comment ID' };
+  if (!token) return { manual_copy: true, text: replyText, reason: 'No Meta token' };
+  try {
+    const r = await fetch(`https://graph.facebook.com/v19.0/${commentId}/comments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: replyText }),
+    });
+    const d = await r.json() as { id?: string; error?: { message?: string } };
+    if (!r.ok || d.error) throw new Error(d.error?.message ?? `FB comment reply ${r.status}`);
+    return { success: true, comment_id: d.id };
+  } catch (err) {
+    return { manual_copy: true, text: replyText, error: (err as Error).message };
+  }
+}
+
+async function sendFacebookPrivateReply(
+  pageId: string | null | undefined, commentId: string | null | undefined, replyText: string, token: string | null | undefined
+): Promise<PlatformSendResult> {
+  if (!pageId || !commentId) return { manual_copy: true, text: replyText, reason: 'No Meta Page ID or Facebook comment ID' };
+  if (!token) return { manual_copy: true, text: replyText, reason: 'No Meta token' };
+  try {
+    const r = await fetch(`https://graph.facebook.com/v19.0/${pageId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { comment_id: commentId },
+        message: { text: replyText },
+        messaging_type: 'RESPONSE',
+      }),
+    });
+    const d = await r.json() as { message_id?: string; error?: { message?: string } };
+    if (!r.ok || d.error) throw new Error(d.error?.message ?? `FB private reply ${r.status}`);
+    return { success: true, message_id: d.message_id };
+  } catch (err) {
+    return { manual_copy: true, text: replyText, error: (err as Error).message };
+  }
 }
 
 async function sendTikTokCommentReply(
@@ -316,13 +414,27 @@ export async function engageEngager(
 
   const confidence = config.reply_template ? 100 : 80;
   if (confidence < (config.auto_fire_threshold ?? 85)) {
-    enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, image_url: imageUrl, tracked_link: trackedLink ?? undefined });
+    enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, image_url: imageUrl, tracked_link: trackedLink ?? undefined, meta: approvalMeta(event) });
     broadcastToClients(brandId, 'engage_queued', { platform: event.platform, handle: event.author_handle, preview: replyText.slice(0, 80) });
     return { status: 'queued_for_approval', reply: replyText };
   }
 
   let result: PlatformSendResult;
-  if      (event.platform === 'instagram') result = await sendInstagramDM(event.author_id ?? '', replyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
+  if (event.platform === 'instagram' && action === 'commented') {
+    const publicReply = await sendInstagramCommentReply(event.comment_id ?? '', replyText, credentials.META_PAGE_ACCESS_TOKEN);
+    const privateReply = await sendInstagramPrivateReply(credentials.META_PAGE_ID, event.comment_id, replyText, credentials.META_PAGE_ACCESS_TOKEN);
+    result = publicReply.success || privateReply.success
+      ? { success: true, comment_id: publicReply.comment_id, message_id: privateReply.message_id, partial: !(publicReply.success && privateReply.success), error: publicReply.error ?? privateReply.error }
+      : publicReply.manual_copy ? publicReply : privateReply;
+  }
+  else if (event.platform === 'facebook' && action === 'commented') {
+    const publicReply = await sendFacebookCommentReply(event.comment_id ?? '', replyText, credentials.META_PAGE_ACCESS_TOKEN);
+    const privateReply = await sendFacebookPrivateReply(credentials.META_PAGE_ID, event.comment_id, replyText, credentials.META_PAGE_ACCESS_TOKEN);
+    result = publicReply.success || privateReply.success
+      ? { success: true, comment_id: publicReply.comment_id, message_id: privateReply.message_id, partial: !(publicReply.success && privateReply.success), error: publicReply.error ?? privateReply.error }
+      : publicReply.manual_copy ? publicReply : privateReply;
+  }
+  else if (event.platform === 'instagram') result = await sendInstagramDM(event.author_id ?? '', replyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
   else if (event.platform === 'facebook')  result = await sendFacebookDM(event.author_id ?? '', replyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
   else if (event.platform === 'tiktok')    result = await sendTikTokCommentReply(event.comment_id ?? '', event.post_id ?? '', replyText, credentials.TIKTOK_ACCESS_TOKEN);
   else if (event.platform === 'x')         result = await sendXReply(replyText, event.tweet_id ?? event.comment_id, credentials.X_OAUTH_TOKEN);
@@ -330,6 +442,18 @@ export async function engageEngager(
 
   if (result.success) {
     broadcastToClients(brandId, 'engage_fired', { platform: event.platform, handle: event.author_handle, preview: replyText.slice(0, 80), image: !!imageUrl, link: trackedLink, action });
+    if (result.partial) {
+      enqueueForApproval({
+        brand_id: brandId,
+        platform: event.platform,
+        author: event.author_handle,
+        original: event.text,
+        reply: replyText,
+        manual_copy_required: true,
+        manual_copy_instructions: result.error ?? 'One of the Meta reply actions failed. Check the platform thread and send the missing reply manually if needed.',
+        meta: approvalMeta(event),
+      });
+    }
     try {
       await prisma.autoEngagement.create({
         data: {
@@ -346,7 +470,7 @@ export async function engageEngager(
       });
     } catch { /* log only */ }
   } else if (result.manual_copy) {
-    enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, manual_copy_required: true });
+    enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, manual_copy_required: true, meta: approvalMeta(event) });
     broadcastToClients(brandId, 'engage_manual_copy', { platform: event.platform, handle: event.author_handle, preview: replyText.slice(0, 80), reason: result.error ?? result.reason ?? 'Manual copy required' });
   }
 
@@ -365,7 +489,7 @@ export async function fetchInstagramPostEngagers(mediaId: string, token: string 
         const r = await fetch(url);
         const d = await r.json() as { data?: { id: string; username: string; text: string; timestamp: string }[]; paging?: { next?: string }; error?: unknown };
         if (d.error) break;
-        (d.data ?? []).forEach(c => engagers.push({ platform: 'instagram', action: 'commented', author_id: c.id, author_handle: c.username ?? c.id, text: c.text ?? '', timestamp: c.timestamp }));
+        (d.data ?? []).forEach(c => engagers.push({ platform: 'instagram', action: 'commented', author_id: c.id, author_handle: c.username ?? c.id, text: c.text ?? '', timestamp: c.timestamp, raw_comment_id: c.id, raw_video_id: mediaId }));
         url = d.paging?.next ?? null;
       } catch { break; }
     }
@@ -377,7 +501,7 @@ export async function fetchInstagramPostEngagers(mediaId: string, token: string 
         const r = await fetch(url);
         const d = await r.json() as { data?: { id: string; username: string }[]; paging?: { next?: string }; error?: unknown };
         if (d.error) break;
-        (d.data ?? []).forEach(u => { if (!engagers.find(e => e.author_id === u.id)) engagers.push({ platform: 'instagram', action: 'liked', author_id: u.id, author_handle: u.username ?? u.id, text: '[liked your post]', timestamp: new Date().toISOString() }); });
+        (d.data ?? []).forEach(u => { if (!engagers.find(e => e.author_id === u.id)) engagers.push({ platform: 'instagram', action: 'liked', author_id: u.id, author_handle: u.username ?? u.id, text: '[liked your post]', timestamp: new Date().toISOString(), raw_video_id: mediaId }); });
         url = d.paging?.next ?? null;
       }
     } catch { /* continue */ }
