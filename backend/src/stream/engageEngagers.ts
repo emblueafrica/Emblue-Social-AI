@@ -465,9 +465,11 @@ export async function engageEngager(
       });
     }
     try {
+      const numericId = numericCampaignId(campaignId);
       await prisma.autoEngagement.create({
         data: {
           brandId,
+          campaignId: numericId ? BigInt(numericId) : null,
           platform: event.platform as never,
           authorHandle: event.author_handle,
           originalText: event.text,
@@ -478,6 +480,12 @@ export async function engageEngager(
           firedAt: new Date(),
         },
       });
+      if (numericId) {
+        await prisma.engageCampaign.updateMany({
+          where: { brandId, campaignId: BigInt(numericId) },
+          data: { totalSent: { increment: 1 }, updatedAt: new Date() },
+        });
+      }
     } catch { /* log only */ }
   } else if (result.manual_copy) {
     enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, manual_copy_required: true, meta: approvalMeta(event) });

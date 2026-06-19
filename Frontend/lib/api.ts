@@ -400,6 +400,20 @@ export type CampaignActivationResult = {
   platforms: { platform: Platform; success: boolean; post_url?: string; post_id?: string; warning?: string; error?: string }[];
 };
 
+export type CampaignStatusResponse = {
+  campaign: CampaignRecord;
+  bindings: { platform: Platform; post_url: string; post_id?: string | null; status?: string | null; source_mode?: string; error?: string | null }[];
+  media: CampaignMedia[];
+};
+
+export type CampaignEngagementResponse = {
+  campaign_id: number;
+  summary: { captured: number; comments: number; likes: number; reposts: number; sent: number; queued: number; manual: number; failed: number };
+  platform_capabilities: Record<Platform, string>;
+  bindings: { platform: Platform; url: string; status?: string | null; total_fetched: number; error?: string | null; last_synced_at?: string | null }[];
+  engagers: { id: string; platform: Platform; action: string; author_handle?: string | null; original_text?: string | null; status?: string | null; created_at: string; processed_at?: string | null }[];
+};
+
 export type PostUrlCampaignPayload = {
   brand_id: number;
   campaign_id?: string;
@@ -788,7 +802,18 @@ export function activateCampaign(campaignId: number, payload: CampaignActivation
 }
 
 export function getCampaignStatus(campaignId: number, brandId: number) {
-  return apiRequest<{ campaign: CampaignRecord; bindings: unknown[]; media: CampaignMedia[] }>(`/api/v1/campaigns/${campaignId}/status?brand_id=${brandId}`);
+  return apiRequest<CampaignStatusResponse>(`/api/v1/campaigns/${campaignId}/status?brand_id=${brandId}`);
+}
+
+export function getCampaignEngagements(campaignId: number, brandId: number) {
+  return apiRequest<CampaignEngagementResponse>(`/api/v1/campaigns/${campaignId}/engagements?brand_id=${brandId}`);
+}
+
+export function syncCampaignEngagements(campaignId: number, brandId: number) {
+  return apiRequest<{ ok: true; campaign_id: number; checked: number; fetched: number; captured: number; sent: number; queued: number; manual: number; skipped: number; errors: string[] }>(`/api/v1/campaigns/${campaignId}/sync`, {
+    method: 'POST',
+    body: JSON.stringify({ brand_id: brandId }),
+  });
 }
 
 export function toggleCampaign(campaignId: number) {

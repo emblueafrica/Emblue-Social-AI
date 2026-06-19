@@ -8,6 +8,7 @@ import { publishReply, uploadXMediaFromUrl } from '../stream/publisher';
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { syncXRepliesForPost, trackPublishedXPost } from '../campaigns/xReplySync';
+import { syncTrackedCampaignEngagements } from '../campaigns/engagementSync';
 import { CampaignConfig, PostUrlItem, Credentials, Platform } from '../types';
 import {
   CampaignEventSettings,
@@ -865,6 +866,104 @@ router.get('/post-urls/status/:brand_id/:campaign_id', requireBrandAccess, requi
     });
   } catch (err) {
     sendServerError(res, 'Post URL campaign status lookup failed', err);
+  }
+});
+
+router.post('/:campaign_id/sync', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId) { sendValidationError(res, 'campaign_id must be a positive integer'); return; }
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+
+  try {
+    const campaign = await prisma.engageCampaign.findFirst({
+      where: { campaignId: BigInt(campaignId), brandId },
+      select: { campaignId: true },
+    });
+    if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
+    const result = await syncTrackedCampaignEngagements(brandId);
+    res.json({ ok: true, campaign_id: campaignId, ...result });
+  } catch (err) {
+    sendServerError(res, 'Campaign engagement sync failed', err);
+  }
+});
+
+router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const brandId = getRequiredBrandId(req.query['brand_id']);
+  if (!campaignId) { sendValidationError(res, 'campaign_id must be a positive integer'); return; }
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+
+  try {
+    const campaign = await prisma.engageCampaign.findFirst({
+      where: { campaignId: BigInt(campaignId), brandId },
+      select: { campaignId: true },
+    });
+    if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
+
+    const [engagers, bindings] = await Promise.all([
+      prisma.campaignPostEngager.findMany({
+        where: { brandId, campaignId: String(campaignId) },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        select: {
+          engagerId: true,
+          platform: true,
+          action: true,
+          authorHandle: true,
+          originalText: true,
+          status: true,
+          processedAt: true,
+          createdAt: true,
+        },
+      }),
+      prisma.campaignPostUrl.findMany({
+        where: { brandId, campaignId: BigInt(campaignId), bindingStatus: 'active' },
+        orderBy: { submittedAt: 'desc' },
+        select: { platform: true, postUrl: true, status: true, totalFetched: true, errorMsg: true, completedAt: true },
+      }),
+    ]);
+
+    const count = (statuses: string[]) => engagers.filter(item => statuses.includes(item.status ?? '')).length;
+    res.json({
+      campaign_id: campaignId,
+      summary: {
+        captured: engagers.length,
+        comments: engagers.filter(item => item.action === 'commented').length,
+        likes: engagers.filter(item => item.action === 'liked').length,
+        reposts: engagers.filter(item => item.action === 'reposted').length,
+        sent: count(['sent']),
+        queued: count(['queued', 'queued_for_approval', 'pending']),
+        manual: count(['manual_copy']),
+        failed: count(['error', 'generation_failed', 'rate_limited']),
+      },
+      platform_capabilities: {
+        x: 'Replies are captured and answered publicly. Likes and reposts require additional X API access; unsolicited DMs are not sent.',
+        instagram: 'Comments can receive a public reply and a private reply when Meta permissions and messaging eligibility allow it.',
+        facebook: 'Comments can receive a public reply and a private reply when Page messaging permissions allow it.',
+        tiktok: 'Comments can be captured and replied to when the approved TikTok scopes allow it.',
+      },
+      bindings: bindings.map(item => ({
+        platform: item.platform,
+        url: item.postUrl,
+        status: item.status,
+        total_fetched: item.totalFetched ?? 0,
+        error: item.errorMsg,
+        last_synced_at: item.completedAt,
+      })),
+      engagers: engagers.map(item => ({
+        id: String(item.engagerId),
+        platform: item.platform,
+        action: item.action,
+        author_handle: item.authorHandle,
+        original_text: item.originalText,
+        status: item.status,
+        created_at: item.createdAt,
+        processed_at: item.processedAt,
+      })),
+    });
+  } catch (err) {
+    sendServerError(res, 'Campaign engagement lookup failed', err);
   }
 });
 

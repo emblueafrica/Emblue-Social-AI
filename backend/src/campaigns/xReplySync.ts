@@ -176,6 +176,7 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
     .filter(engager => !ownAccountIds.has(engager.author_id));
 
   const campaignId = String(config?.id ?? config?.campaign_id ?? `x-sync-${tweetId}`);
+  const numericCampaignId = /^\d+$/.test(campaignId) ? BigInt(campaignId) : null;
   let captured = 0;
   let queued = 0;
   let sent = 0;
@@ -243,6 +244,7 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
     await prisma.autoEngagement.create({
       data: {
         brandId,
+        campaignId: numericCampaignId,
         platform: 'x',
         authorHandle: engager.author_handle,
         originalText: engager.text,
@@ -273,6 +275,12 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
       if (publish.success) {
         sent += 1;
         await prisma.campaignPostEngager.updateMany({ where: { brandId, campaignId, platform: 'x', authorId: replyTweetId }, data: { status: 'sent', processedAt: new Date() } });
+        if (numericCampaignId) {
+          await prisma.engageCampaign.updateMany({
+            where: { brandId, campaignId: numericCampaignId },
+            data: { totalSent: { increment: 1 }, updatedAt: new Date() },
+          });
+        }
         continue;
       }
     }
