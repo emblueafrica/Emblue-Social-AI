@@ -38,6 +38,9 @@ function isValidProviderUrl(value: string): boolean {
       "facebook.com",
       "www.facebook.com",
       "x.com",
+      "twitter.com",
+      "api.twitter.com",
+      "www.twitter.com",
       "www.tiktok.com",
       "open-api.tiktok.com",
     ].includes(url.hostname);
@@ -68,8 +71,9 @@ async function redirectToPlatformConnect(platformId: PlatformConnectId, brandId:
   try {
     const response = await getPlatformConnectUrl(platformId, brandId);
     if (!isValidProviderUrl(response.url)) {
-      writeConnectWindowStatus(connectWindow, platformErrorMessage);
-      throw new Error(platformErrorMessage);
+      const message = `Unexpected ${platformId} OAuth URL returned by backend.`;
+      writeConnectWindowStatus(connectWindow, message);
+      throw new Error(message);
     }
     if (connectWindow) {
       connectWindow.opener = null;
