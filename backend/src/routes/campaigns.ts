@@ -4,7 +4,7 @@ import multer from 'multer';
 import prisma from '../db/prisma';
 import { mapEngageCampaign, toInputJson } from '../db/mappers';
 import { engageEngager, fetchXPostEngagers, runPostUrlCampaign, extractPostId, fillVariables } from '../stream/engageEngagers';
-import { publishReply } from '../stream/publisher';
+import { publishReply, uploadXMediaFromUrl } from '../stream/publisher';
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { syncXRepliesForPost, trackPublishedXPost } from '../campaigns/xReplySync';
@@ -263,7 +263,8 @@ router.post('/:campaign_id/preflight', requireBrandRole('client_owner'), require
       if (body.source_mode === 'publish_new') {
         const requiredScope = platform === 'x' ? 'tweet.write' : platform === 'facebook' ? 'pages_manage_posts' : platform === 'instagram' ? 'instagram_content_publish' : 'video.publish';
         if (account && !hasScope(account.scope, requiredScope)) issues.push(`Missing ${requiredScope} permission.`);
-        if (body.media?.length && platform === 'x') issues.push('X media publishing is not enabled in this backend yet. Use an existing X post or publish text only.');
+        if (platform === 'x' && body.media?.length && account && !hasScope(account.scope, 'media.write')) issues.push('Missing media.write permission. Reconnect X to approve media publishing.');
+        if (platform === 'x' && (body.media?.filter(media => media.media_type === 'image').length ?? 0) > 4) issues.push('X supports at most four images in one post.');
       } else {
         const url = body.existing_posts?.find(post => post.platform === platform)?.url ?? '';
         if (!extractPostId(platform, url)) issues.push(`The ${platform} post URL could not be resolved.`);
@@ -329,8 +330,18 @@ router.post('/:campaign_id/activate', requireBrandRole('client_owner'), requireB
           postId = extractPostId(platform, postUrl);
           if (!postId) throw new Error(`The ${platform} post URL could not be resolved.`);
         } else if (platform === 'x') {
-          if (body.media?.length) throw new Error('X media publishing is not enabled yet; activate with an existing X post or remove media.');
-          const publish = await publishReply({ brand_id: brandId, platform: 'x', reply_text: body.post_caption?.trim() || campaign.postCaption?.trim() || campaign.name });
+          const xMediaIds: string[] = [];
+          for (const [index, media] of (body.media ?? []).entries()) {
+            const upload = await uploadXMediaFromUrl(brandId, media, index);
+            if (!upload.success || !upload.media_id) throw new Error(upload.error ?? 'X media upload failed.');
+            xMediaIds.push(upload.media_id);
+          }
+          const publish = await publishReply({
+            brand_id: brandId,
+            platform: 'x',
+            reply_text: body.post_caption?.trim() || campaign.postCaption?.trim() || campaign.name,
+            media_ids: xMediaIds,
+          });
           if (!publish.success || !publish.message_id) throw new Error(publish.error ?? 'X did not return a post ID.');
           postId = publish.message_id;
           postUrl = `https://x.com/i/web/status/${postId}`;
@@ -557,7 +568,7 @@ router.post('/x/preflight', requireBrandRole('client_owner'), requireBrandAccess
     const scopes = account?.scope ?? '';
     if (!account || !token) diagnostics.push('X is not connected for this brand.');
     if (account && !account.refreshToken) diagnostics.push('X token is not refreshable. Reconnect X with offline.access.');
-    for (const scope of ['tweet.read', 'tweet.write', 'users.read', 'offline.access']) {
+    for (const scope of ['tweet.read', 'tweet.write', 'users.read', 'media.write', 'offline.access']) {
       if (account && !hasScope(scopes, scope)) diagnostics.push(`Missing X scope: ${scope}`);
     }
 
@@ -582,6 +593,7 @@ router.post('/x/preflight', requireBrandRole('client_owner'), requireBrandAccess
         tweet_read: hasScope(scopes, 'tweet.read'),
         tweet_write: hasScope(scopes, 'tweet.write'),
         users_read: hasScope(scopes, 'users.read'),
+        media_write: hasScope(scopes, 'media.write'),
         offline_access: hasScope(scopes, 'offline.access'),
       },
       recent_search: recentSearch,
