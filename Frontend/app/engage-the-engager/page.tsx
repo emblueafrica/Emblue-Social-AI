@@ -205,6 +205,13 @@ export default function EngageTheEngager() {
   }, 0);
   const allocationTotal = allocation.instagram + allocation.facebook + allocation.tiktok + allocation.x;
 
+  const selectedAllocation = (campaign: CampaignDraft) => ({
+    instagram: campaign.platforms.includes("instagram") ? campaign.allocation.instagram : 0,
+    facebook: campaign.platforms.includes("facebook") ? campaign.allocation.facebook : 0,
+    tiktok: campaign.platforms.includes("tiktok") ? campaign.allocation.tiktok : 0,
+    x: campaign.platforms.includes("x") ? campaign.allocation.x : 0,
+  });
+
   const toPayload = (campaign: CampaignDraft): CampaignPayload => ({
     ...(editingId && editingId > 0 ? { campaign_id: editingId } : {}),
     brand_id: activeBrandId!,
@@ -220,7 +227,7 @@ export default function EngageTheEngager() {
     auto_fire_threshold: campaign.threshold,
     max_per_hour: campaign.maxPerHour,
     is_active: false,
-    platform_allocation: campaign.allocation,
+    platform_allocation: selectedAllocation(campaign),
     source_mode: campaign.sourceMode,
     post_caption: campaign.postCaption,
     event_settings: campaign.events,
@@ -244,7 +251,7 @@ export default function EngageTheEngager() {
         existing_posts: campaign.sourceMode === "existing"
           ? campaign.platforms.map((platform) => ({ platform, url: campaign.existingPosts[platform] ?? "" }))
           : undefined,
-        allocation: campaign.allocation,
+        allocation: selectedAllocation(campaign),
         media: campaign.media,
         post_caption: campaign.postCaption,
       };

@@ -31,13 +31,13 @@ const PLATFORM_OPTIONS: { id: Platform; label: string }[] = [
 ];
 const TONES = ["Warm and friendly", "Professional and authoritative", "Bold and confident", "Empathetic and supportive", "Playful and witty", "Educational and informative"];
 const DEFAULT_EVENTS: CampaignEventSettings = { comments: true, likes: true, reposts: true, mentions: true, dms: true };
-const DEFAULT_ALLOCATION: Record<Platform, number> = { instagram: 25, facebook: 25, tiktok: 25, x: 25 };
+const EMPTY_ALLOCATION: Record<Platform, number> = { instagram: 0, facebook: 0, tiktok: 0, x: 0 };
 
 function blankDraft(): CampaignDraft {
   return {
     name: "", platforms: [], sourceMode: "existing", postCaption: "", existingPosts: {}, media: [], keywords: [], tone: "Warm and friendly",
     maxPerHour: 10, template: "Hey {{handle}}, thanks for your comment. We would like to help.", privateTemplate: "Hey {{handle}}, here is the information you requested: {{link}}",
-    ctaLink: "", imageUrl: "", threshold: 85, events: DEFAULT_EVENTS, allocation: DEFAULT_ALLOCATION,
+    ctaLink: "", imageUrl: "", threshold: 85, events: DEFAULT_EVENTS, allocation: EMPTY_ALLOCATION,
   };
 }
 
@@ -60,7 +60,7 @@ export function NewCampaignModal({ open, brandId, initial, saving, errorMessage,
 
   useEffect(() => {
     if (!open) return;
-    setDraft(initial ? { ...blankDraft(), ...initial, events: { ...DEFAULT_EVENTS, ...initial.events }, allocation: { ...DEFAULT_ALLOCATION, ...initial.allocation } } : blankDraft());
+    setDraft(initial ? { ...blankDraft(), ...initial, events: { ...DEFAULT_EVENTS, ...initial.events }, allocation: { ...EMPTY_ALLOCATION, ...initial.allocation } } : blankDraft());
     setStep(1); setError(null); setKeywordInput(""); setShowPreview(false);
   }, [open, initial]);
 
@@ -77,7 +77,7 @@ export function NewCampaignModal({ open, brandId, initial, saving, errorMessage,
   const togglePlatform = (platform: Platform) => setDraft(current => {
     const selected = current.platforms.includes(platform) ? current.platforms.filter(item => item !== platform) : [...current.platforms, platform];
     const equal = selected.length ? Math.floor(100 / selected.length) : 0;
-    const allocation = { ...DEFAULT_ALLOCATION, ...Object.fromEntries(selected.map((item, index) => [item, equal + (index === 0 ? 100 - equal * selected.length : 0)])) } as Record<Platform, number>;
+    const allocation = { ...EMPTY_ALLOCATION, ...Object.fromEntries(selected.map((item, index) => [item, equal + (index === 0 ? 100 - equal * selected.length : 0)])) } as Record<Platform, number>;
     return { ...current, platforms: selected, allocation };
   });
   const addKeyword = () => {
@@ -134,7 +134,7 @@ export function NewCampaignModal({ open, brandId, initial, saving, errorMessage,
           {step === 4 && <div className="space-y-6"><div className="grid gap-3 sm:grid-cols-3"><Summary label="Source" value={draft.sourceMode === "publish_new" ? "Publish new" : "Existing posts"} /><Summary label="Platforms" value={draft.platforms.join(", ") || "None"} /><Summary label="Media" value={`${draft.media.length} asset(s)`} /></div><div className="rounded-xl border bg-muted/20 p-5"><div className="mb-4 flex items-center justify-between"><h3 className="font-semibold">Platform send allocation</h3><span className={allocationTotal === 100 ? "text-emerald-600" : "text-destructive"}>{allocationTotal}% {allocationTotal === 100 ? "✓" : "must equal 100%"}</span></div>{draft.platforms.map(platform => <div key={platform} className="grid grid-cols-[120px_1fr_52px] items-center gap-3 py-2"><span className="flex items-center gap-2 text-sm capitalize"><PlatformLogo platform={platform} size={17} />{platform}</span><input type="range" min={0} max={100} value={draft.allocation[platform]} onChange={event => update("allocation", { ...draft.allocation, [platform]: Number(event.target.value) })} className="accent-primary" /><span className="text-right text-sm font-semibold">{draft.allocation[platform]}%</span></div>)}</div><p className="text-sm text-muted-foreground">Activation will preflight every platform. Supported platforms activate immediately; failures remain visible with retry instructions.</p></div>}
         </div>
 
-        <footer className="flex items-center justify-between border-t px-6 py-5"><button onClick={() => step === 1 ? onClose() : setStep(current => current - 1)} className="flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold"><ArrowLeft className="size-4" />{step === 1 ? "Cancel" : "Back"}</button>{step < 4 ? <button disabled={!stepValid || uploading} onClick={() => setStep(current => current + 1)} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Continue<ArrowRight className="size-4" /></button> : <button disabled={!stepValid || saving} onClick={() => void onSave(draft)} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"><Check className="size-4" />{saving ? "Activating..." : "Save & Activate"}</button>}</footer>
+        <footer className="flex items-center justify-between border-t px-6 py-5"><button onClick={() => step === 1 ? onClose() : setStep(current => current - 1)} className="flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold"><ArrowLeft className="size-4" />{step === 1 ? "Cancel" : "Back"}</button>{step < 4 ? <button disabled={!stepValid || uploading} onClick={() => setStep(current => current + 1)} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Continue<ArrowRight className="size-4" /></button> : <button disabled={!stepValid || saving} onClick={() => void onSave({ ...draft, allocation: { ...EMPTY_ALLOCATION, ...Object.fromEntries(draft.platforms.map(platform => [platform, draft.allocation[platform]])) } as Record<Platform, number> })} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"><Check className="size-4" />{saving ? "Activating..." : "Save & Activate"}</button>}</footer>
       </div>
     </div>
   );
