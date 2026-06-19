@@ -13,6 +13,7 @@ import {
 import { broadcastToClients } from '../stream/eventQueue';
 import { CampaignConfig, Credentials, Engager, Platform } from '../types';
 import { syncXRepliesForPost } from './xReplySync';
+import { eligibleForCampaign } from './lifecycle';
 
 type TrackedPost = {
   urlId: bigint;
@@ -199,9 +200,13 @@ async function syncTrackedPost(
 
   const campaignId = String(config.id ?? config.campaign_id ?? campaignIdString(post));
   const fetched = await fetchPostEngagers(post, credentials);
-  const totals = { fetched: fetched.length, captured: 0, sent: 0, queued: 0, manual: 0, skipped: 0 };
+  const eligible = fetched.filter(engager => {
+    if (engager.action === 'liked') return config.event_settings?.likes !== false;
+    return config.event_settings?.comments !== false && eligibleForCampaign({ kind: 'comment', text: engager.text }, config.keywords ?? []);
+  });
+  const totals = { fetched: fetched.length, captured: 0, sent: 0, queued: 0, manual: 0, skipped: fetched.length - eligible.length };
 
-  for (const engager of fetched) {
+  for (const engager of eligible) {
     const isNew = await createCampaignEngagerIfNew(brandId, campaignId, engager);
     if (!isNew) {
       totals.skipped += 1;
@@ -256,6 +261,7 @@ export async function syncTrackedCampaignEngagements(brandId: number): Promise<C
       brandId,
       postIdExt: { not: null },
       submittedAt: { gte: cutoff },
+      bindingStatus: 'active',
     },
     orderBy: { submittedAt: 'desc' },
     take: 50,
@@ -292,10 +298,13 @@ export async function syncTrackedCampaignEngagements(brandId: number): Promise<C
       if (post.platform === 'x') {
         if (seenX.has(post.postIdExt)) continue;
         seenX.add(post.postIdExt);
-        const xResult = await syncXRepliesForPost(brandId, post.postIdExt);
+        const config = await getCampaignConfig(brandId, post);
+        const xResult = await syncXRepliesForPost(brandId, post.postIdExt, config ?? undefined);
         totals.fetched += xResult.fetched;
         totals.captured += xResult.captured;
         totals.queued += xResult.queued;
+        totals.sent += xResult.sent;
+        totals.skipped += xResult.skipped;
         totals.skipped += xResult.duplicates;
         continue;
       }

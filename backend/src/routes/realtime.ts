@@ -1,5 +1,6 @@
 // src/routes/realtime.ts
 import { Router, Request, Response } from 'express';
+import { ApprovalStatus, Prisma } from '@prisma/client';
 import { addSseClient, broadcastToClients, getApprovalQueue, removeFromQueue } from '../stream/eventQueue';
 import prisma from '../db/prisma';
 import { requireBrandAccess } from '../middleware/auth';
@@ -18,7 +19,6 @@ router.get('/stream/:brand_id', requireBrandAccess, (req: Request, res: Response
   res.setHeader('Content-Type',  'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection',    'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
   res.flushHeaders();
 
   res.write(`event: connected\ndata: ${JSON.stringify({ brand_id: brandId, ts: Date.now() })}\n\n`);
@@ -72,11 +72,53 @@ router.post('/webhook/meta', (req: Request, res: Response) => {
 // [in-memory..., db...]; the `index` used by approve/skip is a position into
 // that combined list.
 
-function fetchPendingApprovalRows(brandId: number) {
-  return prisma.approvalQueue.findMany({
+type ApprovalQueueIdentityRow = {
+  platform: unknown;
+  tweetId: string | null;
+  commentId: string | null;
+  postId: string | null;
+  authorId: string | null;
+  authorHandle: string | null;
+  originalText: string | null;
+};
+
+function approvalQueueIdentity(row: ApprovalQueueIdentityRow): string {
+  const platform = String(row.platform ?? '');
+  if (platform === 'x' && row.tweetId) return `x:tweet:${row.tweetId}`;
+  if (row.commentId) return `${platform}:comment:${row.commentId}`;
+  if (row.postId && row.authorId) return `${platform}:post-author:${row.postId}:${row.authorId}`;
+  return `${platform}:text:${row.authorHandle ?? ''}:${row.originalText ?? ''}`;
+}
+
+function dedupePendingApprovalRows<T extends ApprovalQueueIdentityRow>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter(row => {
+    const key = approvalQueueIdentity(row);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function duplicatePendingWhere(brandId: number, row: PendingApprovalRow): Prisma.ApprovalQueueWhereInput {
+  if (row.platform === 'x' && row.tweetId) {
+    return { brandId, platform: row.platform, status: ApprovalStatus.pending, tweetId: row.tweetId };
+  }
+  if (row.commentId) {
+    return { brandId, platform: row.platform, status: ApprovalStatus.pending, commentId: row.commentId };
+  }
+  if (row.postId && row.authorId) {
+    return { brandId, platform: row.platform, status: ApprovalStatus.pending, postId: row.postId, authorId: row.authorId };
+  }
+  return { brandId, status: ApprovalStatus.pending, queueId: row.queueId };
+}
+
+async function fetchPendingApprovalRows(brandId: number) {
+  const rows = await prisma.approvalQueue.findMany({
     where: { brandId, status: 'pending' },
     orderBy: { createdAt: 'asc' },
   });
+  return dedupePendingApprovalRows(rows);
 }
 
 type PendingApprovalRow = Awaited<ReturnType<typeof fetchPendingApprovalRows>>[number];
@@ -168,7 +210,10 @@ router.post('/queue/approve', requireBrandAccess, requireToolAccess('tool_3'), a
       tweet_id: item.meta?.tweet_id ?? undefined,
     });
 
-    await prisma.approvalQueue.update({ where: { queueId: row.queueId }, data: { status: 'approved' } });
+    await prisma.approvalQueue.updateMany({
+      where: duplicatePendingWhere(brandId, row),
+      data: { status: 'approved' },
+    });
     broadcastToClients(brandId, 'reply_approved', { index, item });
     res.json({ ok: true, item: { ...item, reply: replyText }, publish });
   } catch (err) {
@@ -198,7 +243,10 @@ router.post('/queue/skip', requireBrandAccess, requireToolAccess('tool_3'), asyn
     if (!row) { res.status(404).json({ error: 'Queue item not found' }); return; }
 
     const item = mapApprovalRow(row, brandId);
-    await prisma.approvalQueue.update({ where: { queueId: row.queueId }, data: { status: 'rejected' } });
+    await prisma.approvalQueue.updateMany({
+      where: duplicatePendingWhere(brandId, row),
+      data: { status: 'rejected' },
+    });
     broadcastToClients(brandId, 'reply_skipped', { index, item });
     res.json({ ok: true, item });
   } catch (err) {

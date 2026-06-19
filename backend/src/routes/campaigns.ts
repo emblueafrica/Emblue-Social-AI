@@ -1,5 +1,6 @@
 // src/routes/campaigns.ts
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import prisma from '../db/prisma';
 import { mapEngageCampaign, toInputJson } from '../db/mappers';
 import { engageEngager, fetchXPostEngagers, runPostUrlCampaign, extractPostId, fillVariables } from '../stream/engageEngagers';
@@ -8,6 +9,16 @@ import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { syncXRepliesForPost, trackPublishedXPost } from '../campaigns/xReplySync';
 import { CampaignConfig, PostUrlItem, Credentials, Platform } from '../types';
+import {
+  CampaignEventSettings,
+  CampaignMediaInput,
+  CampaignPlatform,
+  CampaignSourceMode,
+  DEFAULT_EVENT_SETTINGS,
+  validateActivationRequest,
+  validateMediaSet,
+} from '../campaigns/lifecycle';
+import { uploadCampaignMediaBuffer } from '../utils/cloudinary';
 import { canAccessBrandId, requireBrandAccess, requireBrandRole } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
 import {
@@ -23,6 +34,16 @@ import {
 const router = Router();
 
 const SOCIAL_RESPONSE_DAYS = 30;
+const campaignUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 10, fileSize: 100 * 1024 * 1024 },
+});
+
+type UploadedCampaignMedia = CampaignMediaInput & {
+  url: string;
+  public_id: string;
+  media_type: 'image' | 'video';
+};
 
 function dayKey(date: Date | null | undefined): string {
   return (date ?? new Date()).toISOString().slice(0, 10);
@@ -66,6 +87,55 @@ function extractXStatusId(url: unknown): string | null {
   return extractPostId('x', url.trim());
 }
 
+async function deleteCampaignPlatformPost(brandId: number, platform: CampaignPlatform, postId: string): Promise<{ deleted: boolean; status: string }> {
+  const token = await getValidToken(brandId, platform);
+  if (!token) return { deleted: false, status: 'manual_required:no_active_token' };
+  try {
+    if (platform === 'x') {
+      const response = await fetch(`https://api.x.com/2/tweets/${postId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      return response.ok ? { deleted: true, status: 'deleted' } : { deleted: false, status: `manual_required:x_delete_${response.status}` };
+    }
+    if (platform === 'facebook') {
+      const response = await fetch(`https://graph.facebook.com/v19.0/${postId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      return response.ok ? { deleted: true, status: 'deleted' } : { deleted: false, status: `manual_required:facebook_delete_${response.status}` };
+    }
+    return { deleted: false, status: 'manual_required:platform_delete_not_supported' };
+  } catch {
+    return { deleted: false, status: 'manual_required:delete_request_failed' };
+  }
+}
+
+router.post('/media/upload', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), campaignUpload.array('files', 10), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  if (!files.length) { sendValidationError(res, 'Select at least one campaign media file'); return; }
+
+  const mediaValidation = validateMediaSet(files.map(file => ({ mime_type: file.mimetype, size_bytes: file.size })));
+  if (!mediaValidation.ok) { sendValidationError(res, mediaValidation.message ?? 'Invalid campaign media'); return; }
+
+  try {
+    const media: UploadedCampaignMedia[] = [];
+    for (const file of files) {
+      const uploaded = await uploadCampaignMediaBuffer(file.buffer, file.originalname, file.mimetype, `social-emblue-ai/campaigns/${brandId}`);
+      if (uploaded.error || !uploaded.secure_url || !uploaded.public_id || !uploaded.media_type || !uploaded.mime_type || !uploaded.size_bytes) {
+        res.status(422).json({ error: 'Campaign media upload failed', message: uploaded.error ?? 'Cloudinary did not return complete media metadata' });
+        return;
+      }
+      media.push({
+        url: uploaded.secure_url,
+        public_id: uploaded.public_id,
+        media_type: uploaded.media_type,
+        mime_type: uploaded.mime_type,
+        size_bytes: uploaded.size_bytes,
+      });
+    }
+    res.status(201).json({ ok: true, media });
+  } catch (err) {
+    sendServerError(res, 'Campaign media upload failed', err);
+  }
+});
+
 // ── LIST CAMPAIGNS ────────────────────────────────────────────────────────────
 // ── CREATE / UPDATE CAMPAIGN ──────────────────────────────────────────────────
 router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
@@ -74,6 +144,12 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
     brand_id:     number;
     name:         string;
     platform:     Platform;
+    source_mode?: CampaignSourceMode;
+    post_caption?: string;
+    public_reply_template?: string;
+    private_followup_template?: string;
+    event_settings?: CampaignEventSettings;
+    activation_status?: string;
   };
 
   const brandId = getRequiredBrandId(body.brand_id);
@@ -116,6 +192,12 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
           maxPerHour: body.max_per_hour ?? 50,
           isActive: body.is_active ?? true,
           platformAllocation: toInputJson(body.platform_allocation ?? { instagram: 25, facebook: 25, tiktok: 25, x: 25 }),
+          sourceMode: body.source_mode ?? 'existing',
+          postCaption: body.post_caption ?? null,
+          publicReplyTemplate: body.public_reply_template ?? body.reply_template ?? null,
+          privateFollowupTemplate: body.private_followup_template ?? body.reply_template ?? null,
+          eventSettings: toInputJson(body.event_settings ?? DEFAULT_EVENT_SETTINGS),
+          activationStatus: body.activation_status ?? 'draft',
           updatedAt: new Date(),
         },
       });
@@ -138,6 +220,12 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
           maxPerHour: body.max_per_hour ?? 50,
           isActive: body.is_active ?? true,
           platformAllocation: toInputJson(body.platform_allocation ?? { instagram: 25, facebook: 25, tiktok: 25, x: 25 }),
+          sourceMode: body.source_mode ?? 'existing',
+          postCaption: body.post_caption ?? null,
+          publicReplyTemplate: body.public_reply_template ?? body.reply_template ?? null,
+          privateFollowupTemplate: body.private_followup_template ?? body.reply_template ?? null,
+          eventSettings: toInputJson(body.event_settings ?? DEFAULT_EVENT_SETTINGS),
+          activationStatus: body.activation_status ?? 'draft',
         },
       });
       result = mapEngageCampaign(row);
@@ -145,6 +233,194 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
     res.json({ ok: true, campaign: result });
   } catch (err) {
     sendServerError(res, 'Campaign lookup failed', err);
+  }
+});
+
+router.post('/:campaign_id/preflight', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+
+  const body = req.body as {
+    brand_id: number;
+    source_mode: CampaignSourceMode;
+    platforms: CampaignPlatform[];
+    existing_posts?: { platform: CampaignPlatform; url: string }[];
+    allocation: Partial<Record<CampaignPlatform, number>>;
+    media?: UploadedCampaignMedia[];
+  };
+  const validation = validateActivationRequest(body);
+  if (!validation.ok) { sendValidationError(res, validation.message ?? 'Invalid campaign activation request'); return; }
+
+  try {
+    const campaign = await prisma.engageCampaign.findFirst({ where: { campaignId: BigInt(campaignId), brandId } });
+    if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
+
+    const results = await Promise.all(body.platforms.map(async platform => {
+      const account = await getConnectedAccountRecord(brandId, platform);
+      const issues: string[] = [];
+      if (!account) issues.push(`${platform} is not connected.`);
+      if (body.source_mode === 'publish_new') {
+        const requiredScope = platform === 'x' ? 'tweet.write' : platform === 'facebook' ? 'pages_manage_posts' : platform === 'instagram' ? 'instagram_content_publish' : 'video.publish';
+        if (account && !hasScope(account.scope, requiredScope)) issues.push(`Missing ${requiredScope} permission.`);
+        if (body.media?.length && platform === 'x') issues.push('X media publishing is not enabled in this backend yet. Use an existing X post or publish text only.');
+      } else {
+        const url = body.existing_posts?.find(post => post.platform === platform)?.url ?? '';
+        if (!extractPostId(platform, url)) issues.push(`The ${platform} post URL could not be resolved.`);
+      }
+      return { platform, ready: issues.length === 0, issues };
+    }));
+
+    res.json({ ok: results.some(result => result.ready), platforms: results });
+  } catch (err) {
+    sendServerError(res, 'Campaign preflight failed', err);
+  }
+});
+
+router.post('/:campaign_id/activate', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+
+  const body = req.body as {
+    brand_id: number;
+    source_mode: CampaignSourceMode;
+    platforms: CampaignPlatform[];
+    existing_posts?: { platform: CampaignPlatform; url: string }[];
+    allocation: Partial<Record<CampaignPlatform, number>>;
+    media?: UploadedCampaignMedia[];
+    post_caption?: string;
+  };
+  const validation = validateActivationRequest(body);
+  if (!validation.ok) { sendValidationError(res, validation.message ?? 'Invalid campaign activation request'); return; }
+
+  try {
+    const campaign = await prisma.engageCampaign.findFirst({ where: { campaignId: BigInt(campaignId), brandId } });
+    if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
+
+    const now = new Date();
+    await prisma.campaignAsset.updateMany({
+      where: { brandId, campaignId: String(campaignId), isActive: true },
+      data: { isActive: false },
+    });
+    if (body.media?.length) {
+      await prisma.campaignAsset.createMany({
+        data: body.media.map((media, index) => ({
+          brandId,
+          campaignId: String(campaignId),
+          imageUrl: media.url,
+          publicId: media.public_id,
+          mediaType: media.media_type,
+          mimeType: media.mime_type,
+          sizeBytes: media.size_bytes,
+          sortOrder: index,
+          isActive: true,
+        })),
+      });
+    }
+
+    const results: { platform: CampaignPlatform; success: boolean; post_url?: string; post_id?: string; warning?: string; error?: string }[] = [];
+    for (const platform of body.platforms) {
+      try {
+        let postId: string | null = null;
+        let postUrl = '';
+        if (body.source_mode === 'existing') {
+          postUrl = body.existing_posts?.find(post => post.platform === platform)?.url.trim() ?? '';
+          postId = extractPostId(platform, postUrl);
+          if (!postId) throw new Error(`The ${platform} post URL could not be resolved.`);
+        } else if (platform === 'x') {
+          if (body.media?.length) throw new Error('X media publishing is not enabled yet; activate with an existing X post or remove media.');
+          const publish = await publishReply({ brand_id: brandId, platform: 'x', reply_text: body.post_caption?.trim() || campaign.postCaption?.trim() || campaign.name });
+          if (!publish.success || !publish.message_id) throw new Error(publish.error ?? 'X did not return a post ID.');
+          postId = publish.message_id;
+          postUrl = `https://x.com/i/web/status/${postId}`;
+        } else {
+          const account = await getConnectedAccountRecord(brandId, platform);
+          const requiredScope = platform === 'facebook' ? 'pages_manage_posts' : platform === 'instagram' ? 'instagram_content_publish' : 'video.publish';
+          if (!account || !hasScope(account.scope, requiredScope)) throw new Error(`${platform} publishing requires an active connection with ${requiredScope}.`);
+          throw new Error(`${platform} publishing is capability-gated and is not enabled in this deployment yet. Attach an existing post instead.`);
+        }
+
+        const oldBindings = await prisma.campaignPostUrl.findMany({
+          where: { brandId, campaignId: campaign.campaignId, platform, bindingStatus: 'active' },
+          select: { urlId: true, postIdExt: true, sourceMode: true },
+        });
+        let deletionWarning: string | undefined;
+        for (const oldBinding of oldBindings) {
+          let deleteStatus = 'not_requested';
+          if (oldBinding.sourceMode === 'publish_new' && oldBinding.postIdExt) {
+            const deletion = await deleteCampaignPlatformPost(brandId, platform, oldBinding.postIdExt);
+            deleteStatus = deletion.status;
+            if (!deletion.deleted) deletionWarning = `The previous ${platform} post could not be deleted automatically. Monitoring stopped; delete it manually or retry later.`;
+          }
+          await prisma.campaignPostUrl.update({
+            where: { urlId: oldBinding.urlId },
+            data: { bindingStatus: 'superseded', supersededAt: now, deleteStatus },
+          });
+        }
+
+        await prisma.campaignPostUrl.create({
+          data: {
+            brandId,
+            campaignId: campaign.campaignId,
+            platform,
+            postUrl,
+            postIdExt: postId,
+            includeCommenters: true,
+            includeLikers: true,
+            status: 'complete',
+            sourceMode: body.source_mode,
+            bindingStatus: 'active',
+            completedAt: now,
+          },
+        });
+        results.push({ platform, success: true, post_url: postUrl, post_id: postId, warning: deletionWarning });
+      } catch (err) {
+        results.push({ platform, success: false, error: (err as Error).message });
+      }
+    }
+
+    const succeeded = results.filter(result => result.success).length;
+    const activationStatus = succeeded === results.length ? 'active' : succeeded > 0 ? 'partial' : 'failed';
+    await prisma.engageCampaign.update({
+      where: { campaignId: campaign.campaignId },
+      data: {
+        sourceMode: body.source_mode,
+        postCaption: body.post_caption ?? campaign.postCaption,
+        activationStatus,
+        isActive: succeeded > 0,
+        lastActivatedAt: succeeded > 0 ? now : campaign.lastActivatedAt,
+        platformAllocation: toInputJson(body.allocation),
+        updatedAt: now,
+      },
+    });
+
+    res.status(succeeded > 0 ? 200 : 409).json({
+      ok: succeeded > 0,
+      campaign_id: campaignId,
+      activation_status: activationStatus,
+      platforms: results,
+      ...(succeeded === 0 ? { error: 'Campaign activation failed', message: results.map(result => `${result.platform}: ${result.error ?? 'activation failed'}`).join(' ') } : {}),
+    });
+  } catch (err) {
+    sendServerError(res, 'Campaign activation failed', err);
+  }
+});
+
+router.get('/:campaign_id/status', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const brandId = getRequiredBrandId(req.query['brand_id']);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  try {
+    const campaign = await prisma.engageCampaign.findFirst({ where: { campaignId: BigInt(campaignId), brandId } });
+    if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
+    const [bindings, media] = await Promise.all([
+      prisma.campaignPostUrl.findMany({ where: { brandId, campaignId: campaign.campaignId }, orderBy: { submittedAt: 'desc' } }),
+      prisma.campaignAsset.findMany({ where: { brandId, campaignId: String(campaignId), isActive: true }, orderBy: { sortOrder: 'asc' } }),
+    ]);
+    res.json({ campaign: mapEngageCampaign(campaign), bindings: bindings.map(binding => ({ platform: binding.platform, post_url: binding.postUrl, post_id: binding.postIdExt, status: binding.bindingStatus, source_mode: binding.sourceMode, error: binding.errorMsg, delete_status: binding.deleteStatus })), media: media.map(asset => ({ url: asset.imageUrl, public_id: asset.publicId, media_type: asset.mediaType, mime_type: asset.mimeType, size_bytes: asset.sizeBytes })) });
+  } catch (err) {
+    sendServerError(res, 'Campaign status lookup failed', err);
   }
 });
 

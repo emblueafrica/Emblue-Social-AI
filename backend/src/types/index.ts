@@ -353,6 +353,19 @@ export interface CampaignConfig {
   do_not_say?:          string[];
   brand_name?:          string;
   objective?:           string;
+  source_mode?:         'publish_new' | 'existing';
+  post_caption?:        string;
+  public_reply_template?: string;
+  private_followup_template?: string;
+  event_settings?: {
+    comments: boolean;
+    likes: boolean;
+    reposts: boolean;
+    mentions: boolean;
+    dms: boolean;
+  };
+  activation_status?:   string;
+  last_activated_at?:   Date | string | null;
 }
 
 export interface PlatformAllocation {

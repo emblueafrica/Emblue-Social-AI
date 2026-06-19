@@ -412,6 +412,16 @@ export async function engageEngager(
     return { status: 'generation_failed', error: (err as Error).message };
   }
 
+  const privateReplyText = config.private_followup_template
+    ? fillVariables(config.private_followup_template, {
+        handle: formatMentionHandle(event.author_handle),
+        link: trackedLink ?? '',
+        brand: config.brand_name ?? '',
+        keyword: event.matched_keyword ?? '',
+        action: action === 'liked' ? 'liking our post' : 'your comment',
+      })
+    : replyText;
+
   const confidence = config.reply_template ? 100 : 80;
   if (confidence < (config.auto_fire_threshold ?? 85)) {
     enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, image_url: imageUrl, tracked_link: trackedLink ?? undefined, meta: approvalMeta(event) });
@@ -422,20 +432,20 @@ export async function engageEngager(
   let result: PlatformSendResult;
   if (event.platform === 'instagram' && action === 'commented') {
     const publicReply = await sendInstagramCommentReply(event.comment_id ?? '', replyText, credentials.META_PAGE_ACCESS_TOKEN);
-    const privateReply = await sendInstagramPrivateReply(credentials.META_PAGE_ID, event.comment_id, replyText, credentials.META_PAGE_ACCESS_TOKEN);
+    const privateReply = await sendInstagramPrivateReply(credentials.META_PAGE_ID, event.comment_id, privateReplyText, credentials.META_PAGE_ACCESS_TOKEN);
     result = publicReply.success || privateReply.success
       ? { success: true, comment_id: publicReply.comment_id, message_id: privateReply.message_id, partial: !(publicReply.success && privateReply.success), error: publicReply.error ?? privateReply.error }
       : publicReply.manual_copy ? publicReply : privateReply;
   }
   else if (event.platform === 'facebook' && action === 'commented') {
     const publicReply = await sendFacebookCommentReply(event.comment_id ?? '', replyText, credentials.META_PAGE_ACCESS_TOKEN);
-    const privateReply = await sendFacebookPrivateReply(credentials.META_PAGE_ID, event.comment_id, replyText, credentials.META_PAGE_ACCESS_TOKEN);
+    const privateReply = await sendFacebookPrivateReply(credentials.META_PAGE_ID, event.comment_id, privateReplyText, credentials.META_PAGE_ACCESS_TOKEN);
     result = publicReply.success || privateReply.success
       ? { success: true, comment_id: publicReply.comment_id, message_id: privateReply.message_id, partial: !(publicReply.success && privateReply.success), error: publicReply.error ?? privateReply.error }
       : publicReply.manual_copy ? publicReply : privateReply;
   }
-  else if (event.platform === 'instagram') result = await sendInstagramDM(event.author_id ?? '', replyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
-  else if (event.platform === 'facebook')  result = await sendFacebookDM(event.author_id ?? '', replyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
+  else if (event.platform === 'instagram') result = await sendInstagramDM(event.author_id ?? '', privateReplyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
+  else if (event.platform === 'facebook')  result = await sendFacebookDM(event.author_id ?? '', privateReplyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
   else if (event.platform === 'tiktok')    result = await sendTikTokCommentReply(event.comment_id ?? '', event.post_id ?? '', replyText, credentials.TIKTOK_ACCESS_TOKEN);
   else if (event.platform === 'x')         result = await sendXReply(replyText, event.tweet_id ?? event.comment_id, credentials.X_OAUTH_TOKEN);
   else                                     result = { manual_copy: true, text: replyText };

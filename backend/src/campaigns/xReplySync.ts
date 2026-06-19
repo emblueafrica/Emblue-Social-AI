@@ -3,6 +3,10 @@ import { contextualFallbackReply, runAgent4 } from '../agents/agent4_reply_assis
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { fetchXPostEngagers } from '../stream/engageEngagers';
+import { fillVariables } from '../stream/engageEngagers';
+import { publishReply } from '../stream/publisher';
+import { eligibleForCampaign } from './lifecycle';
+import { CampaignConfig } from '../types';
 
 export type XReplySyncResult = {
   ok: true;
@@ -10,9 +14,13 @@ export type XReplySyncResult = {
   fetched: number;
   captured: number;
   queued: number;
+  sent: number;
+  skipped: number;
   duplicates: number;
   message: string;
 };
+
+const HANDLED_QUEUE_STATUSES = ['approved', 'rejected', 'posted', 'sent', 'skipped'] as const;
 
 function hasScope(scope: string | null | undefined, required: string): boolean {
   return String(scope ?? '')
@@ -25,19 +33,25 @@ export function xStatusUrl(tweetId: string): string {
   return `https://x.com/i/web/status/${tweetId}`;
 }
 
-async function generateXReplyDraft(brandId: number, text: string, authorHandle?: string | null): Promise<{
+async function generateXReplyDraft(brandId: number, text: string, authorHandle?: string | null, config?: CampaignConfig): Promise<{
   text: string;
   tone: string | null;
   confidence: number;
   riskFlags: unknown[];
 }> {
+  const template = config?.public_reply_template ?? config?.reply_template;
+  if (template) {
+    const handle = authorHandle ? (authorHandle.startsWith('@') ? authorHandle : `@${authorHandle}`) : '';
+    return { text: fillVariables(template, { handle, link: config?.cta_link ?? '', keyword: '' }), tone: config?.tone ?? 'Professional', confidence: 100, riskFlags: [] };
+  }
   const result = await runAgent4({
     brand_id: brandId,
     message: text,
     platform: 'x',
-    tone: 'warm and professional',
+    tone: config?.tone ?? 'warm and professional',
     campaign_context: {
-      objective: 'respond to inbound replies on an X campaign post',
+      objective: config?.objective ?? 'respond to inbound replies on an X campaign post',
+      cta_link: config?.cta_link,
       action_type: 'thread_reply',
     },
     ruleset: {
@@ -143,7 +157,7 @@ export async function trackPublishedXPost(brandId: number, tweetId: string): Pro
   }
 }
 
-export async function syncXRepliesForPost(brandId: number, tweetId: string): Promise<XReplySyncResult> {
+export async function syncXRepliesForPost(brandId: number, tweetId: string, config?: CampaignConfig): Promise<XReplySyncResult> {
   const [account, token] = await Promise.all([
     getConnectedAccountRecord(brandId, 'x'),
     getValidToken(brandId, 'x'),
@@ -161,12 +175,18 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string): Pro
   const fetched = (await fetchXPostEngagers(tweetId, token))
     .filter(engager => !ownAccountIds.has(engager.author_id));
 
-  const campaignId = `x-sync-${tweetId}`;
+  const campaignId = String(config?.id ?? config?.campaign_id ?? `x-sync-${tweetId}`);
   let captured = 0;
   let queued = 0;
+  let sent = 0;
+  let skipped = 0;
   let duplicates = 0;
 
   for (const engager of fetched) {
+    if (config?.event_settings?.comments === false || !eligibleForCampaign({ kind: 'reply', text: engager.text }, config?.keywords ?? [])) {
+      skipped += 1;
+      continue;
+    }
     const replyTweetId = engager.raw_tweet_id ?? engager.raw_comment_id;
     if (!replyTweetId) {
       duplicates += 1;
@@ -203,54 +223,74 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string): Pro
       where: {
         brandId,
         platform: 'x',
-        status: 'pending',
         tweetId: replyTweetId,
       },
-      select: { queueId: true },
+      orderBy: { createdAt: 'desc' },
+      select: { queueId: true, status: true },
     });
-    if (!existingQueueItem) {
-      const draft = await generateXReplyDraft(brandId, engager.text, engager.author_handle);
-      await prisma.autoEngagement.create({
-        data: {
-          brandId,
-          platform: 'x',
-          authorHandle: engager.author_handle,
-          originalText: engager.text,
-          replyText: draft.text,
-          status: 'queued_for_approval',
-          firedAt: new Date(),
-        },
-      }).catch(() => undefined);
-
-      if (saved.messageId) {
-        await prisma.replySuggestion.create({
-          data: {
-            brandId,
-            messageId: saved.messageId,
-            text: draft.text,
-            tone: draft.tone,
-            confidence: draft.confidence,
-            riskFlags: draft.riskFlags as never,
-            status: 'pending',
-          },
+    if (existingQueueItem) {
+      duplicates += 1;
+      if (HANDLED_QUEUE_STATUSES.includes((existingQueueItem.status ?? '') as never)) {
+        await prisma.campaignPostEngager.updateMany({
+          where: { brandId, campaignId, platform: 'x', authorId: replyTweetId },
+          data: { status: existingQueueItem.status, processedAt: new Date() },
         }).catch(() => undefined);
       }
+      continue;
+    }
 
-      await prisma.approvalQueue.create({
+    const draft = await generateXReplyDraft(brandId, engager.text, engager.author_handle, config);
+    await prisma.autoEngagement.create({
+      data: {
+        brandId,
+        platform: 'x',
+        authorHandle: engager.author_handle,
+        originalText: engager.text,
+        replyText: draft.text,
+        status: 'queued_for_approval',
+        firedAt: new Date(),
+      },
+    }).catch(() => undefined);
+
+    if (saved.messageId) {
+      await prisma.replySuggestion.create({
         data: {
           brandId,
-          platform: 'x',
-          authorId: engager.author_id,
-          authorHandle: engager.author_handle,
-          originalText: engager.text,
-          replyText: draft.text,
-          tweetId: replyTweetId,
+          messageId: saved.messageId,
+          text: draft.text,
+          tone: draft.tone,
           confidence: draft.confidence,
+          riskFlags: draft.riskFlags as never,
           status: 'pending',
         },
-      });
-      queued += 1;
+      }).catch(() => undefined);
     }
+
+    const threshold = config?.auto_fire_threshold ?? 85;
+    const requiresApproval = draft.confidence < threshold || draft.riskFlags.length > 0;
+    if (!requiresApproval) {
+      const publish = await publishReply({ brand_id: brandId, platform: 'x', reply_text: draft.text, tweet_id: replyTweetId });
+      if (publish.success) {
+        sent += 1;
+        await prisma.campaignPostEngager.updateMany({ where: { brandId, campaignId, platform: 'x', authorId: replyTweetId }, data: { status: 'sent', processedAt: new Date() } });
+        continue;
+      }
+    }
+
+    await prisma.approvalQueue.create({
+      data: {
+        brandId,
+        platform: 'x',
+        authorId: engager.author_id,
+        authorHandle: engager.author_handle,
+        originalText: engager.text,
+        replyText: draft.text,
+        tweetId: replyTweetId,
+        confidence: draft.confidence,
+        status: 'pending',
+      },
+    });
+    queued += 1;
   }
 
   await prisma.campaignPostUrl.updateMany({
@@ -269,9 +309,11 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string): Pro
     fetched: fetched.length,
     captured,
     queued,
+    sent,
+    skipped,
     duplicates,
     message: captured
-      ? `${captured} new X replies captured. ${queued} reply drafts are waiting in the AI Reply Engine.`
+      ? `${captured} new X replies captured. ${sent} sent automatically and ${queued} waiting in the AI Reply Engine.`
       : 'No new X replies were found for this post.',
   };
 }

@@ -9,10 +9,12 @@ import { PlatformLogo } from "@/components/PlatformLogo";
 import { useAuth } from "@/hooks/use-auth";
 import {
   ApiError,
+  activateCampaign,
   deleteCampaign,
   getCampaigns,
   getPostUrlCampaignStatus,
   preflightXCampaign,
+  preflightCampaign,
   publishXCampaignPost,
   runPostUrlCampaign,
   saveCampaign,
@@ -37,6 +39,7 @@ type Campaign = {
   platforms: Platform[];
   stat: string;
   state: "running" | "paused";
+  activationStatus: string;
   draft: CampaignDraft;
 };
 
@@ -45,13 +48,19 @@ let nextId = 1;
 const seedDraft = (over: Partial<CampaignDraft>): CampaignDraft => ({
   name: "",
   platforms: [],
+  sourceMode: "existing",
+  postCaption: "",
+  existingPosts: {},
+  media: [],
   keywords: [],
   tone: "",
   maxPerHour: 50,
   template: "Hey {{handle}}! Thanks for engaging with our post. Here's something special for you: {{link}}",
+  privateTemplate: "Hey {{handle}}, here is the information you requested: {{link}}",
   ctaLink: "",
   imageUrl: "",
   threshold: 85,
+  events: { comments: true, likes: true, reposts: true, mentions: true, dms: true },
   allocation: { instagram: 40, facebook: 25, tiktok: 20, x: 15 },
   ...over,
 });
@@ -75,7 +84,6 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
     keywords: record.keywords ?? [],
     tone: record.tone ?? "",
     maxPerHour: record.max_per_hour ?? 50,
-    template: record.reply_template ?? "",
     ctaLink: record.cta_link ?? "",
     imageUrl: record.image_url ?? "",
     threshold: record.auto_fire_threshold ?? 85,
@@ -85,6 +93,11 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
       tiktok: allocation.tiktok ?? 0,
       x: allocation.x ?? 0,
     },
+    sourceMode: record.source_mode ?? "existing",
+    postCaption: record.post_caption ?? "",
+    privateTemplate: record.private_followup_template ?? record.reply_template ?? "",
+    template: record.public_reply_template ?? record.reply_template ?? "",
+    events: record.event_settings ?? { comments: true, likes: true, reposts: true, mentions: true, dms: true },
   });
 
   return {
@@ -94,6 +107,7 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
     platforms: draft.platforms,
     stat: record.is_active === false ? "Paused" : `${record.total_sent ?? 0} sent total`,
     state: record.is_active === false ? "paused" : "running",
+    activationStatus: record.activation_status ?? (record.is_active === false ? "draft" : "active"),
     draft,
   };
 }
@@ -132,6 +146,7 @@ export default function EngageTheEngager() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
+  const [campaignActivating, setCampaignActivating] = useState(false);
 
   const campaignsQuery = useQuery({
     queryKey: ["campaigns", activeBrandId],
@@ -198,12 +213,18 @@ export default function EngageTheEngager() {
     keywords: campaign.keywords,
     tone: campaign.tone,
     reply_template: campaign.template,
+    public_reply_template: campaign.template,
+    private_followup_template: campaign.privateTemplate,
     cta_link: campaign.ctaLink,
     image_url: campaign.imageUrl,
     auto_fire_threshold: campaign.threshold,
     max_per_hour: campaign.maxPerHour,
-    is_active: true,
+    is_active: false,
     platform_allocation: campaign.allocation,
+    source_mode: campaign.sourceMode,
+    post_caption: campaign.postCaption,
+    event_settings: campaign.events,
+    activation_status: "draft",
   });
 
   const handleSaveCampaign = async (campaign: CampaignDraft) => {
@@ -212,14 +233,38 @@ export default function EngageTheEngager() {
       return;
     }
 
+    setCampaignActivating(true);
     try {
-      await saveCampaignMutation.mutateAsync(toPayload(campaign));
+      const saved = await saveCampaignMutation.mutateAsync(toPayload(campaign));
+      const campaignId = saved.campaign.campaign_id;
+      const activationPayload = {
+        brand_id: activeBrandId,
+        source_mode: campaign.sourceMode,
+        platforms: campaign.platforms,
+        existing_posts: campaign.sourceMode === "existing"
+          ? campaign.platforms.map((platform) => ({ platform, url: campaign.existingPosts[platform] ?? "" }))
+          : undefined,
+        allocation: campaign.allocation,
+        media: campaign.media,
+        post_caption: campaign.postCaption,
+      };
+      const preflight = await preflightCampaign(campaignId, activationPayload);
+      if (!preflight.platforms.some((platform) => platform.ready)) {
+        throw new Error(preflight.platforms.flatMap((platform) => platform.issues).join(" ") || "No selected platform is ready to activate.");
+      }
+      const activation = await activateCampaign(campaignId, activationPayload);
       setEditingId(null);
       setModalOpen(false);
       setApiNotice(null);
-      setToast(editingId !== null ? "Campaign updated successfully." : "A new campaign has been set successfully.");
+      const failures = activation.platforms.filter((platform) => !platform.success);
+      setToast(failures.length
+        ? `Campaign partially active. ${failures.map((platform) => `${platform.platform}: ${platform.error}`).join(" ")}`
+        : editingId !== null ? "Campaign updated and republished successfully." : "Campaign saved and activated successfully.");
+      await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
     } catch (error) {
       setApiNotice(apiErrorMessage(error));
+    } finally {
+      setCampaignActivating(false);
     }
   };
 
@@ -443,8 +488,8 @@ export default function EngageTheEngager() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-semibold">{campaign.title}</h3>
-                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${campaign.state === "running" ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>
-                          {campaign.state}
+                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${campaign.activationStatus === "active" ? "bg-emerald-100 text-emerald-700" : campaign.activationStatus === "partial" ? "bg-amber-100 text-amber-800" : "bg-slate-200 text-slate-700"}`}>
+                          {campaign.activationStatus === "active" ? campaign.state : campaign.activationStatus}
                         </span>
                       </div>
                       <p className="text-sm text-muted-foreground mt-1 text-safe">{campaign.meta}</p>
@@ -479,10 +524,10 @@ export default function EngageTheEngager() {
               <div>
                 <div className="flex items-center gap-2">
                   <PlatformLogo platform="x" size={20} />
-                  <h2 className="font-bold">X campaign test</h2>
+                  <h2 className="font-bold">X campaign diagnostics</h2>
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Check the connected X account, test recent-search access with a post URL, then publish a standalone X post or reply.
+                  Use these controls only to diagnose X permissions or manually inspect a post. New campaigns now publish or attach posts through the campaign builder.
                 </p>
               </div>
               <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
@@ -674,7 +719,10 @@ export default function EngageTheEngager() {
 
         <NewCampaignModal
           open={modalOpen}
+          brandId={activeBrandId}
           initial={editingCampaign?.draft ?? undefined}
+          saving={saveCampaignMutation.isPending || campaignActivating}
+          errorMessage={apiNotice}
           onClose={() => {
             setModalOpen(false);
             setEditingId(null);
