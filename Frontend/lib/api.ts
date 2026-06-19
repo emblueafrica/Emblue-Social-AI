@@ -334,6 +334,13 @@ export type CampaignRecord = {
   platform_allocation?: PlatformAllocation;
   include_likers?: boolean;
   include_commenters?: boolean;
+  source_mode?: "publish_new" | "existing";
+  post_caption?: string;
+  public_reply_template?: string;
+  private_followup_template?: string;
+  event_settings?: CampaignEventSettings;
+  activation_status?: string;
+  last_activated_at?: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -352,6 +359,45 @@ export type CampaignPayload = {
   max_per_hour?: number;
   is_active?: boolean;
   platform_allocation?: PlatformAllocation;
+  source_mode?: "publish_new" | "existing";
+  post_caption?: string;
+  public_reply_template?: string;
+  private_followup_template?: string;
+  event_settings?: CampaignEventSettings;
+  activation_status?: string;
+};
+
+export type CampaignEventSettings = {
+  comments: boolean;
+  likes: boolean;
+  reposts: boolean;
+  mentions: boolean;
+  dms: boolean;
+};
+
+export type CampaignMedia = {
+  url: string;
+  public_id: string;
+  media_type: "image" | "video";
+  mime_type: string;
+  size_bytes: number;
+};
+
+export type CampaignActivationPayload = {
+  brand_id: number;
+  source_mode: "publish_new" | "existing";
+  platforms: Platform[];
+  existing_posts?: { platform: Platform; url: string }[];
+  allocation: PlatformAllocation;
+  media?: CampaignMedia[];
+  post_caption?: string;
+};
+
+export type CampaignActivationResult = {
+  ok: boolean;
+  campaign_id: number;
+  activation_status: "active" | "partial" | "failed";
+  platforms: { platform: Platform; success: boolean; post_url?: string; post_id?: string; warning?: string; error?: string }[];
 };
 
 export type PostUrlCampaignPayload = {
@@ -583,6 +629,18 @@ export async function apiRequest<T>(
   return response.json() as Promise<T>;
 }
 
+async function apiUploadRequest<T>(path: string, body: FormData): Promise<T> {
+  if (!env.apiUrl) throw new ApiError({ status: 500, message: "NEXT_PUBLIC_API_URL is not configured." });
+  const token = await getAccessToken();
+  const response = await fetch(`${env.apiUrl}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body,
+  });
+  if (!response.ok) throw await parseError(response);
+  return response.json() as Promise<T>;
+}
+
 export function getAuthMe() {
   return apiRequest<AuthMeResponse>("/api/v1/auth/me");
 }
@@ -705,6 +763,31 @@ export function saveCampaign(payload: CampaignPayload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function uploadCampaignMedia(brandId: number, files: File[]) {
+  const body = new FormData();
+  body.append("brand_id", String(brandId));
+  files.forEach((file) => body.append("files", file));
+  return apiUploadRequest<{ ok: true; media: CampaignMedia[] }>("/api/v1/campaigns/media/upload", body);
+}
+
+export function preflightCampaign(campaignId: number, payload: CampaignActivationPayload) {
+  return apiRequest<{ ok: boolean; platforms: { platform: Platform; ready: boolean; issues: string[] }[] }>(`/api/v1/campaigns/${campaignId}/preflight`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function activateCampaign(campaignId: number, payload: CampaignActivationPayload) {
+  return apiRequest<CampaignActivationResult>(`/api/v1/campaigns/${campaignId}/activate`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getCampaignStatus(campaignId: number, brandId: number) {
+  return apiRequest<{ campaign: CampaignRecord; bindings: unknown[]; media: CampaignMedia[] }>(`/api/v1/campaigns/${campaignId}/status?brand_id=${brandId}`);
 }
 
 export function toggleCampaign(campaignId: number) {

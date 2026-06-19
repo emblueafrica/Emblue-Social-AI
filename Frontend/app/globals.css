@@ -156,6 +156,20 @@
   }
 }
 
+@layer components {
+  .input {
+    @apply h-11 w-full rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20;
+  }
+
+  .textarea {
+    @apply min-h-28 w-full resize-y rounded-lg border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-primary/20;
+  }
+
+  .counter {
+    @apply mt-1 text-right text-xs text-muted-foreground;
+  }
+}
+
 .portal-theme {
   --portal-blue: #1f40ff;
   --portal-blue-hover: #1a37e0;
