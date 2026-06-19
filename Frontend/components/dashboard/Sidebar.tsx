@@ -117,13 +117,13 @@ export function Sidebar({ activeLabel }: { activeLabel: string }) {
                   <li key={item.label}>
                     {item.to && !locked ? (
                       <Link href={item.to} className={cls}>
-                        <item.icon className="size-5" />
-                        <span>{item.label}</span>
+                        <item.icon className="size-5 shrink-0" />
+                        <span className="min-w-0 truncate">{item.label}</span>
                       </Link>
                     ) : (
                       <button className={cls} disabled={locked}>
-                        <item.icon className="size-5" />
-                        <span>{item.label}</span>
+                        <item.icon className="size-5 shrink-0" />
+                        <span className="min-w-0 truncate">{item.label}</span>
                         {locked && <Lock className="ml-auto size-3.5" />}
                       </button>
                     )}
@@ -162,13 +162,13 @@ export function DashHeader({ title, action }: { title: string; action?: React.Re
 
   return (
     <header className="flex items-center justify-between px-6 md:px-10 py-6 bg-card border-b">
-      <h1 className="text-xl md:text-2xl font-bold">{title}</h1>
-      <div className="flex items-center gap-6">
+      <h1 className="min-w-0 text-xl md:text-2xl font-bold truncate">{title}</h1>
+      <div className="flex shrink-0 items-center gap-6">
         {action}
         <div className="flex items-center gap-3 pl-6 border-l">
           <div className="size-10 rounded-full bg-accent text-primary flex items-center justify-center font-bold text-sm">{initials}</div>
           <div className="hidden sm:block">
-            <p className="text-sm font-semibold leading-tight">{displayName}</p>
+            <p className="max-w-[180px] truncate text-sm font-semibold leading-tight">{displayName}</p>
             <p className="text-xs text-muted-foreground capitalize">{role.replace(/_/g, " ")}</p>
           </div>
         </div>

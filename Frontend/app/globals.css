@@ -145,6 +145,17 @@
   }
 }
 
+@layer utilities {
+  .text-safe {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .layout-safe {
+    min-width: 0;
+  }
+}
+
 .portal-theme {
   --portal-blue: #1f40ff;
   --portal-blue-hover: #1a37e0;

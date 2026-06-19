@@ -130,7 +130,7 @@ export function ToolWorkspacePage({
       <Sidebar activeLabel={activeLabel} />
       <div className="flex-1 flex flex-col min-w-0">
         <DashHeader title={title} />
-        <main className="flex-1 p-6 md:p-10 space-y-6">
+        <main className="flex-1 p-6 md:p-10 space-y-6 text-safe layout-safe">
           {!enabled && !accessQuery.isLoading && (
             <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 text-amber-950">
               <div className="flex items-center gap-2">
@@ -150,10 +150,10 @@ export function ToolWorkspacePage({
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{toolId}</p>
                   <h2 className="mt-1 text-2xl font-bold">{title}</h2>
-                  <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{description}</p>
+                  <p className="mt-2 max-w-2xl text-sm text-muted-foreground text-safe">{description}</p>
                 </div>
               </div>
-              <div className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+              <div className="max-w-full rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground text-safe">
                 {endpoint}
               </div>
             </div>
@@ -270,7 +270,7 @@ export function ToolWorkspacePage({
                   <h2 className="text-lg font-bold">Last result</h2>
                 </div>
                 {lastResult ? (
-                  <pre className="mt-4 max-h-[420px] overflow-auto rounded-md bg-muted p-3 text-xs">
+                  <pre className="mt-4 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs text-safe">
                     {JSON.stringify(lastResult, null, 2)}
                   </pre>
                 ) : (

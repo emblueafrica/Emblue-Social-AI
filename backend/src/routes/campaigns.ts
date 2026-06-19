@@ -540,11 +540,8 @@ router.post('/x/sync-replies', requireBrandRole('client_owner'), requireBrandAcc
         text: engager.text,
         capturedAt: engager.timestamp ?? null,
       });
-      if (!saved.created) {
-        duplicates += 1;
-        continue;
-      }
-      captured += 1;
+      if (saved.created) captured += 1;
+      else duplicates += 1;
 
       await prisma.campaignPostEngager.create({
         data: {
@@ -560,33 +557,6 @@ router.post('/x/sync-replies', requireBrandRole('client_owner'), requireBrandAcc
         },
       }).catch(() => undefined);
 
-      const draft = await generateXReplyDraft(brandId, engager.text, engager.author_handle);
-      await prisma.autoEngagement.create({
-        data: {
-          brandId,
-          platform: 'x',
-          authorHandle: engager.author_handle,
-          originalText: engager.text,
-          replyText: draft.text,
-          status: 'queued_for_approval',
-          firedAt: new Date(),
-        },
-      }).catch(() => undefined);
-
-      if (saved.messageId) {
-        await prisma.replySuggestion.create({
-          data: {
-            brandId,
-            messageId: saved.messageId,
-            text: draft.text,
-            tone: draft.tone,
-            confidence: draft.confidence,
-            riskFlags: draft.riskFlags as never,
-            status: 'pending',
-          },
-        }).catch(() => undefined);
-      }
-
       const existingQueueItem = await prisma.approvalQueue.findFirst({
         where: {
           brandId,
@@ -597,6 +567,33 @@ router.post('/x/sync-replies', requireBrandRole('client_owner'), requireBrandAcc
         select: { queueId: true },
       });
       if (!existingQueueItem) {
+        const draft = await generateXReplyDraft(brandId, engager.text, engager.author_handle);
+        await prisma.autoEngagement.create({
+          data: {
+            brandId,
+            platform: 'x',
+            authorHandle: engager.author_handle,
+            originalText: engager.text,
+            replyText: draft.text,
+            status: 'queued_for_approval',
+            firedAt: new Date(),
+          },
+        }).catch(() => undefined);
+
+        if (saved.messageId) {
+          await prisma.replySuggestion.create({
+            data: {
+              brandId,
+              messageId: saved.messageId,
+              text: draft.text,
+              tone: draft.tone,
+              confidence: draft.confidence,
+              riskFlags: draft.riskFlags as never,
+              status: 'pending',
+            },
+          }).catch(() => undefined);
+        }
+
         await prisma.approvalQueue.create({
           data: {
             brandId,
@@ -838,6 +835,26 @@ router.get('/:brand_id', requireBrandAccess, requireToolAccess('tool_10'), async
 });
 
 // ── STATS ─────────────────────────────────────────────────────────────────────
+router.delete('/by-brand/:brand_id/:campaign_id', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.params['brand_id']);
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  if (!campaignId) { sendValidationError(res, 'campaign_id must be a positive integer'); return; }
+
+  try {
+    const existing = await prisma.engageCampaign.findFirst({
+      where: { campaignId: BigInt(campaignId), brandId },
+      select: { campaignId: true, brandId: true },
+    });
+    if (!existing) { res.status(404).json({ error: 'Campaign not found' }); return; }
+
+    await prisma.engageCampaign.delete({ where: { campaignId: existing.campaignId } });
+    res.json({ ok: true, campaign_id: campaignId });
+  } catch (err) {
+    sendServerError(res, 'Campaign delete failed', err);
+  }
+});
+
 router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.params['brand_id']);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
