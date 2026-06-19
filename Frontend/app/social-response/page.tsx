@@ -145,7 +145,7 @@ export default function SocialResponse() {
       <div className="flex-1 flex flex-col min-w-0">
         <DashHeader title="Social Response Dashboard" />
 
-        <main className="flex-1 p-6 md:p-8 space-y-6">
+        <main className="flex-1 p-6 md:p-8 space-y-6 text-safe layout-safe">
           {!activeBrandId && <StatusNotice tone="warning" title="No active brand workspace" body="This account is not attached to an approved brand workspace yet." />}
           {statsQuery.isLoading && <StatusNotice title="Loading campaign stats" body="Fetching the last 30 days of social response activity." />}
           {lockedError && <StatusNotice tone="warning" title="Social response is locked" body={lockedError.message} />}
@@ -294,7 +294,7 @@ export default function SocialResponse() {
                     <span className="text-muted-foreground w-20 shrink-0">{risk.time}</span>
                     <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${risk.tagClass}`}>{risk.tag}</span>
                     <span className={`text-[10px] font-bold px-2 py-1 rounded ${risk.sevClass}`}>{risk.severity}</span>
-                    <span className="flex-1 text-muted-foreground">{risk.text}</span>
+                    <span className="flex-1 min-w-0 text-muted-foreground text-safe">{risk.text}</span>
                     <button className="text-primary font-semibold flex items-center gap-1">
                       Investigate <ArrowRight className="size-3" />
                     </button>

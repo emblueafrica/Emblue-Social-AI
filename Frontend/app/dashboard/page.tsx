@@ -107,7 +107,7 @@ export default function Dashboard() {
       <div className="flex-1 flex flex-col min-w-0">
         <DashHeader title="Overall Performance Dashboard" />
 
-        <main className="flex-1 p-6 md:p-10 space-y-8">
+        <main className="flex-1 p-6 md:p-10 space-y-8 text-safe layout-safe">
           {!activeBrandId && (
             <DashboardNotice
               title="No active brand workspace"
@@ -158,7 +158,7 @@ export default function Dashboard() {
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <p className="text-xs text-muted-foreground">{tool.label}</p>
-                      <p className="font-semibold mt-0.5">{tool.title}</p>
+                      <p className="font-semibold mt-0.5 text-safe">{tool.title}</p>
                     </div>
                     <div className={`size-10 rounded-full ${tool.color} flex items-center justify-center text-white`}>
                       <tool.icon className="size-5" />

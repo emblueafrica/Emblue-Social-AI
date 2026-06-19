@@ -163,7 +163,7 @@ export default function EngageTheEngager() {
   });
 
   const deleteCampaignMutation = useMutation({
-    mutationFn: deleteCampaign,
+    mutationFn: (campaignId: number) => deleteCampaign(activeBrandId!, campaignId),
     onSuccess: async () => {
       if (activeBrandId) await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
     },
@@ -240,6 +240,10 @@ export default function EngageTheEngager() {
 
   const handleDeleteConfirmed = async () => {
     if (confirmDeleteId === null) return;
+    if (!activeBrandId) {
+      setApiNotice("Campaign deletion requires an active brand workspace.");
+      return;
+    }
     try {
       await deleteCampaignMutation.mutateAsync(confirmDeleteId);
       setConfirmDeleteId(null);
@@ -371,6 +375,7 @@ export default function EngageTheEngager() {
       setXSyncResult(`${result.message} Fetched: ${result.fetched}. New: ${result.captured}. Duplicates: ${result.duplicates}.`);
       setApiNotice(null);
       setToast(result.queued ? `${result.queued} replies are waiting in AI Reply Engine.` : "X replies synced.");
+      await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
       await queryClient.invalidateQueries({ queryKey: ["post-url-campaign-status", activeBrandId] });
       await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
     } catch (error) {
@@ -405,7 +410,7 @@ export default function EngageTheEngager() {
           </div>
         )}
 
-        <main className="flex-1 p-6 md:p-8 space-y-6 max-w-[1200px] w-full mx-auto">
+        <main className="flex-1 p-6 md:p-8 space-y-6 max-w-[1200px] w-full mx-auto text-safe layout-safe">
           {apiNotice && <Notice>{apiNotice}</Notice>}
           {campaignsQuery.isLoading && <Surface>Loading campaigns...</Surface>}
           {campaignsQuery.error && <Notice>{apiErrorMessage(campaignsQuery.error)}</Notice>}
@@ -442,7 +447,7 @@ export default function EngageTheEngager() {
                           {campaign.state}
                         </span>
                       </div>
-                      <p className="text-sm text-muted-foreground mt-1">{campaign.meta}</p>
+                      <p className="text-sm text-muted-foreground mt-1 text-safe">{campaign.meta}</p>
                       <div className="flex items-center gap-2 mt-3">
                         {campaign.platforms.map((platform) => (
                           <PlatformLogo key={`${campaign.id}-${platform}`} platform={platform} size={18} />
@@ -508,10 +513,10 @@ export default function EngageTheEngager() {
                   {xSyncMutation.isPending ? "Syncing..." : "Sync X replies"}
                 </button>
                 {xPreflightResult && (
-                  <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">{xPreflightResult}</p>
+                  <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground text-safe">{xPreflightResult}</p>
                 )}
                 {xSyncResult && (
-                  <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">{xSyncResult}</p>
+                  <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground text-safe">{xSyncResult}</p>
                 )}
               </div>
 
@@ -535,7 +540,7 @@ export default function EngageTheEngager() {
                     href={xPublishResult.replace(/^Published:\s*/, "")}
                     target="_blank"
                     rel="noreferrer"
-                    className="block rounded-lg bg-muted/50 p-3 text-sm font-medium text-primary hover:underline"
+                    className="block rounded-lg bg-muted/50 p-3 text-sm font-medium text-primary hover:underline text-safe"
                   >
                     {xPublishResult}
                   </a>
@@ -639,7 +644,7 @@ export default function EngageTheEngager() {
                       {postUrlStatusQuery.data.post_urls.map((item) => (
                         <div key={`${item.platform}-${item.url}`} className="rounded-lg border bg-background p-3 text-sm">
                           <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
-                            <span className="truncate font-semibold">{item.platform.toUpperCase()} · {item.url}</span>
+                            <span className="min-w-0 truncate font-semibold">{item.platform.toUpperCase()} · {item.url}</span>
                             <span className="text-muted-foreground">{item.status} · {item.total_fetched} fetched</span>
                           </div>
                           {item.error && <p className="mt-2 text-xs text-destructive">{item.error}</p>}

@@ -261,7 +261,7 @@ export default function AIReplyEngine() {
       <div className="flex-1 flex flex-col min-w-0">
         <DashHeader title="AI Reply Engine" />
 
-        <main className="flex-1 p-6 md:p-8 space-y-6">
+        <main className="flex-1 p-6 md:p-8 space-y-6 text-safe layout-safe">
           {!activeBrandId && (
             <Notice tone="warning" title="No active brand workspace">
               Live replies will appear after this account is attached to an approved brand workspace.
@@ -334,7 +334,7 @@ export default function AIReplyEngine() {
                         <input type="checkbox" className="size-4 rounded shrink-0" onClick={(event) => event.stopPropagation()} />
                         <span className={`size-2 rounded-full shrink-0 ${urgencyDot[message.urgency]}`} />
                         <PlatformIcon p={message.platform} className="size-4 shrink-0" />
-                        <span className="font-medium shrink-0 min-w-[110px]">{message.user}</span>
+                        <span className="font-medium shrink-0 w-[110px] truncate">{message.user}</span>
                         <span className="text-muted-foreground truncate flex-1 min-w-0">{message.preview}</span>
                         <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full shrink-0 whitespace-nowrap ${sentimentClass[message.sentiment]}`}>
                           {message.confidence ? `${message.confidence}%` : message.sentiment}
@@ -356,7 +356,7 @@ export default function AIReplyEngine() {
                     <span className="size-7 rounded-full bg-emerald-500 text-white flex items-center justify-center">
                       <Check className="size-4" />
                     </span>
-                    <span className="flex-1">{toast.kind === "approved" ? <>Reply approved <br />and queued for sending.</> : "Message skipped."}</span>
+                    <span className="flex-1 text-safe">{toast.kind === "approved" ? <>Reply approved <br />and queued for sending.</> : "Message skipped."}</span>
                     <button onClick={() => setToast(null)} className="text-primary font-semibold">Dismiss</button>
                   </div>
                 )}
@@ -378,14 +378,14 @@ export default function AIReplyEngine() {
                 <>
                   <div className="flex items-center gap-3 mb-4">
                     <div className="size-10 rounded-full bg-muted flex items-center justify-center font-semibold text-xs">{selected.user.replace("@", "").slice(0, 2).toUpperCase()}</div>
-                    <div className="flex-1">
-                      <p className="font-semibold text-sm">{selected.user}</p>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm truncate">{selected.user}</p>
                       <p className="text-xs text-muted-foreground flex items-center gap-1"><PlatformIcon p={selected.platform} className="size-3" />{selected.tag} | {selected.ago}</p>
                     </div>
                     <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-red-100 text-red-600">Immediate</span>
                   </div>
 
-                  <div className="bg-muted/40 rounded-xl p-4 text-sm leading-relaxed mb-3">{selected.original || selected.preview}</div>
+                  <div className="bg-muted/40 rounded-xl p-4 text-sm leading-relaxed mb-3 text-safe">{selected.original || selected.preview}</div>
 
                   <div className="flex gap-2 mb-5">
                     <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${sentimentClass[selected.sentiment]}`}>{selected.sentiment}</span>
@@ -400,7 +400,7 @@ export default function AIReplyEngine() {
                     </div>
                   </div>
 
-                  <div className="border rounded-xl p-4 text-sm leading-relaxed mb-2 max-h-44 overflow-auto">{draftBody || "No backend draft returned yet."}</div>
+                  <div className="border rounded-xl p-4 text-sm leading-relaxed mb-2 max-h-44 overflow-auto text-safe">{draftBody || "No backend draft returned yet."}</div>
                   <div className="flex items-center justify-between text-xs mb-5">
                     <button onClick={regenerateDraft} disabled={!backendDraftAvailable || replyMutation.isPending} className="flex items-center gap-1 text-primary font-semibold disabled:text-muted-foreground disabled:cursor-not-allowed">
                       <RefreshCw className={`size-3 ${replyMutation.isPending ? "animate-spin" : ""}`} />

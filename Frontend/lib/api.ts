@@ -694,8 +694,8 @@ export function getCampaignStats(brandId: number) {
   return apiRequest<CampaignStatsResponse>(`/api/v1/campaigns/${brandId}/stats`);
 }
 
-export function deleteCampaign(campaignId: number) {
-  return apiRequest<{ ok: true; campaign_id: number }>(`/api/v1/campaigns/${campaignId}`, {
+export function deleteCampaign(brandId: number, campaignId: number) {
+  return apiRequest<{ ok: true; campaign_id: number }>(`/api/v1/campaigns/by-brand/${brandId}/${campaignId}`, {
     method: "DELETE",
   });
 }
