@@ -1,5 +1,5 @@
 import prisma from '../db/prisma';
-import { runAgent4 } from '../agents/agent4_reply_assistant';
+import { contextualFallbackReply, runAgent4 } from '../agents/agent4_reply_assistant';
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { fetchXPostEngagers } from '../stream/engageEngagers';
@@ -50,14 +50,28 @@ async function generateXReplyDraft(brandId: number, text: string, authorHandle?:
   });
   const best = (result.replies ?? result.suggestions ?? [])
     .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
-  const handle = authorHandle
-    ? authorHandle.startsWith('@') ? authorHandle : `@${authorHandle}`
-    : '';
+  const fallback = contextualFallbackReply({
+    brand_id: brandId,
+    message: text,
+    platform: 'x',
+    tone: 'warm and professional',
+    campaign_context: {
+      objective: 'respond to inbound replies on an X campaign post',
+      action_type: 'thread_reply',
+    },
+    ruleset: {
+      tone: 'warm and professional',
+      do_not_say: [],
+      required_words: [],
+    },
+    author_handle: authorHandle ?? undefined,
+    reply_channel: 'thread_reply',
+  });
   return {
-    text: best?.text ?? best?.reply_text ?? `${handle ? `${handle} ` : ''}Thanks for reaching out. We will take a look and follow up.`,
-    tone: best?.tone ?? 'Professional',
-    confidence: Math.round(best?.confidence ?? 80),
-    riskFlags: best?.risk_flags ?? [],
+    text: best?.text ?? best?.reply_text ?? fallback.text,
+    tone: best?.tone ?? fallback.tone,
+    confidence: Math.round(best?.confidence ?? fallback.confidence),
+    riskFlags: best?.risk_flags ?? fallback.risk_flags ?? [],
   };
 }
 
