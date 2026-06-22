@@ -286,6 +286,11 @@ export default function EngageTheEngager() {
           max_per_day: campaign.maxPerDay,
           public_reply_enabled: campaign.publicReplyEnabled,
           direct_message_enabled: campaign.directMessageEnabled,
+          tone: campaign.tone,
+          public_reply_template: campaign.template,
+          private_followup_template: campaign.privateTemplate,
+          cta_link: campaign.ctaLink,
+          image_url: campaign.imageUrl,
           status,
         });
         const issues = (preflight?.capabilities ?? saved.capabilities).flatMap(capability => capability.issues.map(issue => `${capability.platform}: ${issue}`));
@@ -702,6 +707,10 @@ export default function EngageTheEngager() {
             setEditingDraft(null);
           }}
           onSave={(campaign, status) => void handleSaveCampaign(campaign, status)}
+          onDelete={editingId ? () => {
+            setModalOpen(false);
+            setConfirmDeleteId(editingId);
+          } : undefined}
         />
 
         {confirmDeleteId !== null && (

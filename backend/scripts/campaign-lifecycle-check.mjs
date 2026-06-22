@@ -6,6 +6,7 @@ import {
   validateActivationRequest,
   validateMediaSet,
 } from '../dist/campaigns/lifecycle.js';
+import { resolveCampaignCapability } from '../dist/campaigns/capabilities.js';
 
 assert.deepEqual(validateMediaSet([
   { mime_type: 'image/jpeg', size_bytes: 1024 },
@@ -63,5 +64,32 @@ assert.equal(evaluateKeywordCampaignEvent({
 assert.equal(evaluateKeywordCampaignEvent({
   text: 'GTBank problem again', intent: 'complaint', urgency: 4, confidence: 60,
 }, { keywords: ['GTBank problem'], intents: ['complaint'], urgencyThreshold: 3, confidenceThreshold: 75 }), 'needs_review');
+
+assert.deepEqual(resolveCampaignCapability({
+  platform: 'x',
+  connected: true,
+  scopes: 'tweet.read tweet.write users.read offline.access',
+  discoveryConfigured: true,
+}), {
+  platform: 'x',
+  keyword_discovery: 'automatic',
+  public_reply: 'automatic',
+  direct_message: 'setup_required',
+  issues: ['Reconnect X with dm.read and dm.write after X grants Direct Message API access.'],
+});
+
+assert.equal(resolveCampaignCapability({
+  platform: 'tiktok',
+  connected: true,
+  scopes: 'user.info.basic video.list',
+  discoveryConfigured: true,
+}).public_reply, 'setup_required');
+
+assert.equal(resolveCampaignCapability({
+  platform: 'instagram',
+  connected: false,
+  scopes: '',
+  discoveryConfigured: true,
+}).direct_message, 'connection_required');
 
 console.log('campaign lifecycle checks passed');

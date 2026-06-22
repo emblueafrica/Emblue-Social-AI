@@ -433,7 +433,21 @@ export type KeywordCampaignPayload = {
   max_per_day: number;
   public_reply_enabled: boolean;
   direct_message_enabled: boolean;
+  tone?: string;
+  public_reply_template?: string;
+  private_followup_template?: string;
+  cta_link?: string;
+  image_url?: string;
   status: "draft" | "active";
+};
+
+export type CampaignChannelStatus = "automatic" | "setup_required" | "connection_required";
+export type CampaignCapability = {
+  platform: Platform;
+  keyword_discovery: CampaignChannelStatus;
+  public_reply: CampaignChannelStatus;
+  direct_message: CampaignChannelStatus;
+  issues: string[];
 };
 
 export type PostUrlCampaignPayload = {
@@ -806,14 +820,14 @@ export function saveCampaign(payload: CampaignPayload) {
 }
 
 export function saveKeywordCampaign(payload: KeywordCampaignPayload) {
-  return apiRequest<{ ok: true; campaign: CampaignRecord; capabilities: { platform: Platform; keyword_discovery: boolean; public_reply: boolean; direct_message: boolean; issues: string[] }[] }>("/api/v1/campaigns/keyword", {
+  return apiRequest<{ ok: true; campaign: CampaignRecord; capabilities: CampaignCapability[] }>("/api/v1/campaigns/keyword", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
 export function preflightKeywordCampaign(brandId: number, platforms: Platform[]) {
-  return apiRequest<{ ok: true; capabilities: { platform: Platform; keyword_discovery: boolean; public_reply: boolean; direct_message: boolean; issues: string[] }[] }>("/api/v1/campaigns/keyword/preflight", {
+  return apiRequest<{ ok: true; capabilities: CampaignCapability[] }>("/api/v1/campaigns/keyword/preflight", {
     method: "POST",
     body: JSON.stringify({ brand_id: brandId, platforms }),
   });

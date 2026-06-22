@@ -10,6 +10,7 @@ import { getConnectedAccountRecord } from '../db/queries';
 import { syncXRepliesForPost, trackPublishedXPost } from '../campaigns/xReplySync';
 import { retryCampaignEngagement, syncTrackedCampaignEngagements } from '../campaigns/engagementSync';
 import { syncKeywordCampaigns } from '../campaigns/keywordCampaignSync';
+import { resolveCampaignCapability } from '../campaigns/capabilities';
 import { withSchedulerLease } from '../automation/schedulerLease';
 import { CampaignConfig, PostUrlItem, Credentials, Intent, Platform } from '../types';
 import {
@@ -59,21 +60,12 @@ function keywordAllocation(platforms: CampaignPlatform[]): Record<CampaignPlatfo
 
 async function campaignCapabilities(brandId: number, platforms: CampaignPlatform[]) {
   const accounts = await Promise.all(platforms.map(platform => getConnectedAccountRecord(brandId, platform)));
-  return platforms.map((platform, index) => {
-    const connected = Boolean(accounts[index]);
-    const dmSupported = platform === 'instagram' || platform === 'facebook';
-    return {
-      platform,
-      keyword_discovery: Boolean(process.env.APIFY_API_TOKEN),
-      public_reply: connected,
-      direct_message: connected && dmSupported,
-      issues: [
-        ...(!process.env.APIFY_API_TOKEN ? ['Keyword discovery requires APIFY_API_TOKEN.'] : []),
-        ...(!connected ? [`${platform} is not connected for outbound delivery.`] : []),
-        ...(connected && !dmSupported ? [`${platform === 'x' ? 'X' : 'TikTok'} direct messaging is not available for campaign events through the connected API permissions.`] : []),
-      ],
-    };
-  });
+  return platforms.map((platform, index) => resolveCampaignCapability({
+    platform,
+    connected: Boolean(accounts[index]),
+    scopes: accounts[index]?.scope,
+    discoveryConfigured: Boolean(process.env.APIFY_API_TOKEN),
+  }));
 }
 
 function dayKey(date: Date | null | undefined): string {
@@ -184,6 +176,7 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
     brand_id?: number; campaign_id?: number; name?: string; keywords?: unknown; platforms?: unknown;
     intent_filter?: unknown; confidence_threshold?: number; urgency_threshold?: number; reply_template_id?: number | null;
     max_per_day?: number; public_reply_enabled?: boolean; direct_message_enabled?: boolean; status?: 'draft' | 'active';
+    tone?: string; public_reply_template?: string; private_followup_template?: string; cta_link?: string; image_url?: string;
   };
   const brandId = getRequiredBrandId(body.brand_id);
   const campaignId = body.campaign_id === undefined ? null : getRequiredBrandId(body.campaign_id);
@@ -199,6 +192,11 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
   const publicReplyEnabled = body.public_reply_enabled !== false;
   const directMessageEnabled = body.direct_message_enabled !== false;
   const status = body.status === 'active' ? 'active' : 'draft';
+  const tone = typeof body.tone === 'string' ? body.tone.trim().slice(0, 80) : 'professional';
+  const publicReplyTemplate = typeof body.public_reply_template === 'string' ? body.public_reply_template.trim().slice(0, 2000) : '';
+  const privateFollowupTemplate = typeof body.private_followup_template === 'string' ? body.private_followup_template.trim().slice(0, 2000) : '';
+  const ctaLink = typeof body.cta_link === 'string' ? body.cta_link.trim().slice(0, 2048) : '';
+  const imageUrl = typeof body.image_url === 'string' ? body.image_url.trim().slice(0, 2048) : '';
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
   if (body.campaign_id !== undefined && !campaignId) { sendValidationError(res, 'campaign_id must be a positive integer'); return; }
   if (!name || name.length > 120) { sendValidationError(res, 'name is required and must be 120 characters or fewer'); return; }
@@ -221,8 +219,12 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
         name,
         platform: platforms[0] as never,
         keywords,
-        tone: 'professional',
-        replyTemplate: replyTemplate?.templateText ?? null,
+        tone,
+        replyTemplate: replyTemplate?.templateText ?? (publicReplyTemplate || null),
+        publicReplyTemplate: publicReplyTemplate || replyTemplate?.templateText || null,
+        privateFollowupTemplate: privateFollowupTemplate || publicReplyTemplate || replyTemplate?.templateText || null,
+        ctaLink: ctaLink || null,
+        imageUrl: imageUrl || null,
         autoFireThreshold: confidenceThreshold,
         maxPerDay,
         intentFilter: intents,
