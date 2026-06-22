@@ -8,9 +8,12 @@ import { publishReply, uploadXMediaFromUrl } from '../stream/publisher';
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { syncXRepliesForPost, trackPublishedXPost } from '../campaigns/xReplySync';
-import { syncTrackedCampaignEngagements } from '../campaigns/engagementSync';
-import { CampaignConfig, PostUrlItem, Credentials, Platform } from '../types';
+import { retryCampaignEngagement, syncTrackedCampaignEngagements } from '../campaigns/engagementSync';
+import { syncKeywordCampaigns } from '../campaigns/keywordCampaignSync';
+import { withSchedulerLease } from '../automation/schedulerLease';
+import { CampaignConfig, PostUrlItem, Credentials, Intent, Platform } from '../types';
 import {
+  CAMPAIGN_PLATFORMS,
   CampaignEventSettings,
   CampaignMediaInput,
   CampaignPlatform,
@@ -18,6 +21,7 @@ import {
   DEFAULT_EVENT_SETTINGS,
   validateActivationRequest,
   validateMediaSet,
+  validateKeywordCampaignInput,
 } from '../campaigns/lifecycle';
 import { uploadCampaignMediaBuffer } from '../utils/cloudinary';
 import { canAccessBrandId, requireBrandAccess, requireBrandRole } from '../middleware/auth';
@@ -45,6 +49,32 @@ type UploadedCampaignMedia = CampaignMediaInput & {
   public_id: string;
   media_type: 'image' | 'video';
 };
+
+function keywordAllocation(platforms: CampaignPlatform[]): Record<CampaignPlatform, number> {
+  const allocation = { instagram: 0, facebook: 0, tiktok: 0, x: 0 };
+  const share = Math.floor(100 / platforms.length);
+  platforms.forEach((platform, index) => { allocation[platform] = share + (index === 0 ? 100 - share * platforms.length : 0); });
+  return allocation;
+}
+
+async function campaignCapabilities(brandId: number, platforms: CampaignPlatform[]) {
+  const accounts = await Promise.all(platforms.map(platform => getConnectedAccountRecord(brandId, platform)));
+  return platforms.map((platform, index) => {
+    const connected = Boolean(accounts[index]);
+    const dmSupported = platform === 'instagram' || platform === 'facebook';
+    return {
+      platform,
+      keyword_discovery: Boolean(process.env.APIFY_API_TOKEN),
+      public_reply: connected,
+      direct_message: connected && dmSupported,
+      issues: [
+        ...(!process.env.APIFY_API_TOKEN ? ['Keyword discovery requires APIFY_API_TOKEN.'] : []),
+        ...(!connected ? [`${platform} is not connected for outbound delivery.`] : []),
+        ...(connected && !dmSupported ? [`${platform === 'x' ? 'X' : 'TikTok'} direct messaging is not available for campaign events through the connected API permissions.`] : []),
+      ],
+    };
+  });
+}
 
 function dayKey(date: Date | null | undefined): string {
   return (date ?? new Date()).toISOString().slice(0, 10);
@@ -139,6 +169,87 @@ router.post('/media/upload', requireBrandRole('client_owner'), requireBrandAcces
 
 // ── LIST CAMPAIGNS ────────────────────────────────────────────────────────────
 // ── CREATE / UPDATE CAMPAIGN ──────────────────────────────────────────────────
+router.post('/keyword/preflight', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  const platforms = Array.isArray(req.body?.platforms)
+    ? Array.from(new Set(req.body.platforms)).filter((value): value is CampaignPlatform => CAMPAIGN_PLATFORMS.includes(value as CampaignPlatform))
+    : [];
+  if (!brandId || !platforms.length) { sendValidationError(res, 'brand_id and at least one supported platform are required'); return; }
+  try { res.json({ ok: true, capabilities: await campaignCapabilities(brandId, platforms) }); }
+  catch (err) { sendServerError(res, 'Keyword campaign preflight failed', err); }
+});
+
+router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const body = req.body as {
+    brand_id?: number; campaign_id?: number; name?: string; keywords?: unknown; platforms?: unknown;
+    intent_filter?: unknown; confidence_threshold?: number; urgency_threshold?: number; reply_template_id?: number | null;
+    max_per_day?: number; public_reply_enabled?: boolean; direct_message_enabled?: boolean; status?: 'draft' | 'active';
+  };
+  const brandId = getRequiredBrandId(body.brand_id);
+  const campaignId = body.campaign_id === undefined ? null : getRequiredBrandId(body.campaign_id);
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const keywords = Array.isArray(body.keywords) ? Array.from(new Set(body.keywords.map(value => String(value).trim()).filter(Boolean))) : [];
+  const platforms = Array.isArray(body.platforms)
+    ? Array.from(new Set(body.platforms)).filter((value): value is CampaignPlatform => CAMPAIGN_PLATFORMS.includes(value as CampaignPlatform))
+    : [];
+  const intents = Array.isArray(body.intent_filter) ? Array.from(new Set(body.intent_filter)) as Intent[] : [];
+  const confidenceThreshold = Number(body.confidence_threshold ?? 75);
+  const urgencyThreshold = Number(body.urgency_threshold ?? 3);
+  const maxPerDay = Number(body.max_per_day ?? 50);
+  const publicReplyEnabled = body.public_reply_enabled !== false;
+  const directMessageEnabled = body.direct_message_enabled !== false;
+  const status = body.status === 'active' ? 'active' : 'draft';
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  if (body.campaign_id !== undefined && !campaignId) { sendValidationError(res, 'campaign_id must be a positive integer'); return; }
+  if (!name || name.length > 120) { sendValidationError(res, 'name is required and must be 120 characters or fewer'); return; }
+  const validation = validateKeywordCampaignInput({ keywords, platforms, intent_filter: intents, confidence_threshold: confidenceThreshold, urgency_threshold: urgencyThreshold, max_per_day: maxPerDay, public_reply_enabled: publicReplyEnabled, direct_message_enabled: directMessageEnabled });
+  if (!validation.ok) { sendValidationError(res, validation.message ?? 'Invalid keyword campaign'); return; }
+  const replyTemplateId = body.reply_template_id === null || body.reply_template_id === undefined ? null : getRequiredBrandId(body.reply_template_id);
+  if (body.reply_template_id !== null && body.reply_template_id !== undefined && !replyTemplateId) { sendValidationError(res, 'reply_template_id must be a positive integer'); return; }
+
+  try {
+    const replyTemplate = replyTemplateId ? await prisma.replyTemplate.findFirst({ where: { templateId: BigInt(replyTemplateId), brandId, isActive: true } }) : null;
+    if (replyTemplateId && !replyTemplate) { res.status(404).json({ error: 'Reply template not found' }); return; }
+    if (campaignId) {
+      const existing = await prisma.engageCampaign.findFirst({ where: { campaignId: BigInt(campaignId), brandId } });
+      if (!existing) { res.status(404).json({ error: 'Campaign not found' }); return; }
+      if (existing.sourceMode !== 'keyword') { res.status(409).json({ error: 'Only keyword campaigns can be updated through this endpoint.' }); return; }
+    }
+    const campaign = await prisma.$transaction(async tx => {
+      const data = {
+        brandId,
+        name,
+        platform: platforms[0] as never,
+        keywords,
+        tone: 'professional',
+        replyTemplate: replyTemplate?.templateText ?? null,
+        autoFireThreshold: confidenceThreshold,
+        maxPerDay,
+        intentFilter: intents,
+        urgencyThreshold,
+        replyTemplateId: replyTemplateId ? BigInt(replyTemplateId) : null,
+        publicReplyEnabled,
+        directMessageEnabled,
+        platformAllocation: toInputJson(keywordAllocation(platforms)),
+        sourceMode: 'keyword',
+        eventSettings: toInputJson({ ...DEFAULT_EVENT_SETTINGS, comments: publicReplyEnabled, dms: directMessageEnabled }),
+        activationStatus: status,
+        isActive: status === 'active',
+        lastActivatedAt: status === 'active' ? new Date() : null,
+        updatedAt: new Date(),
+      };
+      const saved = campaignId ? await tx.engageCampaign.update({ where: { campaignId: BigInt(campaignId) }, data }) : await tx.engageCampaign.create({ data });
+      await tx.keywordGroup.upsert({
+        where: { campaignId: saved.campaignId },
+        create: { brandId, campaignId: saved.campaignId, source: 'campaign', name, keywords, platforms, mode: 'realtime', alertUrgencyThreshold: urgencyThreshold, alertIntents: intents, isActive: status === 'active' },
+        update: { name, keywords, platforms, alertUrgencyThreshold: urgencyThreshold, alertIntents: intents, isActive: status === 'active', lastRunAt: null },
+      });
+      return saved;
+    });
+    res.status(campaignId ? 200 : 201).json({ ok: true, campaign: mapEngageCampaign(campaign), capabilities: await campaignCapabilities(brandId, platforms) });
+  } catch (err) { sendServerError(res, 'Keyword campaign save failed', err); }
+});
+
 router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
   const body = req.body as CampaignConfig & {
     campaign_id?: number;
@@ -452,10 +563,15 @@ router.post('/:campaign_id/toggle', requireBrandRole('client_owner'), requireToo
       return;
     }
 
-    const row = await prisma.engageCampaign.update({
-      where: { campaignId: existing.campaignId },
-      data: { isActive: !(existing.isActive ?? false), updatedAt: new Date() },
-      select: { campaignId: true, isActive: true },
+    const nextActive = !(existing.isActive ?? false);
+    const row = await prisma.$transaction(async tx => {
+      const updated = await tx.engageCampaign.update({
+        where: { campaignId: existing.campaignId },
+        data: { isActive: nextActive, activationStatus: nextActive ? 'active' : 'paused', updatedAt: new Date() },
+        select: { campaignId: true, isActive: true },
+      });
+      await tx.keywordGroup.updateMany({ where: { campaignId: existing.campaignId, source: 'campaign' }, data: { isActive: nextActive } });
+      return updated;
     });
     res.json({ ok: true, campaign_id: Number(row.campaignId), is_active: row.isActive });
   } catch (err) {
@@ -878,11 +994,26 @@ router.post('/:campaign_id/sync', requireBrandRole('client_owner'), requireBrand
   try {
     const campaign = await prisma.engageCampaign.findFirst({
       where: { campaignId: BigInt(campaignId), brandId },
-      select: { campaignId: true },
+      select: { campaignId: true, sourceMode: true },
     });
     if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
-    const result = await syncTrackedCampaignEngagements(brandId);
-    res.json({ ok: true, campaign_id: campaignId, ...result });
+    if (campaign.sourceMode === 'keyword') {
+      const leased = await withSchedulerLease(brandId, 'campaign_keyword_sync', 10 * 60 * 1000, () => syncKeywordCampaigns(brandId, campaignId));
+      if (!leased.acquired || !leased.value) {
+        res.setHeader('Retry-After', '30');
+        res.status(409).json({ error: 'Campaign synchronization is already running.', retry_after: 30 });
+        return;
+      }
+      res.json({ ok: true, campaign_id: campaignId, ...leased.value });
+      return;
+    }
+    const leased = await withSchedulerLease(brandId, 'campaign_post_sync', 2 * 60 * 1000, () => syncTrackedCampaignEngagements(brandId, campaignId));
+    if (!leased.acquired || !leased.value) {
+      res.setHeader('Retry-After', '30');
+      res.status(409).json({ error: 'Campaign synchronization is already running.', retry_after: 30 });
+      return;
+    }
+    res.json({ ok: true, campaign_id: campaignId, ...leased.value });
   } catch (err) {
     sendServerError(res, 'Campaign engagement sync failed', err);
   }
@@ -901,7 +1032,7 @@ router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('t
     });
     if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
 
-    const [engagers, bindings] = await Promise.all([
+    const [engagers, bindings, deliveries] = await Promise.all([
       prisma.campaignPostEngager.findMany({
         where: { brandId, campaignId: String(campaignId) },
         orderBy: { createdAt: 'desc' },
@@ -912,6 +1043,13 @@ router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('t
           action: true,
           authorHandle: true,
           originalText: true,
+          replyText: true,
+          deliveryError: true,
+          externalEventId: true,
+          source: true,
+          intent: true,
+          urgencyScore: true,
+          replyConfidence: true,
           status: true,
           processedAt: true,
           createdAt: true,
@@ -921,6 +1059,10 @@ router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('t
         where: { brandId, campaignId: BigInt(campaignId), bindingStatus: 'active' },
         orderBy: { submittedAt: 'desc' },
         select: { platform: true, postUrl: true, status: true, totalFetched: true, errorMsg: true, completedAt: true },
+      }),
+      prisma.campaignDeliveryAttempt.findMany({
+        where: { brandId, campaignId: BigInt(campaignId) },
+        orderBy: { updatedAt: 'desc' },
       }),
     ]);
 
@@ -932,10 +1074,11 @@ router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('t
         comments: engagers.filter(item => item.action === 'commented').length,
         likes: engagers.filter(item => item.action === 'liked').length,
         reposts: engagers.filter(item => item.action === 'reposted').length,
-        sent: count(['sent']),
-        queued: count(['queued', 'queued_for_approval', 'pending']),
-        manual: count(['manual_copy']),
-        failed: count(['error', 'generation_failed', 'rate_limited']),
+        sent: count(['sent', 'partial']),
+        queued: count(['queued', 'queued_for_approval', 'pending', 'needs_review']),
+        manual: count(['manual_copy', 'manual_action_required']),
+        failed: count(['error', 'failed', 'generation_failed', 'rate_limited']),
+        ignored: count(['ignored_keyword', 'ignored']),
       },
       platform_capabilities: {
         x: 'Replies are captured and answered publicly. Likes and reposts require additional X API access; unsolicited DMs are not sent.',
@@ -957,6 +1100,21 @@ router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('t
         action: item.action,
         author_handle: item.authorHandle,
         original_text: item.originalText,
+        reply_text: item.replyText,
+        delivery_error: item.deliveryError,
+        external_event_id: item.externalEventId,
+        source: item.source,
+        intent: item.intent,
+        urgency_score: item.urgencyScore,
+        reply_confidence: item.replyConfidence,
+        deliveries: deliveries.filter(delivery => delivery.engagerId === item.engagerId).map(delivery => ({
+          channel: delivery.channel,
+          status: delivery.status,
+          external_message_id: delivery.externalMessageId,
+          error: delivery.error,
+          attempt_count: delivery.attemptCount,
+          delivered_at: delivery.deliveredAt,
+        })),
         status: item.status,
         created_at: item.createdAt,
         processed_at: item.processedAt,
@@ -965,6 +1123,32 @@ router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('t
   } catch (err) {
     sendServerError(res, 'Campaign engagement lookup failed', err);
   }
+});
+
+router.post('/:campaign_id/engagements/:engager_id/retry', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const engagerId = getRequiredBrandId(req.params['engager_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId || !engagerId || !brandId) { sendValidationError(res, 'brand_id, campaign_id and engager_id must be positive integers'); return; }
+  try {
+    const result = await retryCampaignEngagement(brandId, campaignId, engagerId, typeof req.body?.reply_text === 'string' ? req.body.reply_text : undefined);
+    res.json({ ok: true, campaign_id: campaignId, engager_id: engagerId, ...result });
+  } catch (err) { sendServerError(res, 'Campaign reply retry failed', err); }
+});
+
+router.post('/:campaign_id/engagements/:engager_id/dismiss', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const engagerId = getRequiredBrandId(req.params['engager_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId || !engagerId || !brandId) { sendValidationError(res, 'brand_id, campaign_id and engager_id must be positive integers'); return; }
+  try {
+    const updated = await prisma.campaignPostEngager.updateMany({
+      where: { engagerId: BigInt(engagerId), campaignId: String(campaignId), brandId },
+      data: { status: 'dismissed', deliveryError: null, processedAt: new Date(), updatedAt: new Date() },
+    });
+    if (!updated.count) { res.status(404).json({ error: 'Campaign engagement not found' }); return; }
+    res.json({ ok: true, campaign_id: campaignId, engager_id: engagerId, status: 'dismissed' });
+  } catch (err) { sendServerError(res, 'Campaign engagement dismiss failed', err); }
 });
 
 router.get('/:brand_id', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
@@ -996,7 +1180,10 @@ router.delete('/by-brand/:brand_id/:campaign_id', requireBrandRole('client_owner
     });
     if (!existing) { res.status(404).json({ error: 'Campaign not found' }); return; }
 
-    await prisma.engageCampaign.delete({ where: { campaignId: existing.campaignId } });
+    await prisma.$transaction(async tx => {
+      await tx.keywordGroup.deleteMany({ where: { campaignId: existing.campaignId, source: 'campaign' } });
+      await tx.engageCampaign.delete({ where: { campaignId: existing.campaignId } });
+    });
     res.json({ ok: true, campaign_id: campaignId });
   } catch (err) {
     sendServerError(res, 'Campaign delete failed', err);

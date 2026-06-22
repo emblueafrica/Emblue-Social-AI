@@ -11,9 +11,11 @@ import {
   resolveInstagramMediaId,
 } from '../stream/engageEngagers';
 import { broadcastToClients } from '../stream/eventQueue';
-import { CampaignConfig, Credentials, Engager, Platform } from '../types';
+import { CampaignConfig, Credentials, Engager, EngageResult, Platform } from '../types';
 import { syncXRepliesForPost } from './xReplySync';
 import { eligibleForCampaign } from './lifecycle';
+import { runAgent1 } from '../agents/agent1_listening';
+import { Intent } from '../types';
 
 type TrackedPost = {
   urlId: bigint;
@@ -33,8 +35,11 @@ export type CampaignEngagementSyncResult = {
   sent: number;
   queued: number;
   manual: number;
+  ignored: number;
+  failed: number;
   skipped: number;
   errors: string[];
+  posts: { platform: Platform; post_url: string; fetched: number; captured: number; sent: number; ignored: number; failed: number; error?: string; synced_at: string }[];
 };
 
 function campaignIdString(post: Pick<TrackedPost, 'campaignId' | 'postIdExt' | 'urlId'>): string {
@@ -75,10 +80,10 @@ async function getCampaignConfig(brandId: number, post: TrackedPost): Promise<Ca
     },
   });
 
-  return row ? mapEngageCampaign(row) : defaultCampaignConfig(brandId, post);
+  return row ? mapEngageCampaign(row) : null;
 }
 
-async function getCredentials(brandId: number): Promise<Credentials> {
+export async function getCampaignCredentials(brandId: number): Promise<Credentials> {
   const [instagramAccount, facebookAccount, metaToken, tiktokToken, xToken] = await Promise.all([
     getConnectedAccountRecord(brandId, 'instagram'),
     getConnectedAccountRecord(brandId, 'facebook'),
@@ -120,26 +125,78 @@ async function fetchPostEngagers(post: TrackedPost, credentials: Credentials): P
   return [];
 }
 
-async function createCampaignEngagerIfNew(brandId: number, campaignId: string, engager: Engager): Promise<boolean> {
+async function createCampaignEngagerIfNew(brandId: number, campaignId: string, post: TrackedPost, engager: Engager, status = 'pending', classification?: { intent: Intent; urgency: number }): Promise<bigint | null> {
   try {
-    await prisma.campaignPostEngager.create({
+    const row = await prisma.campaignPostEngager.create({
       data: {
         brandId,
         campaignId,
         platform: engager.platform as never,
         action: engager.action,
         authorId: engagerKey(engager),
+        platformAuthorId: engager.author_id,
+        externalEventId: engagerKey(engager),
+        commentId: engager.raw_comment_id ?? engager.raw_tweet_id ?? null,
+        postId: engager.raw_video_id ?? post.postIdExt,
         authorHandle: engager.author_handle,
         originalText: engager.text,
-        status: 'pending',
+        intent: classification?.intent,
+        urgencyScore: classification?.urgency,
+        status,
       },
     });
-    return true;
+    return row.engagerId;
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      return false;
+      return null;
     }
     throw err;
+  }
+}
+
+export async function persistCampaignDeliveryOutcomes(
+  engagerId: bigint,
+  brandId: number,
+  campaignId: number,
+  platform: Platform,
+  result: EngageResult,
+): Promise<void> {
+  for (const delivery of result.deliveries ?? []) {
+    await prisma.campaignDeliveryAttempt.upsert({
+      where: { engagerId_channel: { engagerId, channel: delivery.channel } },
+      create: {
+        engagerId,
+        brandId,
+        campaignId: BigInt(campaignId),
+        platform: platform as never,
+        channel: delivery.channel,
+        status: delivery.status,
+        externalMessageId: delivery.external_message_id ?? null,
+        error: delivery.error ?? null,
+        deliveredAt: delivery.status === 'sent' ? new Date() : null,
+      },
+      update: {
+        status: delivery.status,
+        externalMessageId: delivery.external_message_id ?? null,
+        error: delivery.error ?? null,
+        attemptCount: { increment: 1 },
+        deliveredAt: delivery.status === 'sent' ? new Date() : undefined,
+        updatedAt: new Date(),
+      },
+    });
+  }
+
+  if ((result.deliveries ?? []).some(delivery => delivery.status === 'sent')) {
+    const firstDelivery = await prisma.campaignPostEngager.updateMany({
+      where: { engagerId, brandId, campaignId: String(campaignId), firstDeliveredAt: null },
+      data: { firstDeliveredAt: new Date(), updatedAt: new Date() },
+    });
+    if (firstDelivery.count) {
+      await prisma.engageCampaign.updateMany({
+        where: { brandId, campaignId: BigInt(campaignId) },
+        data: { totalSent: { increment: 1 }, updatedAt: new Date() },
+      });
+    }
   }
 }
 
@@ -147,16 +204,19 @@ async function updateCampaignEngagerStatus(
   brandId: number,
   campaignId: string,
   engager: Engager,
-  status: string
+  status: string,
+  replyText?: string,
+  deliveryError?: string,
+  replyConfidence?: number,
 ): Promise<void> {
   await prisma.campaignPostEngager.updateMany({
     where: {
       brandId,
       campaignId,
       platform: engager.platform as never,
-      authorId: engagerKey(engager),
+      externalEventId: engagerKey(engager),
     },
-    data: { status, processedAt: new Date() },
+    data: { status, replyText, deliveryError, replyConfidence, processedAt: new Date(), updatedAt: new Date() },
   }).catch(() => undefined);
 }
 
@@ -194,27 +254,47 @@ async function syncTrackedPost(
   brandId: number,
   post: TrackedPost,
   credentials: Credentials
-): Promise<Omit<CampaignEngagementSyncResult, 'checked' | 'errors'>> {
+): Promise<{ fetched: number; captured: number; sent: number; queued: number; manual: number; ignored: number; failed: number; skipped: number }> {
   const config = await getCampaignConfig(brandId, post);
-  if (!config) return { fetched: 0, captured: 0, sent: 0, queued: 0, manual: 0, skipped: 0 };
+  if (!config) return { fetched: 0, captured: 0, sent: 0, queued: 0, manual: 0, ignored: 0, failed: 0, skipped: 0 };
 
   const campaignId = String(config.id ?? config.campaign_id ?? campaignIdString(post));
   const fetched = await fetchPostEngagers(post, credentials);
-  const eligible = fetched.filter(engager => {
+  const commentEngagers = fetched.filter(engager => engager.action === 'commented');
+  const classifications = new Map<string, { intent: Intent; urgency: number }>();
+  if (commentEngagers.length) {
+    const classified = await runAgent1({
+      brand_id: brandId,
+      platform: post.platform,
+      payload_type: 'api_items',
+      source_name: 'campaign_post_sync',
+      items: commentEngagers.map(engager => ({ platform: engager.platform, kind: 'comment', text: engager.text, author_handle: engager.author_handle, author_id: engager.author_id })),
+    });
+    commentEngagers.forEach((engager, index) => classifications.set(engagerKey(engager), {
+      intent: classified.classified[index]?.intent ?? 'neutral',
+      urgency: classified.classified[index]?.urgency_score ?? 1,
+    }));
+  }
+  const isEligible = (engager: Engager) => {
     if (engager.action === 'liked') return config.event_settings?.likes !== false;
     return config.event_settings?.comments !== false && eligibleForCampaign({ kind: 'comment', text: engager.text }, config.keywords ?? []);
-  });
-  const totals = { fetched: fetched.length, captured: 0, sent: 0, queued: 0, manual: 0, skipped: fetched.length - eligible.length };
+  };
+  const totals = { fetched: fetched.length, captured: 0, sent: 0, queued: 0, manual: 0, ignored: 0, failed: 0, skipped: 0 };
 
-  for (const engager of eligible) {
-    const isNew = await createCampaignEngagerIfNew(brandId, campaignId, engager);
-    if (!isNew) {
+  for (const engager of fetched) {
+    const eligible = isEligible(engager);
+    const engagerId = await createCampaignEngagerIfNew(brandId, campaignId, post, engager, eligible ? 'pending' : 'ignored_keyword', classifications.get(engagerKey(engager)));
+    if (!engagerId) {
       totals.skipped += 1;
       continue;
     }
 
     totals.captured += 1;
     await persistSocialMessage(brandId, post, engager);
+    if (!eligible) {
+      totals.ignored += 1;
+      continue;
+    }
 
     const result = await engageEngager(
       brandId,
@@ -235,9 +315,12 @@ async function syncTrackedPost(
     if (result.status === 'sent') totals.sent += 1;
     else if (result.status === 'queued_for_approval') totals.queued += 1;
     else if (result.status === 'manual_copy') totals.manual += 1;
+    else if (result.status === 'error' || result.status === 'generation_failed' || result.status === 'rate_limited') totals.failed += 1;
     else totals.skipped += 1;
 
-    await updateCampaignEngagerStatus(brandId, campaignId, engager, result.status);
+    const status = result.status === 'queued_for_approval' ? 'needs_review' : result.status;
+    await persistCampaignDeliveryOutcomes(engagerId, brandId, Number(campaignId), engager.platform, result);
+    await updateCampaignEngagerStatus(brandId, campaignId, engager, status, result.reply, result.error, result.confidence);
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 
@@ -254,13 +337,17 @@ async function syncTrackedPost(
   return totals;
 }
 
-export async function syncTrackedCampaignEngagements(brandId: number): Promise<CampaignEngagementSyncResult> {
-  const cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+export async function syncTrackedCampaignEngagements(brandId: number, campaignId?: number): Promise<CampaignEngagementSyncResult> {
+  const activeCampaigns = await prisma.engageCampaign.findMany({
+    where: { brandId, isActive: true, ...(campaignId ? { campaignId: BigInt(campaignId) } : {}) },
+    select: { campaignId: true },
+  });
+  const activeCampaignIds = activeCampaigns.map(item => item.campaignId);
   const trackedPosts = await prisma.campaignPostUrl.findMany({
     where: {
       brandId,
+      campaignId: { in: activeCampaignIds },
       postIdExt: { not: null },
-      submittedAt: { gte: cutoff },
       bindingStatus: 'active',
     },
     orderBy: { submittedAt: 'desc' },
@@ -277,7 +364,7 @@ export async function syncTrackedCampaignEngagements(brandId: number): Promise<C
     },
   }) as TrackedPost[];
 
-  const credentials = await getCredentials(brandId);
+  const credentials = await getCampaignCredentials(brandId);
   const totals: CampaignEngagementSyncResult = {
     checked: 0,
     fetched: 0,
@@ -285,8 +372,11 @@ export async function syncTrackedCampaignEngagements(brandId: number): Promise<C
     sent: 0,
     queued: 0,
     manual: 0,
+    ignored: 0,
+    failed: 0,
     skipped: 0,
     errors: [],
+    posts: [],
   };
 
   const seenX = new Set<string>();
@@ -306,6 +396,8 @@ export async function syncTrackedCampaignEngagements(brandId: number): Promise<C
         totals.sent += xResult.sent;
         totals.skipped += xResult.skipped;
         totals.skipped += xResult.duplicates;
+        totals.failed += xResult.failed;
+        totals.posts.push({ platform: post.platform, post_url: post.postUrl, fetched: xResult.fetched, captured: xResult.captured, sent: xResult.sent, ignored: xResult.skipped, failed: xResult.failed, synced_at: new Date().toISOString() });
         continue;
       }
 
@@ -315,10 +407,15 @@ export async function syncTrackedCampaignEngagements(brandId: number): Promise<C
       totals.sent += result.sent;
       totals.queued += result.queued;
       totals.manual += result.manual;
+      totals.ignored += result.ignored;
+      totals.failed += result.failed;
       totals.skipped += result.skipped;
+      totals.posts.push({ platform: post.platform, post_url: post.postUrl, fetched: result.fetched, captured: result.captured, sent: result.sent, ignored: result.ignored, failed: result.failed, synced_at: new Date().toISOString() });
     } catch (err) {
       const message = (err as Error).message;
       totals.errors.push(`${post.platform} ${post.postIdExt}: ${message}`);
+      totals.failed += 1;
+      totals.posts.push({ platform: post.platform, post_url: post.postUrl, fetched: 0, captured: 0, sent: 0, ignored: 0, failed: 1, error: message, synced_at: new Date().toISOString() });
       await prisma.campaignPostUrl.update({
         where: { urlId: post.urlId },
         data: { status: 'error', errorMsg: message, completedAt: new Date() },
@@ -334,4 +431,54 @@ export async function syncTrackedCampaignEngagements(brandId: number): Promise<C
   }
 
   return totals;
+}
+
+export async function retryCampaignEngagement(
+  brandId: number,
+  campaignId: number,
+  engagerId: number,
+  editedReply?: string,
+): Promise<{ status: string; reply?: string; error?: string }> {
+  const [campaign, engager, credentials] = await Promise.all([
+    prisma.engageCampaign.findFirst({ where: { brandId, campaignId: BigInt(campaignId), isActive: true } }),
+    prisma.campaignPostEngager.findFirst({ where: { brandId, campaignId: String(campaignId), engagerId: BigInt(engagerId) } }),
+    getCampaignCredentials(brandId),
+  ]);
+  if (!campaign) throw new Error('Campaign is not active. Resume it before retrying this reply.');
+  if (!engager) throw new Error('Campaign engagement was not found.');
+
+  const config = mapEngageCampaign(campaign);
+  if (editedReply?.trim()) {
+    config.reply_template = editedReply.trim();
+    config.public_reply_template = editedReply.trim();
+    config.auto_fire_threshold = 0;
+  }
+  const result = await engageEngager(
+    brandId,
+    {
+      platform: engager.platform as Platform,
+      author_handle: engager.authorHandle ?? engager.platformAuthorId ?? 'customer',
+      author_id: engager.platformAuthorId,
+      comment_id: engager.commentId,
+      post_id: engager.postId,
+      tweet_id: engager.platform === 'x' ? engager.commentId : null,
+      text: engager.originalText ?? '',
+      action: engager.action === 'liked' ? 'liked' : 'commented',
+    },
+    config,
+    credentials,
+  );
+  const status = result.status === 'queued_for_approval' ? 'needs_review' : result.status;
+  await persistCampaignDeliveryOutcomes(engager.engagerId, brandId, campaignId, engager.platform as Platform, result);
+  await prisma.campaignPostEngager.update({
+    where: { engagerId: engager.engagerId },
+    data: {
+      status,
+      replyText: result.reply ?? editedReply ?? engager.replyText,
+      deliveryError: result.error ?? null,
+      processedAt: new Date(),
+      updatedAt: new Date(),
+    },
+  });
+  return { status, reply: result.reply, error: result.error };
 }

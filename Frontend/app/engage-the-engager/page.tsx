@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, CheckCircle2, ChevronDown, Pause, Play, Plus, RefreshCw, Trash2, X as XClose } from "lucide-react";
+import { Activity, CheckCircle2, ChevronDown, Pause, Pencil, Play, Plus, RefreshCw, Trash2, X as XClose } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { NewCampaignModal, type CampaignDraft } from "@/components/dashboard/NewCampaignModal";
 import { PlatformLogo } from "@/components/PlatformLogo";
@@ -11,19 +11,21 @@ import {
   ApiError,
   activateCampaign,
   deleteCampaign,
+  dismissCampaignEngagement,
   getCampaignEngagements,
   getCampaigns,
   getCampaignStatus,
   getPostUrlCampaignStatus,
-  preflightXCampaign,
   preflightCampaign,
-  publishXCampaignPost,
+  preflightKeywordCampaign,
+  retryCampaignEngagement,
   runPostUrlCampaign,
   saveCampaign,
+  saveKeywordCampaign,
   syncCampaignEngagements,
-  syncXReplies,
   toggleCampaign,
   type CampaignPayload,
+  type CampaignEngagementResponse,
   type CampaignRecord,
 } from "@/lib/api";
 
@@ -58,6 +60,12 @@ const seedDraft = (over: Partial<CampaignDraft>): CampaignDraft => ({
   keywords: [],
   tone: "",
   maxPerHour: 50,
+  maxPerDay: 50,
+  intentFilter: ["complaint", "purchase_intent"],
+  urgencyThreshold: 3,
+  replyTemplateId: null,
+  publicReplyEnabled: true,
+  directMessageEnabled: true,
   template: "Hey {{handle}}! Thanks for engaging with our post. Here's something special for you: {{link}}",
   privateTemplate: "Hey {{handle}}, here is the information you requested: {{link}}",
   ctaLink: "",
@@ -87,6 +95,12 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
     keywords: record.keywords ?? [],
     tone: record.tone ?? "",
     maxPerHour: record.max_per_hour ?? 50,
+    maxPerDay: record.max_per_day ?? 50,
+    intentFilter: record.intent_filter ?? [],
+    urgencyThreshold: record.urgency_threshold ?? 3,
+    replyTemplateId: record.reply_template_id ?? null,
+    publicReplyEnabled: record.public_reply_enabled ?? true,
+    directMessageEnabled: record.direct_message_enabled ?? true,
     ctaLink: record.cta_link ?? "",
     imageUrl: record.image_url ?? "",
     threshold: record.auto_fire_threshold ?? 85,
@@ -138,12 +152,7 @@ export default function EngageTheEngager() {
   const [allocation, setAllocation] = useState({ instagram: 40, facebook: 25, tiktok: 20, x: 15 });
   const [postTemplate, setPostTemplate] = useState("");
   const [postCtaLink, setPostCtaLink] = useState("");
-  const [xTweetUrl, setXTweetUrl] = useState("");
-  const [xPostText, setXPostText] = useState("");
-  const [xPreflightResult, setXPreflightResult] = useState<string | null>(null);
-  const [xSyncResult, setXSyncResult] = useState<string | null>(null);
   const [lastPostUrlCampaignId, setLastPostUrlCampaignId] = useState<string | null>(null);
-  const [xPublishResult, setXPublishResult] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingDraft, setEditingDraft] = useState<CampaignDraft | null>(null);
@@ -152,6 +161,7 @@ export default function EngageTheEngager() {
   const [toast, setToast] = useState<string | null>(null);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
   const [campaignActivating, setCampaignActivating] = useState(false);
+  const [activityDrafts, setActivityDrafts] = useState<Record<string, string>>({});
 
   const campaignsQuery = useQuery({
     queryKey: ["campaigns", activeBrandId],
@@ -173,6 +183,7 @@ export default function EngageTheEngager() {
     queryFn: () => getCampaignEngagements(activityCampaignId!, activeBrandId!),
     enabled: Boolean(activeBrandId && activityCampaignId),
     retry: false,
+    refetchInterval: 15000,
   });
 
   const saveCampaignMutation = useMutation({
@@ -181,6 +192,7 @@ export default function EngageTheEngager() {
       if (activeBrandId) await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
     },
   });
+  const saveKeywordCampaignMutation = useMutation({ mutationFn: saveKeywordCampaign });
 
   const toggleCampaignMutation = useMutation({
     mutationFn: toggleCampaign,
@@ -197,11 +209,14 @@ export default function EngageTheEngager() {
   });
 
   const runPostUrlMutation = useMutation({ mutationFn: runPostUrlCampaign });
-  const xPreflightMutation = useMutation({ mutationFn: preflightXCampaign });
-  const xPublishMutation = useMutation({ mutationFn: publishXCampaignPost });
-  const xSyncMutation = useMutation({ mutationFn: syncXReplies });
   const campaignSyncMutation = useMutation({
     mutationFn: (campaignId: number) => syncCampaignEngagements(campaignId, activeBrandId!),
+  });
+  const campaignRetryMutation = useMutation({
+    mutationFn: ({ campaignId, engagerId, replyText }: { campaignId: number; engagerId: number; replyText?: string }) => retryCampaignEngagement(campaignId, engagerId, activeBrandId!, replyText),
+  });
+  const campaignDismissMutation = useMutation({
+    mutationFn: ({ campaignId, engagerId }: { campaignId: number; engagerId: number }) => dismissCampaignEngagement(campaignId, engagerId, activeBrandId!),
   });
 
   useEffect(() => {
@@ -248,7 +263,7 @@ export default function EngageTheEngager() {
     activation_status: "draft",
   });
 
-  const handleSaveCampaign = async (campaign: CampaignDraft) => {
+  const handleSaveCampaign = async (campaign: CampaignDraft, status: "draft" | "active") => {
     if (!activeBrandId) {
       setApiNotice("Connect this account to a brand workspace before creating campaigns.");
       return;
@@ -256,6 +271,30 @@ export default function EngageTheEngager() {
 
     setCampaignActivating(true);
     try {
+      if (campaign.sourceMode === "keyword") {
+        const preflight = status === "active" ? await preflightKeywordCampaign(activeBrandId, campaign.platforms) : null;
+        const saved = await saveKeywordCampaignMutation.mutateAsync({
+          brand_id: activeBrandId,
+          ...(editingId && editingId > 0 ? { campaign_id: editingId } : {}),
+          name: campaign.name,
+          keywords: campaign.keywords,
+          platforms: campaign.platforms,
+          intent_filter: campaign.intentFilter,
+          confidence_threshold: campaign.threshold,
+          urgency_threshold: campaign.urgencyThreshold,
+          reply_template_id: campaign.replyTemplateId,
+          max_per_day: campaign.maxPerDay,
+          public_reply_enabled: campaign.publicReplyEnabled,
+          direct_message_enabled: campaign.directMessageEnabled,
+          status,
+        });
+        const issues = (preflight?.capabilities ?? saved.capabilities).flatMap(capability => capability.issues.map(issue => `${capability.platform}: ${issue}`));
+        setEditingId(null); setEditingDraft(null); setModalOpen(false);
+        setApiNotice(issues.length ? issues.join(" ") : null);
+        setToast(status === "draft" ? "Keyword campaign saved as draft." : "Keyword campaign launched.");
+        await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+        return;
+      }
       const saved = await saveCampaignMutation.mutateAsync(toPayload(campaign));
       const campaignId = saved.campaign.campaign_id;
       const activationPayload = {
@@ -269,6 +308,11 @@ export default function EngageTheEngager() {
         media: campaign.media,
         post_caption: campaign.postCaption,
       };
+      if (status === "draft") {
+        setEditingId(null); setEditingDraft(null); setModalOpen(false); setApiNotice(null); setToast("Campaign saved as draft.");
+        await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+        return;
+      }
       const preflight = await preflightCampaign(campaignId, activationPayload);
       if (!preflight.platforms.some((platform) => platform.ready)) {
         throw new Error(preflight.platforms.flatMap((platform) => platform.issues).join(" ") || "No selected platform is ready to activate.");
@@ -318,10 +362,29 @@ export default function EngageTheEngager() {
       const result = await campaignSyncMutation.mutateAsync(campaignId);
       await activityQuery.refetch();
       await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
-      setToast(`Sync complete: ${result.captured} new, ${result.sent} sent, ${result.queued} queued.${result.errors.length ? ` ${result.errors.length} error(s).` : ""}`);
+      setToast(`Sync complete: ${result.captured} new, ${result.sent} sent, ${result.ignored} ignored, ${result.failed} failed.${result.errors.length ? ` ${result.errors.join(" ")}` : ""}`);
     } catch (error) {
       setApiNotice(apiErrorMessage(error));
     }
+  };
+
+  const handleRetryEngagement = async (engagerId: number, replyText?: string) => {
+    if (!activityCampaignId) return;
+    try {
+      const result = await campaignRetryMutation.mutateAsync({ campaignId: activityCampaignId, engagerId, replyText });
+      await activityQuery.refetch();
+      setToast(result.status === "sent" ? "Campaign reply sent." : `Campaign reply status: ${result.status.replaceAll("_", " ")}.`);
+      if (result.error) setApiNotice(result.error);
+    } catch (error) { setApiNotice(apiErrorMessage(error)); }
+  };
+
+  const handleDismissEngagement = async (engagerId: number) => {
+    if (!activityCampaignId) return;
+    try {
+      await campaignDismissMutation.mutateAsync({ campaignId: activityCampaignId, engagerId });
+      await activityQuery.refetch();
+      setToast("Campaign engagement dismissed.");
+    } catch (error) { setApiNotice(apiErrorMessage(error)); }
   };
 
   const handleToggleCampaign = async (campaignId: number, currentState: "running" | "paused") => {
@@ -396,95 +459,6 @@ export default function EngageTheEngager() {
     }
   };
 
-  const handleXPreflight = async () => {
-    if (!activeBrandId) {
-      setApiNotice("Connect this account to a brand workspace before testing X.");
-      return;
-    }
-    try {
-      const result = await xPreflightMutation.mutateAsync({
-        brand_id: activeBrandId,
-        tweet_url: xTweetUrl.trim() || undefined,
-      });
-      const scopeSummary = Object.entries(result.scopes)
-        .map(([key, ok]) => `${key.replace(/_/g, ".")}: ${ok ? "yes" : "no"}`)
-        .join(" | ");
-      const searchSummary = result.recent_search.checked
-        ? result.recent_search.ok
-          ? `Recent search OK (${result.recent_search.engager_count ?? 0} replies found).`
-          : `Recent search failed: ${result.recent_search.error ?? "unknown error"}`
-        : "Recent search not checked.";
-      setXPreflightResult(`${result.connected ? `Connected as ${result.account_handle || "X account"}.` : "X is not connected."} ${scopeSummary}. ${searchSummary}${result.diagnostics.length ? ` Issues: ${result.diagnostics.join(" ")}` : ""}`);
-      setApiNotice(null);
-    } catch (error) {
-      setXPreflightResult(null);
-      setApiNotice(apiErrorMessage(error));
-    }
-  };
-
-  const handleXPublish = async () => {
-    if (!activeBrandId) {
-      setApiNotice("Connect this account to a brand workspace before publishing to X.");
-      return;
-    }
-    const text = xPostText.trim();
-    if (!text) {
-      setApiNotice("Write the X post text before publishing.");
-      return;
-    }
-    if (text.length > 280) {
-      setApiNotice("X post text must be 280 characters or fewer.");
-      return;
-    }
-    try {
-      const result = await xPublishMutation.mutateAsync({
-        brand_id: activeBrandId,
-        text,
-        reply_to_url: xTweetUrl.trim() || undefined,
-      });
-      if (!result.message_id) {
-        setXPublishResult(null);
-        setApiNotice("X accepted the request response but did not return a post ID. Treat this as not posted and check backend logs.");
-        return;
-      }
-      const publishUrl = result.message_id ? `https://x.com/i/web/status/${result.message_id}` : null;
-      setXPublishResult(`Published: ${publishUrl}`);
-      if (publishUrl) setXTweetUrl(publishUrl);
-      setXSyncResult(null);
-      setApiNotice(null);
-      setToast(result.reply_to_tweet_id ? "X reply published." : "X post published.");
-    } catch (error) {
-      setApiNotice(apiErrorMessage(error));
-    }
-  };
-
-  const handleXReplySync = async () => {
-    if (!activeBrandId) {
-      setApiNotice("Connect this account to a brand workspace before syncing X replies.");
-      return;
-    }
-    if (!xTweetUrl.trim()) {
-      setApiNotice("Paste the published X post URL before syncing replies.");
-      return;
-    }
-
-    try {
-      const result = await xSyncMutation.mutateAsync({
-        brand_id: activeBrandId,
-        tweet_url: xTweetUrl.trim(),
-      });
-      setXSyncResult(`${result.message} Fetched: ${result.fetched}. New: ${result.captured}. Duplicates: ${result.duplicates}.`);
-      setApiNotice(null);
-      setToast(result.queued ? `${result.queued} replies are waiting in AI Reply Engine.` : "X replies synced.");
-      await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
-      await queryClient.invalidateQueries({ queryKey: ["post-url-campaign-status", activeBrandId] });
-      await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
-    } catch (error) {
-      setXSyncResult(null);
-      setApiNotice(apiErrorMessage(error));
-    }
-  };
-
   return (
     <div className="min-h-screen flex bg-muted/30">
       <Sidebar activeLabel="Engage the Engager" />
@@ -540,7 +514,8 @@ export default function EngageTheEngager() {
             {campaigns.length ? (
               <ul className="divide-y">
                 {campaigns.map((campaign) => (
-                  <li key={campaign.id} className="py-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <li key={campaign.id} className="py-5">
+                    <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-semibold">{campaign.title}</h3>
@@ -556,18 +531,33 @@ export default function EngageTheEngager() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm text-muted-foreground">{campaign.stat}</span>
-                      <button onClick={() => void handleEditCampaign(campaign)} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">Edit</button>
-                      <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Activity className="size-4" />Activity</button>
-                      <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted flex items-center gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="mr-1 whitespace-nowrap text-sm text-muted-foreground">{campaign.stat}</span>
+                      <button onClick={() => void handleEditCampaign(campaign)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Pencil className="size-4 shrink-0" />Edit</button>
+                      <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Activity className="size-4 shrink-0" />Activity</button>
+                      <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">
                         {campaign.state === "paused" ? <Play className="size-4" /> : <Pause className="size-4" />}
                         {campaign.state === "paused" ? "Resume" : "Pause"}
                       </button>
-                      <button onClick={() => setConfirmDeleteId(campaign.id)} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted text-destructive flex items-center gap-2">
+                      <button onClick={() => setConfirmDeleteId(campaign.id)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium text-destructive hover:bg-muted">
                         <Trash2 className="size-4" /> Delete
                       </button>
                     </div>
+                    </div>
+                    {activityCampaignId === campaign.id && (
+                      <CampaignActivityPanel
+                        data={activityQuery.data}
+                        loading={activityQuery.isLoading}
+                        error={activityQuery.error}
+                        syncing={campaignSyncMutation.isPending}
+                        mutating={campaignRetryMutation.isPending || campaignDismissMutation.isPending}
+                        drafts={activityDrafts}
+                        onDraftChange={(id, value) => setActivityDrafts(current => ({ ...current, [id]: value }))}
+                        onSync={() => void handleSyncCampaign(campaign.id)}
+                        onRetry={(id, reply) => void handleRetryEngagement(id, reply)}
+                        onDismiss={(id) => void handleDismissEngagement(id)}
+                      />
+                    )}
                   </li>
                 ))}
               </ul>
@@ -575,120 +565,6 @@ export default function EngageTheEngager() {
               <div className="py-12 text-sm text-muted-foreground">No backend campaigns found for this brand yet.</div>
             )}
 
-            {activityCampaignId !== null && (
-              <div className="mt-5 border-t pt-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h3 className="font-semibold">Campaign engagement activity</h3>
-                    <p className="mt-1 text-xs text-muted-foreground">Captured platform activity and the actual delivery result for each person.</p>
-                  </div>
-                  <button onClick={() => void handleSyncCampaign(activityCampaignId)} disabled={campaignSyncMutation.isPending} className="flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
-                    <RefreshCw className={`size-4 ${campaignSyncMutation.isPending ? "animate-spin" : ""}`} />
-                    {campaignSyncMutation.isPending ? "Syncing..." : "Sync now"}
-                  </button>
-                </div>
-
-                {activityQuery.isLoading && <p className="py-6 text-sm text-muted-foreground">Loading campaign activity...</p>}
-                {activityQuery.error && <p className="py-4 text-sm text-destructive">{apiErrorMessage(activityQuery.error)}</p>}
-                {activityQuery.data && (
-                  <div className="mt-4 space-y-4">
-                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-                      {Object.entries(activityQuery.data.summary).map(([label, value]) => <MiniStat key={label} label={label} value={value} />)}
-                    </div>
-                    {activityQuery.data.bindings.map((binding) => (
-                      <div key={`${binding.platform}-${binding.url}`} className="border-l-2 border-primary pl-3 text-xs">
-                        <p className="break-all font-medium">{binding.platform.toUpperCase()} - {binding.url}</p>
-                        <p className="mt-1 text-muted-foreground">{binding.status ?? "pending"} - {binding.total_fetched} fetched{binding.error ? ` - ${binding.error}` : ""}</p>
-                      </div>
-                    ))}
-                    <p className="text-xs text-muted-foreground">{activityQuery.data.platform_capabilities.x}</p>
-                    {activityQuery.data.engagers.length ? (
-                      <div className="overflow-x-auto">
-                        <table className="w-full min-w-[680px] text-left text-sm">
-                          <thead className="border-b text-xs text-muted-foreground"><tr><th className="py-2 pr-3">Person</th><th className="py-2 pr-3">Platform</th><th className="py-2 pr-3">Action</th><th className="py-2 pr-3">Message</th><th className="py-2">Delivery</th></tr></thead>
-                          <tbody className="divide-y">{activityQuery.data.engagers.map((item) => <tr key={item.id}><td className="py-3 pr-3 font-medium">{item.author_handle || "Unknown"}</td><td className="py-3 pr-3 capitalize">{item.platform}</td><td className="py-3 pr-3 capitalize">{item.action}</td><td className="max-w-sm py-3 pr-3"><span className="block truncate">{item.original_text || "No message text"}</span></td><td className="py-3 font-medium capitalize">{(item.status || "pending").replaceAll("_", " ")}</td></tr>)}</tbody>
-                        </table>
-                      </div>
-                    ) : <p className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No engagement has been captured yet. Use Sync now after someone replies to the tracked post.</p>}
-                  </div>
-                )}
-              </div>
-            )}
-          </Surface>
-
-          <Surface>
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <PlatformLogo platform="x" size={20} />
-                  <h2 className="font-bold">X campaign diagnostics</h2>
-                </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Use these controls only to diagnose X permissions or manually inspect a post. New campaigns now publish or attach posts through the campaign builder.
-                </p>
-              </div>
-              <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
-                {xPostText.length}/280
-              </span>
-            </div>
-
-            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_1fr]">
-              <div className="space-y-3">
-                <input
-                  value={xTweetUrl}
-                  onChange={(event) => setXTweetUrl(event.target.value)}
-                  placeholder="Optional: https://x.com/brand/status/123..."
-                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
-                />
-                <button
-                  onClick={() => void handleXPreflight()}
-                  disabled={xPreflightMutation.isPending}
-                  className="rounded-lg border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-60"
-                >
-                  {xPreflightMutation.isPending ? "Checking..." : "Check X readiness"}
-                </button>
-                <button
-                  onClick={() => void handleXReplySync()}
-                  disabled={xSyncMutation.isPending || !xTweetUrl.trim()}
-                  className="ml-2 rounded-lg border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-60"
-                >
-                  {xSyncMutation.isPending ? "Syncing..." : "Sync X replies"}
-                </button>
-                {xPreflightResult && (
-                  <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground text-safe">{xPreflightResult}</p>
-                )}
-                {xSyncResult && (
-                  <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground text-safe">{xSyncResult}</p>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                <textarea
-                  value={xPostText}
-                  onChange={(event) => setXPostText(event.target.value)}
-                  maxLength={280}
-                  placeholder="Write the X campaign post or reply..."
-                  className="min-h-[110px] w-full rounded-lg border bg-background px-3 py-2 text-sm"
-                />
-                <button
-                  onClick={() => void handleXPublish()}
-                  disabled={xPublishMutation.isPending || !xPostText.trim()}
-                  className="rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
-                >
-                  {xPublishMutation.isPending ? "Publishing..." : xTweetUrl.trim() ? "Publish X reply" : "Publish X post"}
-                </button>
-                {xPublishResult && (
-                  <a
-                    href={xPublishResult.replace(/^Published:\s*/, "")}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block rounded-lg bg-muted/50 p-3 text-sm font-medium text-primary hover:underline text-safe"
-                  >
-                    {xPublishResult}
-                  </a>
-                )}
-              </div>
-            </div>
           </Surface>
 
           <Surface>
@@ -818,14 +694,14 @@ export default function EngageTheEngager() {
           open={modalOpen}
           brandId={activeBrandId}
           initial={editingDraft ?? undefined}
-          saving={saveCampaignMutation.isPending || campaignActivating}
+          saving={saveCampaignMutation.isPending || saveKeywordCampaignMutation.isPending || campaignActivating}
           errorMessage={apiNotice}
           onClose={() => {
             setModalOpen(false);
             setEditingId(null);
             setEditingDraft(null);
           }}
-          onSave={(campaign) => void handleSaveCampaign(campaign)}
+          onSave={(campaign, status) => void handleSaveCampaign(campaign, status)}
         />
 
         {confirmDeleteId !== null && (
@@ -849,6 +725,44 @@ export default function EngageTheEngager() {
 
 function Surface({ children }: { children: React.ReactNode }) {
   return <section className="bg-card rounded-2xl shadow-sm p-6">{children}</section>;
+}
+
+function CampaignActivityPanel({ data, loading, error, syncing, mutating, drafts, onDraftChange, onSync, onRetry, onDismiss }: {
+  data?: CampaignEngagementResponse;
+  loading: boolean;
+  error: unknown;
+  syncing: boolean;
+  mutating: boolean;
+  drafts: Record<string, string>;
+  onDraftChange: (id: string, value: string) => void;
+  onSync: () => void;
+  onRetry: (id: number, reply?: string) => void;
+  onDismiss: (id: number) => void;
+}) {
+  return (
+    <div className="mt-5 border-t pt-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div><h3 className="font-semibold">Campaign engagement activity</h3><p className="mt-1 text-xs text-muted-foreground">Auto-refreshes every 15 seconds. Campaign replies are handled here, not in the AI Reply Engine.</p></div>
+        <button onClick={onSync} disabled={syncing} className="flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"><RefreshCw className={`size-4 shrink-0 ${syncing ? "animate-spin" : ""}`} />{syncing ? "Syncing..." : "Sync now"}</button>
+      </div>
+      {loading && <p className="py-6 text-sm text-muted-foreground">Loading campaign activity...</p>}
+      {Boolean(error) && <p className="py-4 text-sm text-destructive">{apiErrorMessage(error)}</p>}
+      {data && <div className="mt-4 space-y-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">{Object.entries(data.summary).map(([label, value]) => <MiniStat key={label} label={label} value={value} />)}</div>
+        {data.bindings.map(binding => <div key={`${binding.platform}-${binding.url}`} className="border-l-2 border-primary pl-3 text-xs"><p className="break-all font-medium">{binding.platform.toUpperCase()} - {binding.url}</p><p className="mt-1 text-muted-foreground">{binding.status ?? "pending"} - {binding.total_fetched} fetched{binding.error ? ` - ${binding.error}` : ""}</p></div>)}
+        {data.engagers.length ? <div className="space-y-3">{data.engagers.map(item => {
+          const actionable = ["needs_review", "partial", "failed", "error", "generation_failed", "rate_limited", "manual_copy", "manual_action_required", "bot_blocked"].includes(item.status ?? "");
+          const draft = drafts[item.id] ?? item.reply_text ?? "";
+          return <div key={item.id} className="grid min-w-0 gap-3 border-t pt-3 lg:grid-cols-[140px_110px_minmax(0,1fr)_150px]">
+            <div className="min-w-0"><p className="truncate text-sm font-medium">{item.author_handle || "Unknown"}</p><p className="text-xs capitalize text-muted-foreground">{item.platform} - {item.action}</p>{item.intent && <p className="mt-1 text-xs text-muted-foreground">{item.intent.replaceAll("_", " ")} · urgency {item.urgency_score ?? "-"} · confidence {item.reply_confidence ?? "-"}%</p>}</div>
+            <span className="h-fit w-fit whitespace-nowrap rounded-full bg-muted px-2.5 py-1 text-xs font-semibold capitalize">{(item.status || "pending").replaceAll("_", " ")}</span>
+            <div className="min-w-0"><p className="break-words text-sm">{item.original_text || "No message text"}</p>{item.delivery_error && <p className="mt-1 break-words text-xs text-destructive">{item.delivery_error}</p>}{item.deliveries.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{item.deliveries.map(delivery => <span key={delivery.channel} title={delivery.error ?? undefined} className="whitespace-nowrap rounded-full border px-2 py-1 text-xs capitalize">{delivery.channel.replaceAll("_", " ")}: {delivery.status.replaceAll("_", " ")}</span>)}</div>}{actionable && <textarea value={draft} onChange={event => onDraftChange(item.id, event.target.value)} className="mt-2 min-h-20 w-full rounded-lg border bg-background p-2 text-sm" placeholder="Edit the reply before retrying" />}</div>
+            {actionable && <div className="flex flex-wrap items-start gap-2"><button disabled={mutating} onClick={() => onRetry(Number(item.id), draft || undefined)} className="shrink-0 whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">Retry reply</button><button disabled={mutating} onClick={() => onDismiss(Number(item.id))} className="shrink-0 whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-50">Dismiss</button></div>}
+          </div>;
+        })}</div> : <p className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No engagement has been captured yet. Use Sync now after someone replies to the tracked post.</p>}
+      </div>}
+    </div>
+  );
 }
 
 function Notice({ children }: { children: React.ReactNode }) {

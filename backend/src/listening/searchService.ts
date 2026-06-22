@@ -256,6 +256,8 @@ async function broadcastSearchAlerts(
 export async function runListeningSearch(runId: number): Promise<void> {
   const run = await prisma.searchRun.findUnique({ where: { runId: BigInt(runId) } });
   if (!run) throw new Error(`Search run ${runId} not found`);
+  const group = run.groupId ? await prisma.keywordGroup.findUnique({ where: { groupId: run.groupId }, select: { source: true } }) : null;
+  const campaignOwned = group?.source === 'campaign';
 
   await prisma.searchRun.update({
     where: { runId: BigInt(runId) },
@@ -284,8 +286,8 @@ export async function runListeningSearch(runId: number): Promise<void> {
     const volume = buildVolumeChart(classified, granularity);
     await saveSearchVolume(runId, volume.buckets);
 
-    const insightsSummary = await enrichRunWithAgents(run.brandId, classified);
-    await broadcastSearchAlerts(run.brandId, run.groupId ? Number(run.groupId) : null, runId, classified);
+    const insightsSummary = campaignOwned ? null : await enrichRunWithAgents(run.brandId, classified);
+    if (!campaignOwned) await broadcastSearchAlerts(run.brandId, run.groupId ? Number(run.groupId) : null, runId, classified);
 
     const positiveCount = classified.filter(item => item.sentiment === 'positive').length;
     const negativeCount = classified.filter(item => item.sentiment === 'negative').length;
@@ -314,11 +316,13 @@ export async function runListeningSearch(runId: number): Promise<void> {
       });
     }
 
-    broadcastToClients(run.brandId, 'listening_search_complete', {
-      run_id: runId,
-      total_results: classified.length,
-      errors: keywordResult.errors,
-    });
+    if (!campaignOwned) {
+      broadcastToClients(run.brandId, 'listening_search_complete', {
+        run_id: runId,
+        total_results: classified.length,
+        errors: keywordResult.errors,
+      });
+    }
   } catch (err) {
     await prisma.searchRun.update({
       where: { runId: BigInt(runId) },
@@ -328,10 +332,7 @@ export async function runListeningSearch(runId: number): Promise<void> {
         errorMsg: (err as Error).message,
       },
     });
-    broadcastToClients(run.brandId, 'listening_search_failed', {
-      run_id: runId,
-      error: (err as Error).message,
-    });
+    if (!campaignOwned) broadcastToClients(run.brandId, 'listening_search_failed', { run_id: runId, error: (err as Error).message });
   }
 }
 
@@ -345,6 +346,7 @@ export async function runRealtimeKeywordMonitoring(brandId?: number): Promise<{ 
   const groups = await prisma.keywordGroup.findMany({
     where: {
       ...(brandId ? { brandId } : {}),
+      source: 'listening',
       isActive: true,
       OR: [{ mode: 'realtime' }, { mode: 'both' }],
     },

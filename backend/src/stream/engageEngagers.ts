@@ -30,10 +30,13 @@ const sentLog = new Map<string, number>();
 
 function alreadySent(brandId: number, platform: string, authorId: string, campaignId: string): boolean {
   const key = `${brandId}_${platform}_${authorId}_${campaignId}`;
-  if (sentLog.has(key)) return true;
+  return sentLog.has(key);
+}
+
+function markSent(brandId: number, platform: string, authorId: string, campaignId: string): void {
+  const key = `${brandId}_${platform}_${authorId}_${campaignId}`;
   sentLog.set(key, Date.now());
   setTimeout(() => sentLog.delete(key), 24 * 3_600_000);
-  return false;
 }
 
 // ── VARIABLE SUBSTITUTION ─────────────────────────────────────────────────────
@@ -157,6 +160,7 @@ async function persistCampaignEngager(
         platform: engager.platform as never,
         action: engager.action,
         authorId: engager.author_id,
+        externalEventId: engager.raw_tweet_id ?? engager.raw_comment_id ?? `${engager.action}:${engager.author_id}`,
         authorHandle: engager.author_handle,
         originalText: engager.text,
         status: 'pending',
@@ -177,7 +181,7 @@ async function updateCampaignEngagerStatus(
         brandId,
         campaignId,
         platform: engager.platform as never,
-        authorId: engager.author_id,
+        externalEventId: engager.raw_tweet_id ?? engager.raw_comment_id ?? `${engager.action}:${engager.author_id}`,
       },
       data: { status, processedAt: new Date() },
     });
@@ -348,16 +352,16 @@ async function sendXReply(replyText: string, tweetId: string | null | undefined,
 // ── GENERATE REPLY ────────────────────────────────────────────────────────────
 async function generateReply(
   event: EngageEvent, config: CampaignConfig & { brand_id: number }, trackedLink: string | null, action: string
-): Promise<string> {
+): Promise<{ text: string; confidence: number }> {
   const mentionHandle = formatMentionHandle(event.author_handle);
   if (config.reply_template) {
-    return fillVariables(config.reply_template, {
+    return { text: fillVariables(config.reply_template, {
       handle:  mentionHandle,
       link:    trackedLink ?? '',
       brand:   config.brand_name ?? '',
       keyword: event.matched_keyword ?? '',
       action:  action === 'liked' ? 'liking our post' : 'your comment',
-    });
+    }), confidence: 100 };
   }
 
   try {
@@ -378,9 +382,9 @@ async function generateReply(
 
     if (trackedLink && !text.includes(trackedLink)) text = text.trimEnd() + `\n${trackedLink}`;
     if (mentionHandle && !text.toLowerCase().includes(mentionHandle.toLowerCase())) text = `Hey ${mentionHandle}! ` + text;
-    return text;
+    return { text, confidence: Math.max(0, Math.min(100, Math.round(best?.confidence ?? 0))) };
   } catch {
-    return config.fallback_template ?? `Hey ${mentionHandle}! Thank you ${action === 'liked' ? 'for the like' : 'for your comment'} 🙌 ${trackedLink ?? ''}`;
+    return { text: config.fallback_template ?? `Hey ${mentionHandle}! Thank you ${action === 'liked' ? 'for the like' : 'for your comment'} 🙌 ${trackedLink ?? ''}`, confidence: 0 };
   }
 }
 
@@ -389,9 +393,18 @@ export async function engageEngager(
   brandId: number, event: EngageEvent, config: CampaignConfig, credentials: Credentials
 ): Promise<EngageResult> {
   const campaignId = String(config.id ?? config.campaign_id ?? 'default');
+  const persistedCampaignId = numericCampaignId(campaignId);
 
   if (!checkRateLimit(brandId, config.max_per_hour ?? 50)) return { status: 'rate_limited' };
-  if (alreadySent(brandId, event.platform, event.author_id ?? event.author_handle, campaignId)) return { status: 'already_sent' };
+  if (!persistedCampaignId && alreadySent(brandId, event.platform, event.author_id ?? event.author_handle, campaignId)) return { status: 'already_sent' };
+  if (persistedCampaignId) {
+    const startOfDay = new Date();
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const deliveredToday = await prisma.campaignPostEngager.count({
+      where: { brandId, campaignId, firstDeliveredAt: { gte: startOfDay } },
+    });
+    if (deliveredToday >= (config.max_per_day ?? 50)) return { status: 'rate_limited', error: 'Campaign daily delivery limit reached.' };
+  }
 
   try {
     const profile = await runAgent14({ brand_id: brandId, user: { handle: event.author_handle, id: event.author_id, platform: event.platform, text: event.text } });
@@ -399,19 +412,22 @@ export async function engageEngager(
       broadcastToClients(brandId, 'bot_blocked', { handle: event.author_handle, platform: event.platform });
       return { status: 'bot_blocked' };
     }
-  } catch { /* continue */ }
+  } catch (err) {
+    return { status: 'queued_for_approval', error: `Safety classification unavailable: ${(err as Error).message}` };
+  }
 
   const trackedLink = await getTrackedLink(brandId, campaignId) ?? config.cta_link ?? null;
   const imageUrl    = config.image_url ?? await getCampaignImage(brandId, campaignId);
   const action      = event.action ?? 'commented';
 
-  let replyText: string;
+  let generated: { text: string; confidence: number };
   try {
-    replyText = await generateReply(event, { ...config, brand_id: brandId }, trackedLink, action);
+    generated = await generateReply(event, { ...config, brand_id: brandId }, trackedLink, action);
   } catch (err) {
     return { status: 'generation_failed', error: (err as Error).message };
   }
 
+  const replyText = generated.text;
   const privateReplyText = config.private_followup_template
     ? fillVariables(config.private_followup_template, {
         handle: formatMentionHandle(event.author_handle),
@@ -422,38 +438,56 @@ export async function engageEngager(
       })
     : replyText;
 
-  const confidence = config.reply_template ? 100 : 80;
+  const confidence = generated.confidence;
   if (confidence < (config.auto_fire_threshold ?? 85)) {
-    enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, image_url: imageUrl, tracked_link: trackedLink ?? undefined, meta: approvalMeta(event) });
+    if (!persistedCampaignId) {
+      await enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, image_url: imageUrl, tracked_link: trackedLink ?? undefined, meta: approvalMeta(event) });
+    }
     broadcastToClients(brandId, 'engage_queued', { platform: event.platform, handle: event.author_handle, preview: replyText.slice(0, 80) });
-    return { status: 'queued_for_approval', reply: replyText };
+    return { status: 'queued_for_approval', reply: replyText, confidence };
   }
 
-  let result: PlatformSendResult;
-  if (event.platform === 'instagram' && action === 'commented') {
-    const publicReply = await sendInstagramCommentReply(event.comment_id ?? '', replyText, credentials.META_PAGE_ACCESS_TOKEN);
-    const privateReply = await sendInstagramPrivateReply(credentials.META_PAGE_ID, event.comment_id, privateReplyText, credentials.META_PAGE_ACCESS_TOKEN);
-    result = publicReply.success || privateReply.success
-      ? { success: true, comment_id: publicReply.comment_id, message_id: privateReply.message_id, partial: !(publicReply.success && privateReply.success), error: publicReply.error ?? privateReply.error }
-      : publicReply.manual_copy ? publicReply : privateReply;
+  const deliveries: NonNullable<EngageResult['deliveries']> = [];
+  const recordDelivery = (channel: 'public_reply' | 'direct_message', channelResult: PlatformSendResult, unsupported?: string) => {
+    if (unsupported) deliveries.push({ channel, status: 'manual_action_required', error: unsupported });
+    else if (channelResult.success) deliveries.push({ channel, status: 'sent', external_message_id: channelResult.message_id ?? channelResult.comment_id ?? channelResult.tweet_id });
+    else if (channelResult.rate_limited) deliveries.push({ channel, status: 'rate_limited', error: channelResult.error ?? channelResult.reason });
+    else deliveries.push({ channel, status: channelResult.manual_copy ? 'manual_action_required' : 'failed', error: channelResult.error ?? channelResult.reason ?? 'Platform delivery failed.' });
+  };
+
+  if (config.public_reply_enabled !== false) {
+    let publicResult: PlatformSendResult;
+    if (action !== 'commented') publicResult = { manual_copy: true, reason: 'Public replies require a comment or mention event.' };
+    else if (event.platform === 'instagram') publicResult = await sendInstagramCommentReply(event.comment_id ?? '', replyText, credentials.META_PAGE_ACCESS_TOKEN);
+    else if (event.platform === 'facebook') publicResult = await sendFacebookCommentReply(event.comment_id ?? '', replyText, credentials.META_PAGE_ACCESS_TOKEN);
+    else if (event.platform === 'tiktok') publicResult = await sendTikTokCommentReply(event.comment_id ?? '', event.post_id ?? '', replyText, credentials.TIKTOK_ACCESS_TOKEN);
+    else publicResult = await sendXReply(replyText, event.tweet_id ?? event.comment_id, credentials.X_OAUTH_TOKEN);
+    recordDelivery('public_reply', publicResult);
   }
-  else if (event.platform === 'facebook' && action === 'commented') {
-    const publicReply = await sendFacebookCommentReply(event.comment_id ?? '', replyText, credentials.META_PAGE_ACCESS_TOKEN);
-    const privateReply = await sendFacebookPrivateReply(credentials.META_PAGE_ID, event.comment_id, privateReplyText, credentials.META_PAGE_ACCESS_TOKEN);
-    result = publicReply.success || privateReply.success
-      ? { success: true, comment_id: publicReply.comment_id, message_id: privateReply.message_id, partial: !(publicReply.success && privateReply.success), error: publicReply.error ?? privateReply.error }
-      : publicReply.manual_copy ? publicReply : privateReply;
+
+  if (config.direct_message_enabled !== false) {
+    if (event.platform === 'instagram' && action === 'commented') recordDelivery('direct_message', await sendInstagramPrivateReply(credentials.META_PAGE_ID, event.comment_id, privateReplyText, credentials.META_PAGE_ACCESS_TOKEN));
+    else if (event.platform === 'facebook' && action === 'commented') recordDelivery('direct_message', await sendFacebookPrivateReply(credentials.META_PAGE_ID, event.comment_id, privateReplyText, credentials.META_PAGE_ACCESS_TOKEN));
+    else if (event.platform === 'instagram') recordDelivery('direct_message', await sendInstagramDM(event.author_id ?? '', privateReplyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN));
+    else if (event.platform === 'facebook') recordDelivery('direct_message', await sendFacebookDM(event.author_id ?? '', privateReplyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN));
+    else recordDelivery('direct_message', {}, `${event.platform === 'x' ? 'X' : 'TikTok'} direct messaging is not available for this campaign event through the connected API permissions.`);
   }
-  else if (event.platform === 'instagram') result = await sendInstagramDM(event.author_id ?? '', privateReplyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
-  else if (event.platform === 'facebook')  result = await sendFacebookDM(event.author_id ?? '', privateReplyText, imageUrl, credentials.META_PAGE_ACCESS_TOKEN);
-  else if (event.platform === 'tiktok')    result = await sendTikTokCommentReply(event.comment_id ?? '', event.post_id ?? '', replyText, credentials.TIKTOK_ACCESS_TOKEN);
-  else if (event.platform === 'x')         result = await sendXReply(replyText, event.tweet_id ?? event.comment_id, credentials.X_OAUTH_TOKEN);
-  else                                     result = { manual_copy: true, text: replyText };
+
+  const sentCount = deliveries.filter(item => item.status === 'sent').length;
+  const rateLimitedCount = deliveries.filter(item => item.status === 'rate_limited').length;
+  const blockedCount = deliveries.filter(item => item.status === 'manual_action_required').length;
+  const errorText = deliveries.filter(item => item.status !== 'sent').map(item => item.error).filter(Boolean).join(' ');
+  const result: PlatformSendResult = sentCount
+    ? { success: true, partial: sentCount < deliveries.length, error: errorText || undefined }
+    : rateLimitedCount ? { rate_limited: true, error: errorText }
+      : blockedCount ? { manual_copy: true, error: errorText }
+        : { error: errorText || 'No delivery channel was enabled.' };
 
   if (result.success) {
+    markSent(brandId, event.platform, event.author_id ?? event.author_handle, campaignId);
     broadcastToClients(brandId, 'engage_fired', { platform: event.platform, handle: event.author_handle, preview: replyText.slice(0, 80), image: !!imageUrl, link: trackedLink, action });
-    if (result.partial) {
-      enqueueForApproval({
+    if (result.partial && !persistedCampaignId) {
+      await enqueueForApproval({
         brand_id: brandId,
         platform: event.platform,
         author: event.author_handle,
@@ -465,11 +499,10 @@ export async function engageEngager(
       });
     }
     try {
-      const numericId = numericCampaignId(campaignId);
       await prisma.autoEngagement.create({
         data: {
           brandId,
-          campaignId: numericId ? BigInt(numericId) : null,
+          campaignId: persistedCampaignId ? BigInt(persistedCampaignId) : null,
           platform: event.platform as never,
           authorHandle: event.author_handle,
           originalText: event.text,
@@ -480,20 +513,18 @@ export async function engageEngager(
           firedAt: new Date(),
         },
       });
-      if (numericId) {
-        await prisma.engageCampaign.updateMany({
-          where: { brandId, campaignId: BigInt(numericId) },
-          data: { totalSent: { increment: 1 }, updatedAt: new Date() },
-        });
-      }
     } catch { /* log only */ }
   } else if (result.manual_copy) {
-    enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, manual_copy_required: true, meta: approvalMeta(event) });
+    if (!persistedCampaignId) {
+      await enqueueForApproval({ brand_id: brandId, platform: event.platform, author: event.author_handle, original: event.text, reply: replyText, manual_copy_required: true, delivery_error: result.error ?? result.reason, meta: approvalMeta(event) });
+    }
     broadcastToClients(brandId, 'engage_manual_copy', { platform: event.platform, handle: event.author_handle, preview: replyText.slice(0, 80), reason: result.error ?? result.reason ?? 'Manual copy required' });
   }
 
-  const status: EngageResult['status'] = result.success ? 'sent' : result.manual_copy ? 'manual_copy' : result.rate_limited ? 'rate_limited' : 'error';
-  return { status, platform: event.platform, author: event.author_handle, reply: replyText, image_url: imageUrl, tracked_link: trackedLink };
+  const status: EngageResult['status'] = result.success
+    ? result.partial ? 'partial' : 'sent'
+    : result.manual_copy ? 'manual_action_required' : result.rate_limited ? 'rate_limited' : 'error';
+  return { status, platform: event.platform, author: event.author_handle, reply: replyText, image_url: imageUrl, tracked_link: trackedLink, error: result.error ?? result.reason, confidence, deliveries };
 }
 
 // ── POST URL FETCHERS ─────────────────────────────────────────────────────────

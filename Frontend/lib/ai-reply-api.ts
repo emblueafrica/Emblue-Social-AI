@@ -47,20 +47,20 @@ export function getAiReplyQueue(brandId: number) {
   return apiRequest<{ queue: ApprovalQueueItem[] }>(`/api/v1/rt/reply-queue/${brandId}`);
 }
 
-export function approveAiReplyQueueItem(brandId: number, index: number, replyText?: string) {
+export function approveAiReplyQueueItem(brandId: number, queueId: number, replyText?: string) {
   return apiRequest<{
     ok: true;
     item: ApprovalQueueItem;
     publish?: { success: boolean; platform: AiReplyPlatform; message_id?: string; error?: string };
-  }>("/api/v1/rt/queue/approve", {
+  }>(`/api/v1/rt/queue/${queueId}/approve`, {
     method: "POST",
-    body: JSON.stringify({ brand_id: brandId, index, reply_text: replyText }),
+    body: JSON.stringify({ brand_id: brandId, reply_text: replyText }),
   });
 }
 
-export function skipAiReplyQueueItem(brandId: number, index: number) {
-  return apiRequest<{ ok: true; item: ApprovalQueueItem }>("/api/v1/rt/queue/skip", {
+export function skipAiReplyQueueItem(brandId: number, queueId: number) {
+  return apiRequest<{ ok: true; item: ApprovalQueueItem }>(`/api/v1/rt/queue/${queueId}/skip`, {
     method: "POST",
-    body: JSON.stringify({ brand_id: brandId, index }),
+    body: JSON.stringify({ brand_id: brandId }),
   });
 }

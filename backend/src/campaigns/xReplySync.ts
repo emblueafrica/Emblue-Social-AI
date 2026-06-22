@@ -2,7 +2,7 @@ import prisma from '../db/prisma';
 import { contextualFallbackReply, runAgent4 } from '../agents/agent4_reply_assistant';
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
-import { fetchXPostEngagers } from '../stream/engageEngagers';
+import { engageEngager, fetchXPostEngagers } from '../stream/engageEngagers';
 import { fillVariables } from '../stream/engageEngagers';
 import { publishReply } from '../stream/publisher';
 import { eligibleForCampaign } from './lifecycle';
@@ -17,6 +17,7 @@ export type XReplySyncResult = {
   sent: number;
   skipped: number;
   duplicates: number;
+  failed: number;
   message: string;
 };
 
@@ -182,12 +183,10 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
   let sent = 0;
   let skipped = 0;
   let duplicates = 0;
+  let failed = 0;
 
   for (const engager of fetched) {
-    if (config?.event_settings?.comments === false || !eligibleForCampaign({ kind: 'reply', text: engager.text }, config?.keywords ?? [])) {
-      skipped += 1;
-      continue;
-    }
+    const eligible = config?.event_settings?.comments !== false && eligibleForCampaign({ kind: 'reply', text: engager.text }, config?.keywords ?? []);
     const replyTweetId = engager.raw_tweet_id ?? engager.raw_comment_id;
     if (!replyTweetId) {
       duplicates += 1;
@@ -206,21 +205,64 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
     if (saved.created) captured += 1;
     else duplicates += 1;
 
-    await prisma.campaignPostEngager.create({
+    const campaignEngager = await prisma.campaignPostEngager.create({
       data: {
         brandId,
         campaignId,
         platform: 'x',
         action: 'commented',
         authorId: replyTweetId,
+        platformAuthorId: engager.author_id,
+        externalEventId: replyTweetId,
+        commentId: replyTweetId,
+        postId: tweetId,
         authorHandle: engager.author_handle,
         originalText: engager.text,
-        status: 'queued_for_approval',
+        status: eligible ? 'pending' : 'ignored_keyword',
         processedAt: new Date(),
       },
-    }).catch(() => undefined);
+    }).catch(() => null);
+    if (!campaignEngager) {
+      duplicates += 1;
+      continue;
+    }
+    if (!eligible) {
+      skipped += 1;
+      continue;
+    }
 
-    const existingQueueItem = await prisma.approvalQueue.findFirst({
+    if (numericCampaignId && config) {
+      const delivery = await engageEngager(brandId, {
+        platform: 'x',
+        author_handle: engager.author_handle,
+        author_id: engager.author_id,
+        comment_id: replyTweetId,
+        tweet_id: replyTweetId,
+        post_id: tweetId,
+        text: engager.text,
+        action: 'commented',
+      }, config, { X_OAUTH_TOKEN: token });
+      for (const outcome of delivery.deliveries ?? []) {
+        await prisma.campaignDeliveryAttempt.upsert({
+          where: { engagerId_channel: { engagerId: campaignEngager.engagerId, channel: outcome.channel } },
+          create: { engagerId: campaignEngager.engagerId, brandId, campaignId: numericCampaignId, platform: 'x', channel: outcome.channel, status: outcome.status, externalMessageId: outcome.external_message_id, error: outcome.error, deliveredAt: outcome.status === 'sent' ? new Date() : null },
+          update: { status: outcome.status, externalMessageId: outcome.external_message_id, error: outcome.error, attemptCount: { increment: 1 }, deliveredAt: outcome.status === 'sent' ? new Date() : undefined, updatedAt: new Date() },
+        });
+      }
+      if ((delivery.deliveries ?? []).some(outcome => outcome.status === 'sent')) {
+        const first = await prisma.campaignPostEngager.updateMany({ where: { engagerId: campaignEngager.engagerId, firstDeliveredAt: null }, data: { firstDeliveredAt: new Date() } });
+        if (first.count) await prisma.engageCampaign.update({ where: { campaignId: numericCampaignId }, data: { totalSent: { increment: 1 }, updatedAt: new Date() } });
+      }
+      const status = delivery.status === 'queued_for_approval' ? 'needs_review' : delivery.status;
+      await prisma.campaignPostEngager.update({ where: { engagerId: campaignEngager.engagerId }, data: { status, replyText: delivery.reply, replyConfidence: delivery.confidence, deliveryError: delivery.error ?? null, processedAt: new Date(), updatedAt: new Date() } });
+      if (status === 'sent' || status === 'partial') sent += 1;
+      else if (status === 'needs_review' || status === 'bot_blocked') queued += 1;
+      else if (status === 'error' || status === 'rate_limited' || status === 'generation_failed') failed += 1;
+      else skipped += 1;
+      continue;
+    }
+
+    const existingQueueItem = numericCampaignId ? null : await prisma.approvalQueue.findFirst({
       where: {
         brandId,
         platform: 'x',
@@ -241,6 +283,10 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
     }
 
     const draft = await generateXReplyDraft(brandId, engager.text, engager.author_handle, config);
+    await prisma.campaignPostEngager.update({
+      where: { engagerId: campaignEngager.engagerId },
+      data: { replyText: draft.text, updatedAt: new Date() },
+    });
     await prisma.autoEngagement.create({
       data: {
         brandId,
@@ -283,6 +329,23 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
         }
         continue;
       }
+      if (numericCampaignId) {
+        failed += 1;
+        await prisma.campaignPostEngager.update({
+          where: { engagerId: campaignEngager.engagerId },
+          data: { status: 'failed', deliveryError: publish.error ?? 'X reply failed', processedAt: new Date(), updatedAt: new Date() },
+        });
+        continue;
+      }
+    }
+
+    if (numericCampaignId) {
+      queued += 1;
+      await prisma.campaignPostEngager.update({
+        where: { engagerId: campaignEngager.engagerId },
+        data: { status: 'needs_review', processedAt: new Date(), updatedAt: new Date() },
+      });
+      continue;
     }
 
     await prisma.approvalQueue.create({
@@ -320,50 +383,9 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
     sent,
     skipped,
     duplicates,
+    failed,
     message: captured
-      ? `${captured} new X replies captured. ${sent} sent automatically and ${queued} waiting in the AI Reply Engine.`
+      ? `${captured} new X replies captured. ${sent} sent automatically and ${queued} ${numericCampaignId ? 'need review in Campaign Activity' : 'waiting in the AI Reply Engine'}.`
       : 'No new X replies were found for this post.',
   };
-}
-
-export async function syncTrackedXPosts(brandId: number): Promise<{
-  checked: number;
-  fetched: number;
-  captured: number;
-  queued: number;
-  errors: string[];
-}> {
-  const cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
-  const trackedPosts = await prisma.campaignPostUrl.findMany({
-    where: {
-      brandId,
-      platform: 'x',
-      postIdExt: { not: null },
-      submittedAt: { gte: cutoff },
-    },
-    orderBy: { submittedAt: 'desc' },
-    take: 25,
-    select: { postIdExt: true },
-  });
-
-  const uniqueTweetIds = Array.from(new Set(trackedPosts.map(post => post.postIdExt).filter((id): id is string => Boolean(id))));
-  const totals = { checked: 0, fetched: 0, captured: 0, queued: 0, errors: [] as string[] };
-
-  for (const tweetId of uniqueTweetIds) {
-    try {
-      const result = await syncXRepliesForPost(brandId, tweetId);
-      totals.checked += 1;
-      totals.fetched += result.fetched;
-      totals.captured += result.captured;
-      totals.queued += result.queued;
-    } catch (err) {
-      totals.errors.push(`${tweetId}: ${(err as Error).message}`);
-      await prisma.campaignPostUrl.updateMany({
-        where: { brandId, platform: 'x', postIdExt: tweetId },
-        data: { status: 'error', errorMsg: (err as Error).message, completedAt: new Date() },
-      }).catch(() => undefined);
-    }
-  }
-
-  return totals;
 }

@@ -3,12 +3,11 @@ import { Response } from 'express';
 import { ApprovalQueueItem, SseClient } from '../types';
 import { hasToolAccess } from '../tools/access';
 import { ToolId } from '../tools/registry';
+import prisma from '../db/prisma';
+import { Prisma } from '@prisma/client';
 
 // In-memory SSE client registry — keyed by brand_id
 const clients = new Map<number, Set<Response>>();
-
-// In-memory approval queue (persisted to DB separately)
-const approvalQueue: ApprovalQueueItem[] = [];
 
 const EVENT_TOOL_ACCESS: Record<string, ToolId> = {
   sync_complete: 'tool_1',
@@ -85,29 +84,41 @@ async function broadcastAllowedEvent(
 }
 
 // ── APPROVAL QUEUE ────────────────────────────────────────────────────────────
-export function enqueueForApproval(item: ApprovalQueueItem): void {
-  approvalQueue.push(item);
+export async function enqueueForApproval(item: ApprovalQueueItem): Promise<void> {
+  const commentId = item.meta?.comment_id ?? null;
+  const tweetId = item.meta?.tweet_id ?? null;
+  const postId = item.meta?.post_id ?? null;
+  const authorId = item.meta?.author_id ?? null;
+  const duplicate: Prisma.ApprovalQueueWhereInput = tweetId
+    ? { brandId: item.brand_id, platform: item.platform as never, tweetId, status: 'pending' }
+    : commentId
+      ? { brandId: item.brand_id, platform: item.platform as never, commentId, status: 'pending' }
+      : { brandId: item.brand_id, platform: item.platform as never, postId, authorId, originalText: item.original, status: 'pending' };
+
+  const existing = await prisma.approvalQueue.findFirst({ where: duplicate, select: { queueId: true } });
+  if (existing) return;
+  await prisma.approvalQueue.create({
+    data: {
+      brandId: item.brand_id,
+      campaignId: item.campaign_id ? BigInt(item.campaign_id) : null,
+      platform: item.platform as never,
+      authorId,
+      authorHandle: item.author,
+      originalText: item.original,
+      replyText: item.reply,
+      commentId,
+      postId,
+      tweetId,
+      deliveryError: item.delivery_error ?? (typeof item.manual_copy_instructions === 'string' ? item.manual_copy_instructions : null),
+      confidence: item.manual_copy_required ? 50 : 80,
+      status: 'pending',
+    },
+  });
   broadcastToClients(item.brand_id, 'approval_queued', {
     platform: item.platform,
     author:   item.author,
     preview:  item.reply.slice(0, 80),
-    queue_size: approvalQueue.filter(q => q.brand_id === item.brand_id).length,
   });
-}
-
-export function getApprovalQueue(brandId: number): ApprovalQueueItem[] {
-  return approvalQueue.filter(item => item.brand_id === brandId);
-}
-
-export function removeFromQueue(brandId: number, index: number): ApprovalQueueItem | null {
-  const brandItems = approvalQueue
-    .map((item, i) => ({ item, i }))
-    .filter(({ item }) => item.brand_id === brandId);
-
-  if (!brandItems[index]) return null;
-  const { i } = brandItems[index];
-  const [removed] = approvalQueue.splice(i, 1);
-  return removed ?? null;
 }
 
 export function getClientCount(): { total: number; brands: number } {

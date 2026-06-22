@@ -23,6 +23,7 @@ const SESSION_LIMIT: LimitRule = { limit: 120, windowMs: ONE_MINUTE, scope: 'ide
 const AUTH_LIMIT: LimitRule = { limit: 5, windowMs: FIFTEEN_MINUTES, scope: 'ip' };
 const AI_LIMIT: LimitRule = { limit: 10, windowMs: ONE_MINUTE, scope: 'identity' };
 const UPLOAD_LIMIT: LimitRule = { limit: 5, windowMs: ONE_MINUTE, scope: 'ip' };
+const CAMPAIGN_ACTION_LIMIT: LimitRule = { limit: 10, windowMs: ONE_MINUTE, scope: 'identity' };
 
 function isSkippedPath(method: string, path: string): boolean {
   if (method === 'GET' && path === '/') return true;
@@ -48,6 +49,7 @@ function limitForPath(path: string): LimitRule {
   if (path === '/api/v1/auth/me' || path.startsWith('/api/v1/auth/connections/')) return SESSION_LIMIT;
   if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/onboarding')) return AUTH_LIMIT;
   if (path.includes('/upload') || path.includes('/uploads')) return UPLOAD_LIMIT;
+  if (path.startsWith('/api/v1/campaigns') && (path.endsWith('/sync') || path.endsWith('/activate') || path.includes('/retry') || path.includes('/campaigns/keyword'))) return CAMPAIGN_ACTION_LIMIT;
   if (isAiPath(path)) return AI_LIMIT;
   return GENERAL_LIMIT;
 }
