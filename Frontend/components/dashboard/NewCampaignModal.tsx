@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, BarChart3, Check, Eye, FileUp, Trash2, X } from "lucide-react";
+import { BarChart3, Eye, FileUp, Trash2, X } from "lucide-react";
 import { PlatformLogo } from "@/components/PlatformLogo";
 import { uploadCampaignMedia, type CampaignEventSettings, type CampaignMedia } from "@/lib/api";
 
@@ -35,30 +35,77 @@ const PLATFORM_OPTIONS: { id: Platform; label: string }[] = [
   { id: "tiktok", label: "TikTok" },
   { id: "x", label: "X" },
 ];
-const TONES = ["Warm and friendly", "Professional and authoritative", "Bold and confident", "Empathetic and supportive", "Playful and witty", "Educational and informative"];
+const TONES = [
+  "Patriotic and inspiring",
+  "Warm and friendly",
+  "Bold and confident",
+  "Playful and witty",
+  "Urgent and exclusive",
+  "Empathetic and supportive",
+  "Professional and authoritative",
+  "Energetic and hype",
+  "Luxury and aspirational",
+  "Casual and relatable",
+  "Educational and informative",
+];
+const INTENTS = [
+  ["complaint", "Complaint"],
+  ["purchase_intent", "Purchase intent"],
+  ["inquiry", "Inquiry"],
+  ["praise", "Praise"],
+  ["objection", "Objection"],
+  ["neutral", "Other"],
+] as const;
 const DEFAULT_EVENTS: CampaignEventSettings = { comments: true, likes: true, reposts: true, mentions: true, dms: true };
 const EMPTY_ALLOCATION: Record<Platform, number> = { instagram: 0, facebook: 0, tiktok: 0, x: 0 };
 
 function blankDraft(): CampaignDraft {
   return {
-    name: "", platforms: [], sourceMode: "existing", postCaption: "", existingPosts: {}, media: [], keywords: [], tone: "Warm and friendly",
-    maxPerHour: 10, maxPerDay: 50, intentFilter: ["complaint", "purchase_intent"], urgencyThreshold: 3, replyTemplateId: null, publicReplyEnabled: true, directMessageEnabled: true,
-    template: "Hey {{handle}}, thanks for your comment. We would like to help.", privateTemplate: "Hey {{handle}}, here is the information you requested: {{link}}",
-    ctaLink: "", imageUrl: "", threshold: 85, events: DEFAULT_EVENTS, allocation: EMPTY_ALLOCATION,
+    name: "",
+    platforms: [],
+    sourceMode: "existing",
+    postCaption: "",
+    existingPosts: {},
+    media: [],
+    keywords: [],
+    tone: "Warm and friendly",
+    maxPerHour: 10,
+    maxPerDay: 50,
+    intentFilter: ["complaint", "purchase_intent"],
+    urgencyThreshold: 3,
+    replyTemplateId: null,
+    publicReplyEnabled: true,
+    directMessageEnabled: true,
+    template: "Hey {{handle}}! Thanks for engaging with our post. Here's something special for you: {{link}}",
+    privateTemplate: "Hey {{handle}}! Here is the information you requested: {{link}}",
+    ctaLink: "",
+    imageUrl: "",
+    threshold: 85,
+    events: DEFAULT_EVENTS,
+    allocation: EMPTY_ALLOCATION,
   };
 }
 
-export function NewCampaignModal({ open, brandId, initial, saving, errorMessage, onClose, onSave }: {
+export function NewCampaignModal({
+  open,
+  brandId,
+  initial,
+  saving,
+  errorMessage,
+  onClose,
+  onSave,
+  onDelete,
+}: {
   open: boolean;
   brandId: number | null;
-  initial?: CampaignDraft | null;
+  initial?: CampaignDraft;
   saving?: boolean;
   errorMessage?: string | null;
   onClose: () => void;
   onSave: (campaign: CampaignDraft, status: "draft" | "active") => void | Promise<void>;
+  onDelete?: () => void;
 }) {
   const [draft, setDraft] = useState<CampaignDraft>(blankDraft);
-  const [step, setStep] = useState(1);
   const [keywordInput, setKeywordInput] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,92 +114,428 @@ export function NewCampaignModal({ open, brandId, initial, saving, errorMessage,
 
   useEffect(() => {
     if (!open) return;
-    setDraft(initial ? { ...blankDraft(), ...initial, events: { ...DEFAULT_EVENTS, ...initial.events }, allocation: { ...EMPTY_ALLOCATION, ...initial.allocation } } : blankDraft());
-    setStep(1); setError(null); setKeywordInput(""); setShowPreview(false);
+    const value = initial
+      ? { ...blankDraft(), ...initial, events: { ...DEFAULT_EVENTS, ...initial.events }, allocation: { ...EMPTY_ALLOCATION, ...initial.allocation } }
+      : blankDraft();
+    setDraft(value.sourceMode === "publish_new" ? { ...value, sourceMode: "existing" } : value);
+    setKeywordInput("");
+    setError(null);
+    setShowPreview(false);
   }, [open, initial]);
 
-  const allocationTotal = Object.entries(draft.allocation).filter(([platform]) => draft.platforms.includes(platform as Platform)).reduce((sum, [, value]) => sum + value, 0);
-  const stepValid = useMemo(() => {
-    if (step === 1) return Boolean(draft.name.trim() && draft.platforms.length && (draft.sourceMode === "keyword" || (draft.sourceMode === "publish_new" ? draft.postCaption.trim() : draft.platforms.every(platform => draft.existingPosts[platform]?.trim()))));
-    if (step === 2) return draft.sourceMode === "keyword" ? Boolean(draft.keywords.length && draft.intentFilter.length && draft.urgencyThreshold >= 1) : draft.sourceMode === "existing" || draft.media.length > 0 || draft.platforms.length === 1 && draft.platforms[0] === "x";
-    if (step === 3) return draft.sourceMode === "keyword" ? Boolean(draft.maxPerDay > 0 && (draft.publicReplyEnabled || draft.directMessageEnabled)) : Boolean(draft.template.trim() && draft.privateTemplate.trim() && draft.maxPerHour > 0);
-    return draft.sourceMode === "keyword" || allocationTotal === 100;
-  }, [allocationTotal, draft, step]);
+  const selectedPlatforms = draft.platforms;
+  const allocationTotal = selectedPlatforms.reduce((sum, platform) => sum + Number(draft.allocation[platform] ?? 0), 0);
+  const formValid = useMemo(() => {
+    if (!draft.name.trim() || !selectedPlatforms.length) return false;
+    if (draft.sourceMode === "keyword") {
+      return Boolean(
+        draft.keywords.length &&
+        draft.intentFilter.length &&
+        draft.maxPerDay > 0 &&
+        (draft.publicReplyEnabled || draft.directMessageEnabled),
+      );
+    }
+    return Boolean(
+      selectedPlatforms.every(platform => draft.existingPosts[platform]?.trim()) &&
+      draft.template.trim() &&
+      draft.maxPerHour > 0 &&
+      allocationTotal === 100,
+    );
+  }, [allocationTotal, draft, selectedPlatforms]);
 
   if (!open) return null;
-  const update = <K extends keyof CampaignDraft>(key: K, value: CampaignDraft[K]) => setDraft(current => ({ ...current, [key]: value }));
-  const togglePlatform = (platform: Platform) => setDraft(current => {
-    const selected = current.platforms.includes(platform) ? current.platforms.filter(item => item !== platform) : [...current.platforms, platform];
-    const equal = selected.length ? Math.floor(100 / selected.length) : 0;
-    const allocation = { ...EMPTY_ALLOCATION, ...Object.fromEntries(selected.map((item, index) => [item, equal + (index === 0 ? 100 - equal * selected.length : 0)])) } as Record<Platform, number>;
-    return { ...current, platforms: selected, allocation };
-  });
+
+  const update = <K extends keyof CampaignDraft>(key: K, value: CampaignDraft[K]) =>
+    setDraft(current => ({ ...current, [key]: value }));
+
+  const togglePlatform = (platform: Platform) => {
+    setDraft(current => {
+      const selected = current.platforms.includes(platform)
+        ? current.platforms.filter(item => item !== platform)
+        : [...current.platforms, platform];
+      const equal = selected.length ? Math.floor(100 / selected.length) : 0;
+      const allocation = {
+        ...EMPTY_ALLOCATION,
+        ...Object.fromEntries(selected.map((item, index) => [item, equal + (index === 0 ? 100 - equal * selected.length : 0)])),
+      } as Record<Platform, number>;
+      return { ...current, platforms: selected, allocation };
+    });
+  };
+
   const addKeyword = () => {
     const keyword = keywordInput.replace(/^#/, "").trim();
     if (!keyword) return;
     update("keywords", draft.keywords.includes(keyword) ? draft.keywords : [...draft.keywords, keyword]);
     setKeywordInput("");
   };
+
   const uploadFiles = async (files: File[]) => {
     if (!brandId || !files.length) return;
-    const hasVideo = files.some(file => file.type.startsWith("video/"));
-    const hasImage = files.some(file => file.type.startsWith("image/"));
-    if ((hasVideo && hasImage) || (hasVideo && files.length > 1)) { setError("Upload multiple images or one video. Mixed image/video sets are not supported."); return; }
-    setUploading(true); setError(null);
+    setUploading(true);
+    setError(null);
     try {
-      const result = await uploadCampaignMedia(brandId, files);
-      update("media", result.media);
-      update("imageUrl", result.media[0]?.url ?? "");
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Media upload failed."); }
-    finally { setUploading(false); }
+      const response = await uploadCampaignMedia(brandId, files);
+      update("media", [...draft.media, ...response.media]);
+      if (response.media[0]?.url) update("imageUrl", response.media[0].url);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Media upload failed.");
+    } finally {
+      setUploading(false);
+    }
   };
-  const sample = draft.template.replace(/\{\{\s*handle\s*\}\}/g, "@customer").replace(/\{\{\s*link\s*\}\}/g, draft.ctaLink || "https://example.com");
+
+  const sample = draft.template
+    .replaceAll("{{handle}}", "@customer")
+    .replaceAll("{{link}}", draft.ctaLink || "https://example.com/offer");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4">
-      <div className="my-6 w-full max-w-5xl rounded-xl bg-card shadow-xl">
-        <header className="flex items-center gap-3 border-b px-6 py-5">
-          <span className="flex size-9 items-center justify-center rounded-lg bg-primary text-white"><BarChart3 className="size-5" /></span>
-          <div className="min-w-0 flex-1"><h2 className="text-xl font-bold">{initial ? "Edit Campaign" : "New Campaign"}</h2><p className="text-xs text-muted-foreground">Create, attach, and activate campaign posts across connected platforms.</p></div>
-          <button onClick={onClose} title="Close" className="flex size-9 items-center justify-center rounded-lg hover:bg-muted"><X className="size-5" /></button>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/45 p-3 sm:p-6">
+      <div className="mx-auto my-4 w-full max-w-6xl overflow-hidden rounded-xl bg-card shadow-2xl">
+        <header className="flex items-center justify-between border-b px-5 py-5 sm:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-white">
+              <BarChart3 className="size-5" />
+            </span>
+            <h2 className="truncate text-2xl font-bold">{initial ? "Edit Campaign" : "New Campaign"}</h2>
+          </div>
+          <button onClick={onClose} title="Close" className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-muted">
+            <X className="size-6" />
+          </button>
         </header>
 
-        <div className="border-b px-6 py-4"><div className="grid grid-cols-4 gap-2">{["Setup", "Posts & media", "Automation", "Review"].map((label, index) => <div key={label} className={`h-2 rounded-full ${index + 1 <= step ? "bg-primary" : "bg-muted"}`}><span className="sr-only">{label}</span></div>)}</div><p className="mt-2 text-sm font-semibold">Step {step}: {["Setup", "Posts & media", "Automation", "Review"][step - 1]}</p></div>
-        {(error || errorMessage) && <div className="mx-6 mt-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error || errorMessage}</div>}
-
-        <div className="min-h-[480px] px-6 py-6">
-          {step === 1 && <div className="space-y-6">
-            <Field label="Campaign name"><input value={draft.name} onChange={event => update("name", event.target.value)} className="input" placeholder="Adidas - Refreshing XO" /></Field>
-            <Field label="Platforms"><div className="flex flex-wrap gap-2">{PLATFORM_OPTIONS.map(platform => <button key={platform.id} onClick={() => togglePlatform(platform.id)} className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm ${draft.platforms.includes(platform.id) ? "border-primary bg-primary/5 text-primary" : "border-border"}`}><PlatformLogo platform={platform.id} size={18} />{platform.label}</button>)}</div></Field>
-            <Field label="Campaign mode"><div className="grid gap-3 sm:grid-cols-3"><ModeButton active={draft.sourceMode === "existing"} title="Post URL Campaign" body="Track comments and engagement on existing posts." onClick={() => update("sourceMode", "existing")} /><ModeButton active={draft.sourceMode === "publish_new"} title="Publish Campaign" body="Publish and then monitor new campaign posts." onClick={() => update("sourceMode", "publish_new")} /><ModeButton active={draft.sourceMode === "keyword"} title="Keyword Campaign" body="Find matching conversations and engage automatically." onClick={() => update("sourceMode", "keyword")} /></div></Field>
-            {draft.sourceMode === "publish_new" ? <Field label="Shared post caption"><textarea value={draft.postCaption} onChange={event => update("postCaption", event.target.value)} maxLength={2200} className="textarea" placeholder="Write the campaign post..." /><p className="counter">{draft.postCaption.length}/2200</p></Field> : draft.sourceMode === "existing" ? <div className="grid gap-4 sm:grid-cols-2">{draft.platforms.map(platform => <Field key={platform} label={`${platform === "x" ? "X" : platform[0].toUpperCase() + platform.slice(1)} post URL`}><input value={draft.existingPosts[platform] ?? ""} onChange={event => update("existingPosts", { ...draft.existingPosts, [platform]: event.target.value })} className="input" placeholder="https://..." /></Field>)}</div> : <p className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">Keyword discovery runs every five minutes. Outbound replies and messages use the selected connected platform accounts and remain subject to platform permissions.</p>}
-          </div>}
-
-          {step === 2 && (draft.sourceMode === "keyword" ? <div className="grid gap-6 lg:grid-cols-2">
-            <Field label="Keywords"><div className="flex gap-2"><input value={keywordInput} onChange={event => setKeywordInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addKeyword(); } }} className="input" placeholder="GTBank problem" /><button onClick={addKeyword} className="rounded-lg border px-3 text-sm font-semibold">Add</button></div><div className="mt-3 flex flex-wrap gap-2">{draft.keywords.map(keyword => <button key={keyword} onClick={() => update("keywords", draft.keywords.filter(item => item !== keyword))} className="rounded-full bg-muted px-3 py-1 text-xs">{keyword} ×</button>)}</div></Field>
-            <div className="space-y-5"><Field label="Intent filter"><div className="grid grid-cols-2 gap-2">{[["complaint", "Complaint"], ["purchase_intent", "Purchase intent"], ["inquiry", "Inquiry"], ["praise", "Praise"], ["objection", "Objection"], ["neutral", "Other"]].map(([value, label]) => <label key={value} className="flex items-center gap-2 rounded-lg border p-3 text-sm"><input type="checkbox" checked={draft.intentFilter.includes(value)} onChange={() => update("intentFilter", draft.intentFilter.includes(value) ? draft.intentFilter.filter(item => item !== value) : [...draft.intentFilter, value])} />{label}</label>)}</div></Field><Field label={`Urgency score: ${draft.urgencyThreshold}+`}><input type="range" min={1} max={5} value={draft.urgencyThreshold} onChange={event => update("urgencyThreshold", Number(event.target.value))} className="w-full accent-primary" /></Field></div>
-          </div> : <div className="space-y-5">
-            <div onClick={() => fileInput.current?.click()} className="flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed bg-muted/30 p-8 text-center hover:border-primary"><FileUp className="size-9 text-primary" /><p className="mt-3 font-semibold">{uploading ? "Uploading media..." : "Drop files here or browse"}</p><p className="mt-1 text-sm text-muted-foreground">Multiple JPG, PNG or WebP images, or one MP4/MOV video. Max 100MB per file.</p><input ref={fileInput} type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" className="hidden" onChange={event => void uploadFiles(Array.from(event.target.files ?? []))} /></div>
-            {draft.media.length > 0 && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{draft.media.map((media, index) => <div key={media.public_id} className="flex items-center gap-3 rounded-lg border p-3"><span className="flex size-10 items-center justify-center rounded-lg bg-muted text-xs font-bold">{media.media_type === "video" ? "VIDEO" : "IMG"}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">Asset {index + 1}</p><p className="text-xs text-muted-foreground">{Math.ceil(media.size_bytes / 1024)} KB</p></div><button title="Remove" onClick={() => update("media", draft.media.filter(item => item.public_id !== media.public_id))}><Trash2 className="size-4 text-destructive" /></button></div>)}</div>}
-          </div>)}
-
-          {step === 3 && (draft.sourceMode === "keyword" ? <div className="grid gap-6 lg:grid-cols-2">
-            <div className="space-y-5"><Field label={`Auto-engage confidence: ${draft.threshold}%`}><input type="range" min={0} max={100} value={draft.threshold} onChange={event => update("threshold", Number(event.target.value))} className="w-full accent-primary" /></Field><Field label="Maximum engagements per day"><input type="number" min={1} max={500} value={draft.maxPerDay} onChange={event => update("maxPerDay", Number(event.target.value))} className="input" /></Field><Field label="Reply template ID (optional)"><input type="number" min={1} value={draft.replyTemplateId ?? ""} onChange={event => update("replyTemplateId", event.target.value ? Number(event.target.value) : null)} className="input" placeholder="Use AI-generated replies" /></Field></div>
-            <div className="space-y-4"><Field label="Engagement actions"><div className="space-y-2"><label className="flex items-center gap-3 rounded-lg border p-4 text-sm"><input type="checkbox" checked={draft.publicReplyEnabled} onChange={() => update("publicReplyEnabled", !draft.publicReplyEnabled)} /><span><strong className="block">Public replies</strong><span className="text-muted-foreground">Reply directly to matching comments or conversations.</span></span></label><label className="flex items-center gap-3 rounded-lg border p-4 text-sm"><input type="checkbox" checked={draft.directMessageEnabled} onChange={() => update("directMessageEnabled", !draft.directMessageEnabled)} /><span><strong className="block">Direct messages</strong><span className="text-muted-foreground">Send when the platform permissions and conversation rules allow it.</span></span></label></div></Field><p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">Unavailable actions remain in Campaign Activity as manual action required. Permitted actions can still send.</p></div>
-          </div> : <div className="grid gap-6 lg:grid-cols-2">
-            <div className="space-y-5"><Field label="Trigger keywords"><div className="flex gap-2"><input value={keywordInput} onChange={event => setKeywordInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addKeyword(); } }} className="input" placeholder="price, interested, link" /><button onClick={addKeyword} className="rounded-lg border px-3 text-sm font-semibold">Add</button></div><div className="mt-2 flex flex-wrap gap-2">{draft.keywords.map(keyword => <button key={keyword} onClick={() => update("keywords", draft.keywords.filter(item => item !== keyword))} className="rounded-full bg-muted px-3 py-1 text-xs">#{keyword} ×</button>)}</div></Field><Field label="Engagement events"><div className="grid grid-cols-2 gap-2">{Object.entries(draft.events).map(([event, enabled]) => <label key={event} className="flex items-center gap-2 rounded-lg border p-3 text-sm capitalize"><input type="checkbox" checked={enabled} onChange={() => update("events", { ...draft.events, [event]: !enabled })} />{event}</label>)}</div></Field><Field label="Brand tone"><select value={draft.tone} onChange={event => update("tone", event.target.value)} className="input">{TONES.map(tone => <option key={tone}>{tone}</option>)}</select></Field></div>
-            <div className="space-y-5"><Field label="Public reply template"><textarea value={draft.template} onChange={event => update("template", event.target.value)} className="textarea" /></Field><Field label="Private follow-up template"><textarea value={draft.privateTemplate} onChange={event => update("privateTemplate", event.target.value)} className="textarea" /></Field><Field label="Tracked CTA link"><input value={draft.ctaLink} onChange={event => update("ctaLink", event.target.value)} className="input" placeholder="https://..." /></Field><div className="grid grid-cols-2 gap-4"><Field label={`Auto-fire threshold: ${draft.threshold}%`}><input type="range" min={0} max={100} value={draft.threshold} onChange={event => update("threshold", Number(event.target.value))} className="w-full accent-primary" /></Field><Field label="Max sends per hour"><input type="number" min={1} max={500} value={draft.maxPerHour} onChange={event => update("maxPerHour", Number(event.target.value))} className="input" /></Field></div><button onClick={() => setShowPreview(current => !current)} className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-sm font-semibold text-primary"><Eye className="size-4" />Preview sample reply</button>{showPreview && <p className="rounded-lg border bg-muted/30 p-4 text-sm">{sample}</p>}</div>
-          </div>)}
-
-          {step === 4 && <div className="space-y-6"><div className="grid gap-3 sm:grid-cols-3"><Summary label="Source" value={draft.sourceMode === "keyword" ? "Keyword campaign" : draft.sourceMode === "publish_new" ? "Publish new" : "Existing posts"} /><Summary label="Platforms" value={draft.platforms.join(", ") || "None"} /><Summary label={draft.sourceMode === "keyword" ? "Daily limit" : "Media"} value={draft.sourceMode === "keyword" ? `${draft.maxPerDay} engagements` : `${draft.media.length} asset(s)`} /></div>{draft.sourceMode === "keyword" ? <div className="rounded-xl border bg-muted/20 p-5 text-sm"><p><strong>Keywords:</strong> {draft.keywords.join(", ")}</p><p className="mt-2"><strong>Actions:</strong> {[draft.publicReplyEnabled && "public replies", draft.directMessageEnabled && "direct messages"].filter(Boolean).join(" and ")}</p><p className="mt-2 text-muted-foreground">Campaign-owned results appear only in Campaign Activity.</p></div> : <div className="rounded-xl border bg-muted/20 p-5"><div className="mb-4 flex items-center justify-between"><h3 className="font-semibold">Platform send allocation</h3><span className={allocationTotal === 100 ? "text-emerald-600" : "text-destructive"}>{allocationTotal}% {allocationTotal === 100 ? "✓" : "must equal 100%"}</span></div>{draft.platforms.map(platform => <div key={platform} className="grid grid-cols-[120px_1fr_52px] items-center gap-3 py-2"><span className="flex items-center gap-2 text-sm capitalize"><PlatformLogo platform={platform} size={17} />{platform}</span><input type="range" min={0} max={100} value={draft.allocation[platform]} onChange={event => update("allocation", { ...draft.allocation, [platform]: Number(event.target.value) })} className="accent-primary" /><span className="text-right text-sm font-semibold">{draft.allocation[platform]}%</span></div>)}</div>}<p className="text-sm text-muted-foreground">Activation checks every selected platform and reports unavailable actions explicitly.</p></div>}
+        <div className="px-5 pt-5 sm:px-8">
+          <div className="inline-flex rounded-lg border bg-muted/30 p-1">
+            <ModeTab active={draft.sourceMode === "existing"} onClick={() => update("sourceMode", "existing")}>
+              Post URL Campaign
+            </ModeTab>
+            <ModeTab active={draft.sourceMode === "keyword"} onClick={() => update("sourceMode", "keyword")}>
+              Keyword Campaign
+            </ModeTab>
+          </div>
         </div>
 
-        <footer className="flex items-center justify-between gap-3 border-t px-6 py-5"><button onClick={() => step === 1 ? onClose() : setStep(current => current - 1)} className="flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold"><ArrowLeft className="size-4" />{step === 1 ? "Cancel" : "Back"}</button>{step < 4 ? <button disabled={!stepValid || uploading} onClick={() => setStep(current => current + 1)} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Continue<ArrowRight className="size-4" /></button> : <div className="flex flex-wrap justify-end gap-2"><button disabled={!stepValid || saving} onClick={() => void onSave(draft, "draft")} className="whitespace-nowrap rounded-lg border px-4 py-2.5 text-sm font-semibold disabled:opacity-40">Save Draft</button><button disabled={!stepValid || saving} onClick={() => void onSave({ ...draft, allocation: { ...EMPTY_ALLOCATION, ...Object.fromEntries(draft.platforms.map(platform => [platform, draft.allocation[platform]])) } as Record<Platform, number> }, "active")} className="flex items-center gap-2 whitespace-nowrap rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"><Check className="size-4" />{saving ? "Saving..." : "Launch Campaign"}</button></div>}</footer>
+        {(error || errorMessage) && (
+          <div className="mx-5 mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:mx-8">
+            {error || errorMessage}
+          </div>
+        )}
+
+        <div className="grid gap-8 px-5 py-7 lg:grid-cols-2 sm:px-8">
+          <div className="space-y-6">
+            <Field label="Campaign Name">
+              <input
+                value={draft.name}
+                onChange={event => update("name", event.target.value)}
+                className="input"
+                placeholder="Adidas - Refreshing XO"
+              />
+            </Field>
+
+            <Field label="Platform">
+              <div className="flex flex-wrap gap-2">
+                {PLATFORM_OPTIONS.map(platform => (
+                  <button
+                    type="button"
+                    key={platform.id}
+                    onClick={() => togglePlatform(platform.id)}
+                    className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm ${
+                      draft.platforms.includes(platform.id) ? "border-primary bg-primary/5 text-primary" : "border-border"
+                    }`}
+                  >
+                    <PlatformLogo platform={platform.id} size={18} />
+                    {platform.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            {draft.sourceMode === "existing" ? (
+              <Field label="Post URLs">
+                <div className="space-y-3">
+                  {selectedPlatforms.length ? selectedPlatforms.map(platform => (
+                    <div key={platform} className="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-3">
+                      <span className="flex items-center gap-2 text-sm font-medium capitalize">
+                        <PlatformLogo platform={platform} size={17} />
+                        {platform === "x" ? "X" : platform}
+                      </span>
+                      <input
+                        value={draft.existingPosts[platform] ?? ""}
+                        onChange={event => update("existingPosts", { ...draft.existingPosts, [platform]: event.target.value })}
+                        className="input min-w-0"
+                        placeholder="https://..."
+                      />
+                    </div>
+                  )) : <p className="text-sm text-muted-foreground">Select at least one platform.</p>}
+                </div>
+              </Field>
+            ) : (
+              <>
+                <Field label="Keywords">
+                  <div className="flex gap-2">
+                    <input
+                      value={keywordInput}
+                      onChange={event => setKeywordInput(event.target.value)}
+                      onKeyDown={event => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          addKeyword();
+                        }
+                      }}
+                      className="input"
+                      placeholder="GTBank problem"
+                    />
+                    <button type="button" onClick={addKeyword} className="rounded-lg border px-4 text-sm font-semibold">Add</button>
+                  </div>
+                </Field>
+                <Field label="Intent Filter">
+                  <div className="grid grid-cols-2 gap-2">
+                    {INTENTS.map(([value, label]) => (
+                      <label key={value} className="flex items-center gap-2 rounded-lg border p-3 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={draft.intentFilter.includes(value)}
+                          onChange={() => update(
+                            "intentFilter",
+                            draft.intentFilter.includes(value)
+                              ? draft.intentFilter.filter(item => item !== value)
+                              : [...draft.intentFilter, value],
+                          )}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </Field>
+              </>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              {draft.keywords.map(keyword => (
+                <button
+                  type="button"
+                  key={keyword}
+                  onClick={() => update("keywords", draft.keywords.filter(item => item !== keyword))}
+                  className="rounded-full border bg-muted/30 px-3 py-1.5 text-xs"
+                >
+                  #{keyword} <span className="text-muted-foreground">×</span>
+                </button>
+              ))}
+            </div>
+
+            <Field label="Brand Tone">
+              <div className="flex flex-wrap gap-2">
+                {TONES.map(tone => (
+                  <button
+                    type="button"
+                    key={tone}
+                    onClick={() => update("tone", tone)}
+                    className={`rounded-full border px-3 py-1.5 text-xs ${
+                      draft.tone === tone ? "border-primary bg-primary/5 text-primary" : "bg-muted/30 text-muted-foreground"
+                    }`}
+                  >
+                    {tone}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label={draft.sourceMode === "keyword" ? "Max Replies Per Day" : "Max Sends Per Hour"}>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={draft.sourceMode === "keyword" ? draft.maxPerDay : draft.maxPerHour}
+                  onChange={event => draft.sourceMode === "keyword"
+                    ? update("maxPerDay", Number(event.target.value))
+                    : update("maxPerHour", Number(event.target.value))}
+                  className="input"
+                />
+              </Field>
+              {draft.sourceMode === "keyword" && (
+                <Field label={`Urgency Score: ${draft.urgencyThreshold}+`}>
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    value={draft.urgencyThreshold}
+                    onChange={event => update("urgencyThreshold", Number(event.target.value))}
+                    className="mt-4 w-full accent-primary"
+                  />
+                </Field>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <Field label="Public Reply Template">
+              <VariableButtons onInsert={value => update("template", `${draft.template}${value}`)} />
+              <textarea value={draft.template} onChange={event => update("template", event.target.value)} className="textarea mt-3 min-h-28" />
+            </Field>
+
+            <Field label="Direct Message Template">
+              <VariableButtons onInsert={value => update("privateTemplate", `${draft.privateTemplate}${value}`)} />
+              <textarea value={draft.privateTemplate} onChange={event => update("privateTemplate", event.target.value)} className="textarea mt-3 min-h-24" />
+            </Field>
+
+            <Field label="Tracked CTA Link">
+              <input value={draft.ctaLink} onChange={event => update("ctaLink", event.target.value)} className="input" placeholder="https://..." />
+            </Field>
+
+            <Field label="Branded Images">
+              <div
+                onClick={() => fileInput.current?.click()}
+                className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed bg-muted/20 p-6 text-center hover:border-primary"
+              >
+                <FileUp className="size-8 text-primary" />
+                <p className="mt-2 font-semibold">{uploading ? "Uploading..." : "Drop files here to upload"}</p>
+                <p className="mt-1 text-xs text-muted-foreground">JPG, PNG, WebP, MP4 or MOV. Max 100MB.</p>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  multiple
+                  accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
+                  className="hidden"
+                  onChange={event => void uploadFiles(Array.from(event.target.files ?? []))}
+                />
+              </div>
+              {draft.media.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {draft.media.map((media, index) => (
+                    <div key={media.public_id} className="flex items-center gap-3 rounded-lg border p-3">
+                      <span className="flex size-10 items-center justify-center rounded-lg bg-muted text-xs font-bold">
+                        {media.media_type === "video" ? "VIDEO" : "IMG"}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">Campaign asset {index + 1}</p>
+                        <p className="text-xs text-muted-foreground">{Math.ceil(media.size_bytes / 1024)} KB</p>
+                      </div>
+                      <button type="button" title="Remove" onClick={() => update("media", draft.media.filter(item => item.public_id !== media.public_id))}>
+                        <Trash2 className="size-4 text-destructive" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Field>
+
+            <Field label={`Auto-fire Threshold: ${draft.threshold}%`}>
+              <input type="range" min={0} max={100} value={draft.threshold} onChange={event => update("threshold", Number(event.target.value))} className="w-full accent-primary" />
+              <p className="mt-2 text-xs text-muted-foreground">Below this confidence, the engagement is queued for review.</p>
+            </Field>
+
+            <Field label="Delivery Channels">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ToggleCard
+                  checked={draft.publicReplyEnabled}
+                  title="Comments / replies"
+                  body="Public comment or thread reply."
+                  onChange={() => update("publicReplyEnabled", !draft.publicReplyEnabled)}
+                />
+                <ToggleCard
+                  checked={draft.directMessageEnabled}
+                  title="Direct messages"
+                  body="Private follow-up where the connected platform permits it."
+                  onChange={() => update("directMessageEnabled", !draft.directMessageEnabled)}
+                />
+              </div>
+            </Field>
+
+            <button type="button" onClick={() => setShowPreview(current => !current)} className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-sm font-semibold text-primary">
+              <Eye className="size-4" /> Preview Sample Reply
+            </button>
+            {showPreview && <div className="rounded-lg border bg-primary/5 p-4 text-sm">{sample}</div>}
+          </div>
+        </div>
+
+        {draft.sourceMode === "existing" && (
+          <div className="mx-5 mb-7 rounded-xl bg-muted/30 p-5 sm:mx-8">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="font-semibold">Platform Send Allocation</h3>
+              <span className={`whitespace-nowrap text-sm font-semibold ${allocationTotal === 100 ? "text-emerald-600" : "text-destructive"}`}>
+                {allocationTotal}% {allocationTotal === 100 ? "✓" : "must equal 100%"}
+              </span>
+            </div>
+            <div className="space-y-3">
+              {selectedPlatforms.map(platform => (
+                <div key={platform} className="grid grid-cols-[120px_minmax(0,1fr)_48px] items-center gap-3">
+                  <span className="flex items-center gap-2 text-sm capitalize">
+                    <PlatformLogo platform={platform} size={17} />
+                    {platform === "x" ? "X" : platform}
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={draft.allocation[platform]}
+                    onChange={event => update("allocation", { ...draft.allocation, [platform]: Number(event.target.value) })}
+                    className="min-w-0 accent-primary"
+                  />
+                  <span className="text-right text-sm font-semibold">{draft.allocation[platform]}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <footer className="flex flex-col-reverse gap-3 border-t px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+          <div>
+            {initial && onDelete && (
+              <button type="button" onClick={onDelete} className="w-full rounded-lg border border-destructive px-5 py-3 text-sm font-semibold text-destructive sm:w-auto">
+                Delete Campaign
+              </button>
+            )}
+          </div>
+          <div className="flex flex-col-reverse gap-3 sm:flex-row">
+            <button type="button" onClick={onClose} className="rounded-lg border px-6 py-3 text-sm font-semibold">Cancel</button>
+            {!initial && (
+              <button type="button" disabled={!formValid || saving || uploading} onClick={() => void onSave(draft, "draft")} className="rounded-lg border px-6 py-3 text-sm font-semibold disabled:opacity-40">
+                Save Draft
+              </button>
+            )}
+            <button type="button" disabled={!formValid || saving || uploading} onClick={() => void onSave(draft, "active")} className="rounded-lg bg-primary px-8 py-3 text-sm font-semibold text-white disabled:opacity-40">
+              {saving ? "Saving..." : initial ? "Update Campaign" : "Save & Activate Campaign"}
+            </button>
+          </div>
+        </footer>
       </div>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-2 block text-sm font-semibold">{label}</span>{children}</label>; }
-function ModeButton({ active, title, body, onClick }: { active: boolean; title: string; body: string; onClick: () => void }) { return <button onClick={onClick} className={`rounded-xl border p-4 text-left ${active ? "border-primary bg-primary/5" : "border-border"}`}><span className="block font-semibold">{title}</span><span className="mt-1 block text-sm text-muted-foreground">{body}</span></button>; }
-function Summary({ label, value }: { label: string; value: string }) { return <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-semibold capitalize">{value}</p></div>; }
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return <label className="block"><span className="mb-2 block text-sm font-semibold">{label}</span>{children}</label>;
+}
+
+function ModeTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className={`rounded-md px-4 py-2 text-sm font-semibold ${active ? "bg-card text-primary shadow-sm" : "text-muted-foreground"}`}>
+      {children}
+    </button>
+  );
+}
+
+function VariableButtons({ onInsert }: { onInsert: (value: string) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {["{{handle}}", "{{link}}"].map(value => (
+        <button type="button" key={value} onClick={() => onInsert(value)} className="rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary">
+          {value}
+        </button>
+      ))}
+      <span className="text-xs text-muted-foreground">Click to insert variable</span>
+    </div>
+  );
+}
+
+function ToggleCard({ checked, title, body, onChange }: { checked: boolean; title: string; body: string; onChange: () => void }) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
+      <input type="checkbox" checked={checked} onChange={onChange} className="mt-1" />
+      <span className="min-w-0">
+        <strong className="block text-sm">{title}</strong>
+        <span className="block text-xs text-muted-foreground">{body}</span>
+      </span>
+    </label>
+  );
+}

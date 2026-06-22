@@ -163,6 +163,9 @@ export async function handleMetaCallback(req: Request, res: Response): Promise<v
 }
 
 // ── X (TWITTER) — PKCE FLOW ───────────────────────────────────────────────────
+const X_SCOPE = process.env.X_SCOPES?.trim()
+  || 'tweet.read tweet.write users.read media.write offline.access';
+
 export function getXAuthUrl(brandId: number): string {
   // PKCE with S256. The code verifier is carried in the signed `state`; X is a
   // confidential client, so the token exchange is additionally protected by the
@@ -174,7 +177,7 @@ export function getXAuthUrl(brandId: number): string {
     response_type: 'code',
     client_id: process.env.X_CLIENT_ID ?? '',
     redirect_uri: process.env.X_REDIRECT_URI ?? '',
-    scope: 'tweet.read tweet.write users.read media.write offline.access',
+    scope: X_SCOPE,
     state: createOAuthState(brandId, { cv: codeVerifier }),
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
@@ -231,7 +234,7 @@ export async function handleXCallback(req: Request, res: Response): Promise<void
       new Date(Date.now() + (tokenData.expires_in ?? 7200) * 1000),
       meData.data?.username ?? 'x account',
       meData.data?.id ?? '',
-      'tweet.read tweet.write users.read media.write offline.access',
+      X_SCOPE,
     );
 
     redirectSuccess(res, 'x', meData.data?.username ?? 'x account');
