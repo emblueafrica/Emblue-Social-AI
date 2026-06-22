@@ -11,6 +11,8 @@ import { runActiveFunnels } from '../stream/funnelRunner';
 import { scanBrandAlerts } from '../alerts/engine';
 import { runRealtimeKeywordMonitoring } from '../listening/searchService';
 import { syncTrackedCampaignEngagements } from '../campaigns/engagementSync';
+import { syncKeywordCampaigns } from '../campaigns/keywordCampaignSync';
+import { withSchedulerLease } from './schedulerLease';
 import { broadcastToClients } from '../stream/eventQueue';
 import { hasToolAccess } from '../tools/access';
 import { ToolId } from '../tools/registry';
@@ -20,7 +22,12 @@ const intervals = new Map<number, NodeJS.Timeout[]>();
 
 function campaignEngagementSyncIntervalMs(): number {
   const parsed = Number(process.env.CAMPAIGN_ENGAGEMENT_SYNC_INTERVAL_MS ?? process.env.X_CAMPAIGN_SYNC_INTERVAL_MS);
-  return Number.isFinite(parsed) && parsed >= 60_000 ? parsed : 5 * 60 * 1000;
+  return Number.isFinite(parsed) && parsed >= 60_000 ? parsed : 60_000;
+}
+
+function campaignKeywordSyncIntervalMs(): number {
+  const parsed = Number(process.env.CAMPAIGN_KEYWORD_SYNC_INTERVAL_MS);
+  return Number.isFinite(parsed) && parsed >= 300_000 ? parsed : 300_000;
 }
 
 async function canRunTool(brandId: number, toolId: ToolId, jobName: string): Promise<boolean> {
@@ -168,7 +175,12 @@ async function runFunnels(brandId: number): Promise<void> {
 async function runCampaignEngagementSync(brandId: number): Promise<void> {
   try {
     if (!(await canRunTool(brandId, 'tool_10', 'campaign engagement sync'))) return;
-    const result = await syncTrackedCampaignEngagements(brandId);
+    const leased = await withSchedulerLease(brandId, 'campaign_post_sync', campaignEngagementSyncIntervalMs() * 2, () => syncTrackedCampaignEngagements(brandId));
+    if (!leased.acquired || !leased.value) {
+      console.log(`[Scheduler] skipped overlapping campaign engagement sync for brand ${brandId}`);
+      return;
+    }
+    const result = leased.value;
     if (result.checked > 0) {
       broadcastToClients(brandId, 'post_campaign_progress', {
         auto_sync: true,
@@ -184,6 +196,21 @@ async function runCampaignEngagementSync(brandId: number): Promise<void> {
     console.log(`[Scheduler] campaign engagement sync brand ${brandId}: checked ${result.checked}, captured ${result.captured}, sent ${result.sent}, queued ${result.queued}, manual ${result.manual}, errors ${result.errors.length}`);
   } catch (err) {
     console.error(`[Scheduler] campaign engagement sync error brand ${brandId}:`, (err as Error).message);
+  }
+}
+
+async function runCampaignKeywordSync(brandId: number): Promise<void> {
+  try {
+    if (!(await canRunTool(brandId, 'tool_10', 'campaign keyword sync'))) return;
+    const leased = await withSchedulerLease(brandId, 'campaign_keyword_sync', 10 * 60 * 1000, () => syncKeywordCampaigns(brandId));
+    if (!leased.acquired || !leased.value) {
+      console.log(`[Scheduler] skipped overlapping campaign keyword sync for brand ${brandId}`);
+      return;
+    }
+    const result = leased.value;
+    console.log(`[Scheduler] campaign keyword sync brand ${brandId}: checked ${result.checked}, captured ${result.captured}, sent ${result.sent}, review ${result.review}, errors ${result.errors.length}`);
+  } catch (err) {
+    console.error(`[Scheduler] campaign keyword sync error brand ${brandId}:`, (err as Error).message);
   }
 }
 
@@ -203,6 +230,7 @@ export function startAutomation(brandId: number): void {
   const timers: NodeJS.Timeout[] = [
     setInterval(() => void runAlerts(brandId),    2 * 60 * 1000), // 2 min
     setInterval(() => void runCampaignEngagementSync(brandId), campaignEngagementSyncIntervalMs()),
+    setInterval(() => void runCampaignKeywordSync(brandId), campaignKeywordSyncIntervalMs()),
     setInterval(() => void runSync(brandId),     5  * 60 * 1000), // 5 min
     setInterval(() => void runListening(brandId), 15 * 60 * 1000), // 15 min
     setInterval(() => void runCluster(brandId),  15 * 60 * 1000), // 15 min
@@ -214,12 +242,13 @@ export function startAutomation(brandId: number): void {
   ];
 
   intervals.set(brandId, timers);
-  console.log(`[Scheduler] Started automation for brand ${brandId}`);
+  console.log(`[Scheduler] Started automation for brand ${brandId}; campaign sync every ${campaignEngagementSyncIntervalMs()}ms`);
 
   // Run sync immediately on start
   void runSync(brandId);
   void runListening(brandId);
   void runCampaignEngagementSync(brandId);
+  void runCampaignKeywordSync(brandId);
 }
 
 export function stopAutomation(brandId: number): void {

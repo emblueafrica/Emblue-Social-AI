@@ -334,7 +334,13 @@ export type CampaignRecord = {
   platform_allocation?: PlatformAllocation;
   include_likers?: boolean;
   include_commenters?: boolean;
-  source_mode?: "publish_new" | "existing";
+  source_mode?: "publish_new" | "existing" | "keyword";
+  intent_filter?: string[];
+  urgency_threshold?: number;
+  reply_template_id?: number | null;
+  max_per_day?: number;
+  public_reply_enabled?: boolean;
+  direct_message_enabled?: boolean;
   post_caption?: string;
   public_reply_template?: string;
   private_followup_template?: string;
@@ -359,7 +365,7 @@ export type CampaignPayload = {
   max_per_hour?: number;
   is_active?: boolean;
   platform_allocation?: PlatformAllocation;
-  source_mode?: "publish_new" | "existing";
+  source_mode?: "publish_new" | "existing" | "keyword";
   post_caption?: string;
   public_reply_template?: string;
   private_followup_template?: string;
@@ -408,10 +414,26 @@ export type CampaignStatusResponse = {
 
 export type CampaignEngagementResponse = {
   campaign_id: number;
-  summary: { captured: number; comments: number; likes: number; reposts: number; sent: number; queued: number; manual: number; failed: number };
+  summary: { captured: number; comments: number; likes: number; reposts: number; sent: number; queued: number; manual: number; failed: number; ignored: number };
   platform_capabilities: Record<Platform, string>;
   bindings: { platform: Platform; url: string; status?: string | null; total_fetched: number; error?: string | null; last_synced_at?: string | null }[];
-  engagers: { id: string; platform: Platform; action: string; author_handle?: string | null; original_text?: string | null; status?: string | null; created_at: string; processed_at?: string | null }[];
+  engagers: { id: string; platform: Platform; action: string; author_handle?: string | null; original_text?: string | null; reply_text?: string | null; delivery_error?: string | null; external_event_id: string; source: string; intent?: string | null; urgency_score?: number | null; reply_confidence?: number | null; status?: string | null; created_at: string; processed_at?: string | null; deliveries: { channel: string; status: string; external_message_id?: string | null; error?: string | null; attempt_count: number; delivered_at?: string | null }[] }[];
+};
+
+export type KeywordCampaignPayload = {
+  brand_id: number;
+  campaign_id?: number;
+  name: string;
+  keywords: string[];
+  platforms: Platform[];
+  intent_filter: string[];
+  confidence_threshold: number;
+  urgency_threshold: number;
+  reply_template_id?: number | null;
+  max_per_day: number;
+  public_reply_enabled: boolean;
+  direct_message_enabled: boolean;
+  status: "draft" | "active";
 };
 
 export type PostUrlCampaignPayload = {
@@ -490,13 +512,16 @@ export type PostUrlCampaignStatus = {
 };
 
 export type ApprovalQueueItem = {
+  queue_id?: number;
   brand_id: number;
+  campaign_id?: number | null;
   platform: Platform;
   author: string;
   original: string;
   reply: string;
   image_url?: string | null;
   tracked_link?: string | null;
+  delivery_error?: string | null;
   meta?: {
     comment_id?: string | null;
     post_id?: string | null;
@@ -780,6 +805,20 @@ export function saveCampaign(payload: CampaignPayload) {
   });
 }
 
+export function saveKeywordCampaign(payload: KeywordCampaignPayload) {
+  return apiRequest<{ ok: true; campaign: CampaignRecord; capabilities: { platform: Platform; keyword_discovery: boolean; public_reply: boolean; direct_message: boolean; issues: string[] }[] }>("/api/v1/campaigns/keyword", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function preflightKeywordCampaign(brandId: number, platforms: Platform[]) {
+  return apiRequest<{ ok: true; capabilities: { platform: Platform; keyword_discovery: boolean; public_reply: boolean; direct_message: boolean; issues: string[] }[] }>("/api/v1/campaigns/keyword/preflight", {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId, platforms }),
+  });
+}
+
 export function uploadCampaignMedia(brandId: number, files: File[]) {
   const body = new FormData();
   body.append("brand_id", String(brandId));
@@ -810,7 +849,21 @@ export function getCampaignEngagements(campaignId: number, brandId: number) {
 }
 
 export function syncCampaignEngagements(campaignId: number, brandId: number) {
-  return apiRequest<{ ok: true; campaign_id: number; checked: number; fetched: number; captured: number; sent: number; queued: number; manual: number; skipped: number; errors: string[] }>(`/api/v1/campaigns/${campaignId}/sync`, {
+  return apiRequest<{ ok: true; campaign_id: number; checked: number; fetched: number; captured: number; sent: number; queued?: number; review?: number; manual: number; ignored: number; failed: number; skipped?: number; errors: string[]; posts?: { platform: Platform; post_url: string; fetched: number; captured: number; sent: number; ignored: number; failed: number; error?: string; synced_at: string }[]; platforms?: { platform: Platform; checked: number; fetched: number; new: number; sent: number; review: number; ignored: number; failed: number; manual: number; last_sync_time: string; error?: string }[] }>(`/api/v1/campaigns/${campaignId}/sync`, {
+    method: 'POST',
+    body: JSON.stringify({ brand_id: brandId }),
+  });
+}
+
+export function retryCampaignEngagement(campaignId: number, engagerId: number, brandId: number, replyText?: string) {
+  return apiRequest<{ ok: true; status: string; reply?: string; error?: string }>(`/api/v1/campaigns/${campaignId}/engagements/${engagerId}/retry`, {
+    method: 'POST',
+    body: JSON.stringify({ brand_id: brandId, reply_text: replyText }),
+  });
+}
+
+export function dismissCampaignEngagement(campaignId: number, engagerId: number, brandId: number) {
+  return apiRequest<{ ok: true; status: string }>(`/api/v1/campaigns/${campaignId}/engagements/${engagerId}/dismiss`, {
     method: 'POST',
     body: JSON.stringify({ brand_id: brandId }),
   });

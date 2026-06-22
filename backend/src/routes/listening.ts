@@ -62,6 +62,12 @@ function canAccessBrand(req: Request, brandId: number): boolean {
   return canAccessBrandId(req.user, brandId);
 }
 
+async function isCampaignGroup(groupId: bigint | null): Promise<boolean> {
+  if (!groupId) return false;
+  const group = await prisma.keywordGroup.findUnique({ where: { groupId }, select: { source: true } });
+  return group?.source === 'campaign';
+}
+
 function keywordGroupJson(row: Awaited<ReturnType<typeof prisma.keywordGroup.findFirst>>) {
   if (!row) return null;
   return {
@@ -173,6 +179,7 @@ router.post('/keyword-groups', requireBrandRole('client_owner'), requireBrandAcc
     if (groupId) {
       const existing = await prisma.keywordGroup.findUnique({ where: { groupId } });
       if (!existing) { res.status(404).json({ error: 'Keyword group not found' }); return; }
+      if (existing.source === 'campaign') { res.status(404).json({ error: 'Keyword group not found' }); return; }
       if (!canAccessBrand(req, existing.brandId)) { res.status(403).json({ error: 'Forbidden' }); return; }
 
       const row = await prisma.keywordGroup.update({
@@ -220,7 +227,7 @@ router.get('/keyword-groups/:brand_id', requireBrandAccess, requireToolAccess('t
 
   try {
     const rows = await prisma.keywordGroup.findMany({
-      where: { brandId },
+      where: { brandId, source: 'listening' },
       orderBy: { createdAt: 'desc' },
     });
     res.json({ keyword_groups: rows.map(keywordGroupJson) });
@@ -236,6 +243,7 @@ router.delete('/keyword-groups/:group_id', requireBrandRole('client_owner'), req
   try {
     const group = await prisma.keywordGroup.findUnique({ where: { groupId } });
     if (!group) { res.status(404).json({ error: 'Keyword group not found' }); return; }
+    if (group.source === 'campaign') { res.status(404).json({ error: 'Keyword group not found' }); return; }
     if (!canAccessBrand(req, group.brandId)) { res.status(403).json({ error: 'Forbidden' }); return; }
 
     await prisma.keywordGroup.delete({ where: { groupId } });
@@ -252,6 +260,7 @@ router.post('/keyword-groups/:group_id/toggle', requireBrandRole('client_owner')
   try {
     const group = await prisma.keywordGroup.findUnique({ where: { groupId } });
     if (!group) { res.status(404).json({ error: 'Keyword group not found' }); return; }
+    if (group.source === 'campaign') { res.status(404).json({ error: 'Keyword group not found' }); return; }
     if (!canAccessBrand(req, group.brandId)) { res.status(403).json({ error: 'Forbidden' }); return; }
 
     const row = await prisma.keywordGroup.update({
@@ -273,6 +282,7 @@ router.post('/search', requireBrandAccess, requireToolAccess('tool_1'), async (r
     const groupId = toBigIntId(body.group_id);
     const group = groupId ? await prisma.keywordGroup.findUnique({ where: { groupId } }) : null;
     if (groupId && !group) { res.status(404).json({ error: 'Keyword group not found' }); return; }
+    if (group?.source === 'campaign') { res.status(404).json({ error: 'Keyword group not found' }); return; }
     if (group && group.brandId !== brandId) { res.status(400).json({ error: 'group_id does not belong to brand_id' }); return; }
 
     const mode = normalizeSearchMode(body.mode) ?? (group?.mode === 'historical' ? 'historical' : 'realtime');
@@ -309,8 +319,9 @@ router.get('/runs/:brand_id', requireBrandAccess, requireToolAccess('tool_1'), a
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
 
   try {
+    const campaignGroups = await prisma.keywordGroup.findMany({ where: { brandId, source: 'campaign' }, select: { groupId: true } });
     const rows = await prisma.searchRun.findMany({
-      where: { brandId },
+      where: { brandId, groupId: { notIn: campaignGroups.map(group => group.groupId) } },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
@@ -327,6 +338,7 @@ router.get('/runs/:run_id/results', requireToolAccess('tool_1'), async (req: Req
   try {
     const run = await prisma.searchRun.findUnique({ where: { runId } });
     if (!run) { res.status(404).json({ error: 'Search run not found' }); return; }
+    if (await isCampaignGroup(run.groupId)) { res.status(404).json({ error: 'Search run not found' }); return; }
     if (!canAccessBrand(req, run.brandId)) { res.status(403).json({ error: 'Forbidden' }); return; }
 
     const limit = Math.min(100, getRequiredBrandId(req.query['limit']) ?? 50);
@@ -353,6 +365,7 @@ router.get('/runs/:run_id/volume', requireToolAccess('tool_1'), async (req: Requ
   try {
     const run = await prisma.searchRun.findUnique({ where: { runId } });
     if (!run) { res.status(404).json({ error: 'Search run not found' }); return; }
+    if (await isCampaignGroup(run.groupId)) { res.status(404).json({ error: 'Search run not found' }); return; }
     if (!canAccessBrand(req, run.brandId)) { res.status(403).json({ error: 'Forbidden' }); return; }
 
     const rows = await prisma.searchVolume.findMany({
@@ -372,6 +385,7 @@ router.get('/runs/:run_id/status', requireToolAccess('tool_1'), async (req: Requ
   try {
     const run = await prisma.searchRun.findUnique({ where: { runId } });
     if (!run) { res.status(404).json({ error: 'Search run not found' }); return; }
+    if (await isCampaignGroup(run.groupId)) { res.status(404).json({ error: 'Search run not found' }); return; }
     if (!canAccessBrand(req, run.brandId)) { res.status(403).json({ error: 'Forbidden' }); return; }
     res.json({ run: searchRunJson(run) });
   } catch (err) {
@@ -384,8 +398,9 @@ router.get('/feed/:brand_id', requireBrandAccess, requireToolAccess('tool_1'), a
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
 
   try {
+    const campaignGroups = await prisma.keywordGroup.findMany({ where: { brandId, source: 'campaign' }, select: { groupId: true } });
     const rows = await prisma.searchResult.findMany({
-      where: { brandId },
+      where: { brandId, groupId: { notIn: campaignGroups.map(group => group.groupId) } },
       orderBy: [{ urgencyScore: 'desc' }, { createdAt: 'desc' }],
       take: Math.min(100, getRequiredBrandId(req.query['limit']) ?? 50),
     });
@@ -402,6 +417,7 @@ router.post('/results/:result_id/engage', requireToolAccess('tool_1'), async (re
   try {
     const row = await prisma.searchResult.findUnique({ where: { resultId } });
     if (!row) { res.status(404).json({ error: 'Search result not found' }); return; }
+    if (await isCampaignGroup(row.groupId)) { res.status(404).json({ error: 'Search result not found' }); return; }
     if (!canAccessBrand(req, row.brandId)) { res.status(403).json({ error: 'Forbidden' }); return; }
 
     await prisma.searchResult.update({

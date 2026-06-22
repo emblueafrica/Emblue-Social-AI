@@ -353,7 +353,13 @@ export interface CampaignConfig {
   do_not_say?:          string[];
   brand_name?:          string;
   objective?:           string;
-  source_mode?:         'publish_new' | 'existing';
+  source_mode?:         'publish_new' | 'existing' | 'keyword';
+  intent_filter?:       Intent[];
+  urgency_threshold?:   number;
+  reply_template_id?:   number | null;
+  max_per_day?:         number;
+  public_reply_enabled?: boolean;
+  direct_message_enabled?: boolean;
   post_caption?:        string;
   public_reply_template?: string;
   private_followup_template?: string;
@@ -404,13 +410,22 @@ export interface Engager {
 }
 
 export interface EngageResult {
-  status:       'sent' | 'queued_for_approval' | 'manual_copy' | 'rate_limited' | 'already_sent' | 'bot_blocked' | 'generation_failed' | 'error';
+  status:       'sent' | 'partial' | 'queued_for_approval' | 'manual_copy' | 'manual_action_required' | 'rate_limited' | 'already_sent' | 'bot_blocked' | 'generation_failed' | 'error';
   platform?:    Platform;
   author?:      string;
   reply?:       string;
   image_url?:   string | null;
   tracked_link?: string | null;
   error?:       string;
+  confidence?:  number;
+  deliveries?:  CampaignDeliveryOutcome[];
+}
+
+export interface CampaignDeliveryOutcome {
+  channel: 'public_reply' | 'direct_message';
+  status: 'sent' | 'failed' | 'rate_limited' | 'manual_action_required' | 'skipped';
+  external_message_id?: string;
+  error?: string;
 }
 
 export interface PlatformSendResult {
@@ -454,13 +469,16 @@ export interface TrackedLink {
 
 // ── APPROVAL QUEUE ITEM ───────────────────────────────────────────────────────
 export interface ApprovalQueueItem {
+  queue_id?:      number;
   brand_id:      number;
+  campaign_id?:  number | null;
   platform:      Platform;
   author:        string;
   original:      string;
   reply:         string;
   image_url?:    string | null;
   tracked_link?: string | null;
+  delivery_error?: string | null;
   meta?: {
     comment_id?: string | null;
     post_id?:    string | null;

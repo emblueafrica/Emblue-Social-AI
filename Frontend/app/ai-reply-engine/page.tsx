@@ -45,7 +45,7 @@ type Message = {
   original?: string;
   reply?: string;
   confidence?: number;
-  queueIndex?: number;
+  queueId?: number;
 };
 
 const sentimentClass: Record<Sentiment, string> = {
@@ -92,19 +92,19 @@ function mapQueueItem(item: ApprovalQueueItem, index: number): Message {
   const confidence = item.manual_copy_required ? 50 : 80;
 
   return {
-    id: index + 1,
+    id: item.queue_id ?? index + 1,
     user: author,
     platform,
     preview: item.original.slice(0, 96) || item.reply.slice(0, 96),
     sentiment: item.manual_copy_required ? "Neutral" : "Postive",
-    tag: item.manual_copy_required ? "Manual Review" : "Approval Queue",
+    tag: item.delivery_error || item.manual_copy_required ? "Manual Review" : "Approval Queue",
     status: "pending",
     ago: "Live",
     urgency: item.manual_copy_required ? "yellow" : "red",
-    original: item.original,
+    original: item.delivery_error ? `${item.original}\n\nLast delivery error: ${item.delivery_error}` : item.original,
     reply: item.reply,
     confidence,
-    queueIndex: index,
+    queueId: item.queue_id,
   };
 }
 
@@ -129,6 +129,7 @@ export default function AIReplyEngine() {
     queryFn: getToolAccess,
     enabled: Boolean(activeBrandId),
     retry: false,
+    refetchInterval: 15000,
   });
 
   const queueQuery = useQuery({
@@ -136,6 +137,7 @@ export default function AIReplyEngine() {
     queryFn: () => getAiReplyQueue(activeBrandId!),
     enabled: Boolean(activeBrandId),
     retry: false,
+    refetchInterval: 15000,
   });
 
   const replyMutation = useMutation({
@@ -154,23 +156,23 @@ export default function AIReplyEngine() {
   });
 
   const approveMutation = useMutation({
-    mutationFn: ({ index, replyText }: { index: number; replyText: string }) =>
-      approveAiReplyQueueItem(activeBrandId!, index, replyText),
+    mutationFn: ({ queueId, replyText }: { queueId: number; replyText: string }) =>
+      approveAiReplyQueueItem(activeBrandId!, queueId, replyText),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
-      setToast({ kind: "approved" });
-      setApiNotice(
-        result.publish?.success === false
-          ? `Approved, but sending needs attention: ${result.publish.error ?? "platform publish failed"}`
-          : "Reply approved and sent.",
-      );
-      setTimeout(() => setToast(null), 2500);
+      if (result.publish?.success === false) {
+        setApiNotice(`Publishing failed; this item remains pending: ${result.publish.error ?? "platform publish failed"}`);
+      } else {
+        setToast({ kind: "approved" });
+        setApiNotice("Reply approved and sent.");
+        setTimeout(() => setToast(null), 2500);
+      }
     },
     onError: (error) => setApiNotice(apiErrorMessage(error)),
   });
 
   const skipMutation = useMutation({
-    mutationFn: (index: number) => skipAiReplyQueueItem(activeBrandId!, index),
+    mutationFn: (queueId: number) => skipAiReplyQueueItem(activeBrandId!, queueId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
       setToast({ kind: "skipped" });
@@ -240,19 +242,19 @@ export default function AIReplyEngine() {
   };
 
   const approveSelected = () => {
-    if (!selected || selected.queueIndex === undefined || !activeBrandId || !queueQuery.data) {
+    if (!selected || selected.queueId === undefined || !activeBrandId || !queueQuery.data) {
       setApiNotice("This queue item is not linked to the backend approval flow.");
       return;
     }
-    approveMutation.mutate({ index: selected.queueIndex, replyText: draftBody });
+    approveMutation.mutate({ queueId: selected.queueId, replyText: draftBody });
   };
 
   const skipSelected = () => {
-    if (!selected || selected.queueIndex === undefined || !activeBrandId || !queueQuery.data) {
+    if (!selected || selected.queueId === undefined || !activeBrandId || !queueQuery.data) {
       setApiNotice("This queue item is not linked to the backend skip flow.");
       return;
     }
-    skipMutation.mutate(selected.queueIndex);
+    skipMutation.mutate(selected.queueId);
   };
 
   return (
@@ -279,7 +281,7 @@ export default function AIReplyEngine() {
           {queueQuery.error && !(queueQuery.error instanceof ApiError && queueQuery.error.status === 403) && (
             <Notice tone="error" title="Reply queue unavailable">{apiErrorMessage(queueQuery.error)}</Notice>
           )}
-          {queueQuery.data && queueMessages.length === 0 && <Notice title="No replies waiting">New replies will appear here when campaigns queue them for approval.</Notice>}
+          {queueQuery.data && queueMessages.length === 0 && <Notice title="No replies waiting">New non-campaign comments, mentions, and messages will appear here for review.</Notice>}
           {apiNotice && <Notice tone={replyMutation.isError ? "error" : "info"} title="AI Reply Engine">{apiNotice}</Notice>}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -304,8 +306,8 @@ export default function AIReplyEngine() {
                 <Check2 label="TikTok" checked={platforms.tiktok} onChange={() => togglePlatform("tiktok")} />
               </FilterCard>
 
-              <FilterCard title="CAMPAIGN">
-                {campaignTags.length ? campaignTags.map((tag) => <Check2 key={tag} label={tag} checked />) : <p className="text-sm text-muted-foreground">No campaign tags in queue.</p>}
+              <FilterCard title="CONTEXT">
+                {campaignTags.length ? campaignTags.map((tag) => <Check2 key={tag} label={tag} checked />) : <p className="text-sm text-muted-foreground">No context tags in queue.</p>}
               </FilterCard>
             </aside>
 
