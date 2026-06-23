@@ -8,7 +8,7 @@ import { getRequiredBrandId, requireNonEmptyString, sendServerError, sendValidat
 import { ApprovalQueueItem, Platform } from '../types';
 import { CampaignDeliveryChannel, verifyMetaWebhookSignature } from '../campaigns/unified';
 import { processLiveEngagementEvent, resolveBrandForPlatformAccount } from '../campaigns/liveEngagement';
-import { prepareCampaignDelivery } from '../campaigns/deliveryWorker';
+import { prepareCampaignDelivery, recordCampaignDeliveryUnavailable } from '../campaigns/deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 
 const router = Router();
@@ -319,11 +319,23 @@ async function handleCampaignQueueAction(
     return { item: await getCampaignQueueItem(brandId, engagerId, channel) };
   }
 
-  if (!isBullEnabled()) throw new Error('Campaign delivery queue unavailable. Configure REDIS_URL before sending campaign activity.');
   const numericCampaignId = Number(campaignId);
   const data = { brand_id: brandId, campaign_id: numericCampaignId, engager_id: engagerId, channel };
-  await prepareCampaignDelivery(data, new Date());
-  await enqueueCampaignDelivery(data, 0);
+  if (!isBullEnabled()) {
+    await recordCampaignDeliveryUnavailable(data, 'Campaign delivery queue unavailable. Configure REDIS_URL before sending campaign activity.');
+    await updateCampaignEngagerFromDeliveries(brandId, engager.engagerId, campaignId);
+    throw new Error('Campaign delivery queue unavailable. Configure REDIS_URL before sending campaign activity.');
+  }
+  try {
+    await prepareCampaignDelivery(data, new Date());
+    const queued = await enqueueCampaignDelivery(data, 0);
+    if (!queued) throw new Error('Campaign delivery queue did not accept the job.');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Campaign delivery queue failed.';
+    await recordCampaignDeliveryUnavailable(data, message);
+    await updateCampaignEngagerFromDeliveries(brandId, engager.engagerId, campaignId);
+    throw new Error(`Campaign delivery queue unavailable. ${message}`);
+  }
   await prisma.campaignPostEngager.update({ where: { engagerId: engager.engagerId }, data: { status: 'queued', deliveryError: null, updatedAt: new Date() } });
   return { item: await getCampaignQueueItem(brandId, engagerId, channel), publish: { success: true, platform: engager.platform } };
 }
@@ -392,7 +404,13 @@ router.post('/queue/:queue_key/edit-and-send', requireBrandAccess, requireToolAc
     const result = await handleCampaignQueueAction(brandId, key.engagerId, key.channel, 'edit-and-send', replyText);
     if (!result) { res.status(404).json({ error: 'Queue item not found' }); return; }
     res.json({ ok: true, ...result });
-  } catch (err) { sendServerError(res, 'Failed to approve queue item', err); }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('Campaign delivery queue unavailable')) {
+      res.status(503).json({ error: 'Campaign delivery queue unavailable', message: err.message });
+      return;
+    }
+    sendServerError(res, 'Failed to approve queue item', err);
+  }
 });
 
 router.post('/queue/:queue_key/mark-sent', requireBrandAccess, requireToolAccess('tool_3'), async (req: Request, res: Response) => {
