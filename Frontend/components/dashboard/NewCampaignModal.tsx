@@ -7,7 +7,10 @@ export type Platform = "instagram" | "facebook" | "tiktok" | "x";
 export type CampaignDraft = {
   name: string;
   platforms: Platform[];
-  sourceMode: "publish_new" | "existing" | "keyword";
+  sourceMode: "publish_new" | "existing" | "keyword" | "live";
+  priority: number;
+  liveScope: "all_owned_posts" | "selected_posts";
+  replyMode: "public" | "dm_with_public_fallback" | "dm_only";
   postCaption: string;
   existingPosts: Partial<Record<Platform, string>>;
   media: CampaignMedia[];
@@ -15,6 +18,8 @@ export type CampaignDraft = {
   tone: string;
   maxPerHour: number;
   maxPerDay: number;
+  maxDmPerDay: number;
+  spacingMinutes: number;
   intentFilter: string[];
   urgencyThreshold: number;
   replyTemplateId: number | null;
@@ -27,6 +32,11 @@ export type CampaignDraft = {
   threshold: number;
   events: CampaignEventSettings;
   allocation: Record<Platform, number>;
+  campaignType: "brand_mention" | "competitor_complaint" | "category_intent";
+  minFollowers: number;
+  skipVerified: boolean;
+  skipReposts: boolean;
+  skipNewAccountsDays: number;
 };
 
 const PLATFORM_OPTIONS: { id: Platform; label: string }[] = [
@@ -64,6 +74,9 @@ function blankDraft(): CampaignDraft {
     name: "",
     platforms: [],
     sourceMode: "existing",
+    priority: 0,
+    liveScope: "all_owned_posts",
+    replyMode: "dm_with_public_fallback",
     postCaption: "",
     existingPosts: {},
     media: [],
@@ -71,6 +84,8 @@ function blankDraft(): CampaignDraft {
     tone: "Warm and friendly",
     maxPerHour: 10,
     maxPerDay: 50,
+    maxDmPerDay: 25,
+    spacingMinutes: 10,
     intentFilter: ["complaint", "purchase_intent"],
     urgencyThreshold: 3,
     replyTemplateId: null,
@@ -83,6 +98,11 @@ function blankDraft(): CampaignDraft {
     threshold: 85,
     events: DEFAULT_EVENTS,
     allocation: EMPTY_ALLOCATION,
+    campaignType: "brand_mention",
+    minFollowers: 0,
+    skipVerified: false,
+    skipReposts: true,
+    skipNewAccountsDays: 0,
   };
 }
 
@@ -90,6 +110,7 @@ export function NewCampaignModal({
   open,
   brandId,
   initial,
+  initialMode,
   saving,
   errorMessage,
   onClose,
@@ -99,6 +120,7 @@ export function NewCampaignModal({
   open: boolean;
   brandId: number | null;
   initial?: CampaignDraft;
+  initialMode?: "live" | "existing" | "keyword";
   saving?: boolean;
   errorMessage?: string | null;
   onClose: () => void;
@@ -116,12 +138,12 @@ export function NewCampaignModal({
     if (!open) return;
     const value = initial
       ? { ...blankDraft(), ...initial, events: { ...DEFAULT_EVENTS, ...initial.events }, allocation: { ...EMPTY_ALLOCATION, ...initial.allocation } }
-      : blankDraft();
+      : { ...blankDraft(), sourceMode: initialMode ?? "existing" };
     setDraft(value.sourceMode === "publish_new" ? { ...value, sourceMode: "existing" } : value);
     setKeywordInput("");
     setError(null);
     setShowPreview(false);
-  }, [open, initial]);
+  }, [open, initial, initialMode]);
 
   const selectedPlatforms = draft.platforms;
   const allocationTotal = selectedPlatforms.reduce((sum, platform) => sum + Number(draft.allocation[platform] ?? 0), 0);
@@ -133,6 +155,14 @@ export function NewCampaignModal({
         draft.intentFilter.length &&
         draft.maxPerDay > 0 &&
         (draft.publicReplyEnabled || draft.directMessageEnabled),
+      );
+    }
+    if (draft.sourceMode === "live") {
+      return Boolean(
+        (draft.liveScope === "all_owned_posts" || selectedPlatforms.every(platform => draft.existingPosts[platform]?.trim())) &&
+        (draft.publicReplyEnabled || draft.directMessageEnabled) &&
+        draft.maxPerHour > 0 &&
+        draft.maxPerDay > 0,
       );
     }
     return Boolean(
@@ -205,6 +235,9 @@ export function NewCampaignModal({
 
         <div className="px-5 pt-5 sm:px-8">
           <div className="inline-flex rounded-lg border bg-muted/30 p-1">
+            <ModeTab active={draft.sourceMode === "live"} onClick={() => update("sourceMode", "live")}>
+              Live Engagement
+            </ModeTab>
             <ModeTab active={draft.sourceMode === "existing"} onClick={() => update("sourceMode", "existing")}>
               Post URL Campaign
             </ModeTab>
@@ -268,7 +301,7 @@ export function NewCampaignModal({
                   )) : <p className="text-sm text-muted-foreground">Select at least one platform.</p>}
                 </div>
               </Field>
-            ) : (
+            ) : draft.sourceMode === "keyword" ? (
               <>
                 <Field label="Keywords">
                   <div className="flex gap-2">
@@ -304,6 +337,33 @@ export function NewCampaignModal({
                         {label}
                       </label>
                     ))}
+                  </div>
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Live Post Scope">
+                  <select value={draft.liveScope} onChange={event => update("liveScope", event.target.value as CampaignDraft["liveScope"])} className="input">
+                    <option value="all_owned_posts">All owned posts</option>
+                    <option value="selected_posts">Selected post URLs</option>
+                  </select>
+                </Field>
+                {draft.liveScope === "selected_posts" && (
+                  <Field label="Selected Post URLs">
+                    <div className="space-y-3">
+                      {selectedPlatforms.map(platform => (
+                        <div key={platform} className="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-3">
+                          <span className="text-sm font-medium capitalize">{platform === "x" ? "X" : platform}</span>
+                          <input value={draft.existingPosts[platform] ?? ""} onChange={event => update("existingPosts", { ...draft.existingPosts, [platform]: event.target.value })} className="input min-w-0" placeholder="https://..." />
+                        </div>
+                      ))}
+                    </div>
+                  </Field>
+                )}
+                <Field label="Optional Trigger Keywords">
+                  <div className="flex gap-2">
+                    <input value={keywordInput} onChange={event => setKeywordInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addKeyword(); } }} className="input" placeholder="price, available, help" />
+                    <button type="button" onClick={addKeyword} className="rounded-lg border px-4 text-sm font-semibold">Add</button>
                   </div>
                 </Field>
               </>
@@ -364,6 +424,18 @@ export function NewCampaignModal({
                   />
                 </Field>
               )}
+              <Field label="Priority">
+                <input type="number" min={0} max={1000} value={draft.priority} onChange={event => update("priority", Number(event.target.value))} className="input" />
+              </Field>
+              <Field label="Delivery Spacing (minutes)">
+                <input type="number" min={0} max={1440} value={draft.spacingMinutes} onChange={event => update("spacingMinutes", Number(event.target.value))} className="input" />
+              </Field>
+              <Field label="Max Sends Per Day">
+                <input type="number" min={1} max={5000} value={draft.maxPerDay} onChange={event => update("maxPerDay", Number(event.target.value))} className="input" />
+              </Field>
+              <Field label="Max DMs Per Day">
+                <input type="number" min={0} max={5000} value={draft.maxDmPerDay} onChange={event => update("maxDmPerDay", Number(event.target.value))} className="input" />
+              </Field>
             </div>
           </div>
 
@@ -425,6 +497,11 @@ export function NewCampaignModal({
             </Field>
 
             <Field label="Delivery Channels">
+              <select value={draft.replyMode} onChange={event => update("replyMode", event.target.value as CampaignDraft["replyMode"])} className="input mb-3">
+                <option value="public">Public reply only</option>
+                <option value="dm_with_public_fallback">DM with public fallback</option>
+                <option value="dm_only">DM only</option>
+              </select>
               <div className="grid gap-3 sm:grid-cols-2">
                 <ToggleCard
                   checked={draft.publicReplyEnabled}
@@ -440,6 +517,21 @@ export function NewCampaignModal({
                 />
               </div>
             </Field>
+
+            {draft.sourceMode === "keyword" && (
+              <Field label="Keyword Audience Rules">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <select value={draft.campaignType} onChange={event => update("campaignType", event.target.value as CampaignDraft["campaignType"])} className="input">
+                    <option value="brand_mention">Brand mention</option>
+                    <option value="competitor_complaint">Competitor complaint</option>
+                    <option value="category_intent">Category intent</option>
+                  </select>
+                  <input type="number" min={0} value={draft.minFollowers} onChange={event => update("minFollowers", Number(event.target.value))} className="input" placeholder="Minimum followers" />
+                  <ToggleCard checked={draft.skipVerified} title="Skip verified" body="Exclude verified profiles." onChange={() => update("skipVerified", !draft.skipVerified)} />
+                  <ToggleCard checked={draft.skipReposts} title="Skip reposts" body="Only process original posts." onChange={() => update("skipReposts", !draft.skipReposts)} />
+                </div>
+              </Field>
+            )}
 
             <button type="button" onClick={() => setShowPreview(current => !current)} className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-sm font-semibold text-primary">
               <Eye className="size-4" /> Preview Sample Reply

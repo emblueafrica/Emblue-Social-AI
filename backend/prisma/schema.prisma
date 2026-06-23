@@ -98,6 +98,29 @@ enum TeamInvitationStatus {
   @@map("team_invitation_status")
 }
 
+enum CampaignMode {
+  live
+  post_url
+  keyword
+
+  @@map("campaign_mode")
+}
+
+enum CampaignScopeType {
+  all_owned_posts
+  selected_posts
+
+  @@map("campaign_scope_type")
+}
+
+enum CampaignReplyMode {
+  public
+  dm_with_public_fallback
+  dm_only
+
+  @@map("campaign_reply_mode")
+}
+
 model Brand {
   brandId           Int              @id @default(autoincrement()) @map("brand_id")
   name              String
@@ -628,7 +651,12 @@ model EngageCampaign {
   campaignId         BigInt    @id @default(autoincrement()) @map("campaign_id")
   brandId            Int       @map("brand_id")
   name               String
+  mode               CampaignMode @default(post_url)
   platform           Platform?
+  platforms          Platform[] @default([])
+  priority           Int @default(0)
+  scopeType          CampaignScopeType @default(selected_posts) @map("scope_type")
+  replyMode          CampaignReplyMode @default(public) @map("reply_mode")
   postIds            String[]  @default([]) @map("post_ids")
   keywords           String[]  @default([])
   engageAll          Boolean?  @default(true) @map("engage_all")
@@ -642,6 +670,8 @@ model EngageCampaign {
   autoFireThreshold  Int?      @default(85) @map("auto_fire_threshold")
   maxPerHour         Int?      @default(50) @map("max_per_hour")
   maxPerDay          Int       @default(50) @map("max_per_day")
+  maxDmPerDay        Int       @default(50) @map("max_dm_per_day")
+  spacingMinutes     Int       @default(10) @map("spacing_minutes")
   intentFilter       String[]  @default([]) @map("intent_filter")
   urgencyThreshold   Int       @default(3) @map("urgency_threshold")
   replyTemplateId    BigInt?   @map("reply_template_id")
@@ -657,11 +687,15 @@ model EngageCampaign {
   publicReplyTemplate String?  @map("public_reply_template")
   privateFollowupTemplate String? @map("private_followup_template")
   eventSettings      Json      @default("{\"comments\":true,\"likes\":true,\"reposts\":true,\"mentions\":true,\"dms\":true}") @map("event_settings")
+  modeConfig         Json      @default("{}") @map("mode_config")
+  previewFetchedAt   DateTime? @map("preview_fetched_at") @db.Timestamptz(6)
+  previewExpiresAt   DateTime? @map("preview_expires_at") @db.Timestamptz(6)
   activationStatus   String    @default("draft") @map("activation_status")
   lastActivatedAt    DateTime? @map("last_activated_at") @db.Timestamptz(6)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
+  @@index([brandId, mode, isActive, priority], map: "idx_engage_campaigns_mode")
   @@map("engage_campaigns")
 }
 
@@ -740,6 +774,11 @@ model CampaignPostEngager {
   intent        Intent?
   urgencyScore  Int?     @map("urgency_score")
   replyConfidence Int?   @map("reply_confidence")
+  profileClassification String? @map("profile_classification")
+  profileFollowerCount Int? @map("profile_follower_count")
+  profileVerified Boolean? @map("profile_verified")
+  profileAccountCreatedAt DateTime? @map("profile_account_created_at") @db.Timestamptz(6)
+  profileStatus String? @map("profile_status")
   firstDeliveredAt DateTime? @map("first_delivered_at") @db.Timestamptz(6)
   status       String?   @default("pending")
   processedAt  DateTime? @map("processed_at") @db.Timestamptz(6)
@@ -762,6 +801,10 @@ model CampaignDeliveryAttempt {
   externalMessageId String?  @map("external_message_id")
   error            String?
   attemptCount     Int       @default(1) @map("attempt_count")
+  bullJobId        String?   @map("bull_job_id")
+  scheduledAt      DateTime? @map("scheduled_at") @db.Timestamptz(6)
+  nextAttemptAt    DateTime? @map("next_attempt_at") @db.Timestamptz(6)
+  lastAttemptAt    DateTime? @map("last_attempt_at") @db.Timestamptz(6)
   deliveredAt      DateTime? @map("delivered_at") @db.Timestamptz(6)
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)

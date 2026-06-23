@@ -16,6 +16,8 @@ import { syncXRepliesForPost } from './xReplySync';
 import { eligibleForCampaign } from './lifecycle';
 import { runAgent1 } from '../agents/agent1_listening';
 import { Intent } from '../types';
+import { prepareCampaignDelivery } from './deliveryWorker';
+import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 
 type TrackedPost = {
   urlId: bigint;
@@ -296,32 +298,21 @@ async function syncTrackedPost(
       continue;
     }
 
-    const result = await engageEngager(
-      brandId,
-      {
-        platform: engager.platform,
-        author_handle: engager.author_handle,
-        author_id: engager.author_id,
-        comment_id: engager.raw_comment_id,
-        post_id: engager.raw_video_id ?? post.postIdExt,
-        tweet_id: engager.raw_tweet_id ?? engager.raw_comment_id,
-        text: engager.text,
-        action: engager.action,
-      },
-      config,
-      credentials,
-    );
+    if (!isBullEnabled()) {
+      totals.manual += 1;
+      await updateCampaignEngagerStatus(brandId, campaignId, engager, 'setup_required', undefined, 'Campaign delivery queue unavailable.');
+      continue;
+    }
 
-    if (result.status === 'sent') totals.sent += 1;
-    else if (result.status === 'queued_for_approval') totals.queued += 1;
-    else if (result.status === 'manual_copy') totals.manual += 1;
-    else if (result.status === 'error' || result.status === 'generation_failed' || result.status === 'rate_limited') totals.failed += 1;
-    else totals.skipped += 1;
-
-    const status = result.status === 'queued_for_approval' ? 'needs_review' : result.status;
-    await persistCampaignDeliveryOutcomes(engagerId, brandId, Number(campaignId), engager.platform, result);
-    await updateCampaignEngagerStatus(brandId, campaignId, engager, status, result.reply, result.error, result.confidence);
-    await new Promise(resolve => setTimeout(resolve, 500));
+    const numericCampaignId = Number(campaignId);
+    const channel = config.reply_mode === 'public' ? 'public_reply' : 'direct_message';
+    const delay = Math.max(0, totals.queued) * Math.max(0, config.spacing_minutes ?? 0) * 60_000;
+    const data = { brand_id: brandId, campaign_id: numericCampaignId, engager_id: Number(engagerId), channel } as const;
+    const scheduledAt = new Date(Date.now() + delay);
+    await prepareCampaignDelivery(data, scheduledAt);
+    await enqueueCampaignDelivery(data, delay);
+    totals.queued += 1;
+    await updateCampaignEngagerStatus(brandId, campaignId, engager, 'queued');
   }
 
   await prisma.campaignPostUrl.update({

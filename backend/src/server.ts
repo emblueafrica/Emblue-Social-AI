@@ -25,6 +25,14 @@ const app: Application = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
 app.disable('x-powered-by');
 
+declare global {
+  namespace Express {
+    interface Request {
+      rawBody?: Buffer;
+    }
+  }
+}
+
 function buildCorsOptions(): CorsOptions {
   const normalizeOrigin = (value: string): string => value.trim().replace(/\/+$/, '');
 
@@ -71,7 +79,13 @@ function buildCorsOptions(): CorsOptions {
 app.use(securityHeaders);
 app.use(cors(buildCorsOptions()));
 app.options('*', cors(buildCorsOptions()));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buffer) => {
+    const request = req as Request;
+    if (request.originalUrl.startsWith('/api/v1/rt/webhook/')) request.rawBody = Buffer.from(buffer);
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use(apiRateLimit);
 

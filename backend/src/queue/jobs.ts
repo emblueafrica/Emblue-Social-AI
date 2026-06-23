@@ -20,6 +20,8 @@ import { broadcastToClients } from "../stream/eventQueue";
 import { Platform } from "../types";
 import { hasToolAccess } from "../tools/access";
 import { ToolId } from "../tools/registry";
+import { CampaignDeliveryJobData, processCampaignDeliveryJob } from '../campaigns/deliveryWorker';
+import { CampaignDeliveryChannel, buildCampaignDeliveryJobId } from '../campaigns/unified';
 
 export const JOB = {
   PLATFORM_SYNC:    "platform_sync",
@@ -30,6 +32,7 @@ export const JOB = {
   WAR_ROOM:         "war_room",
   FUNNEL_RUN:       "funnel_run",
   ALERTS_SCAN:      "alerts_scan",
+  CAMPAIGN_DELIVERY: "campaign_delivery",
 } as const;
 
 type JobName = typeof JOB[keyof typeof JOB];
@@ -132,6 +135,22 @@ async function processJob(job: Job<JobData>): Promise<void> {
       await scanBrandAlerts(brand_id);
       break;
     }
+    case JOB.CAMPAIGN_DELIVERY: {
+      if (!(await canProcessTool(brand_id, "tool_10", JOB.CAMPAIGN_DELIVERY))) break;
+      const delivery = job.data as unknown as CampaignDeliveryJobData;
+      const result = await processCampaignDeliveryJob(delivery);
+      if (result.fallback_to_public) {
+        await enqueueCampaignDelivery({ ...delivery, channel: 'public_reply' }, 0);
+      }
+      broadcastToClients(brand_id, 'campaign_delivery_update', {
+        campaign_id: delivery.campaign_id,
+        engager_id: delivery.engager_id,
+        channel: delivery.channel,
+        status: result.status,
+        error: result.error,
+      });
+      break;
+    }
     default: console.warn("[BullMQ] Unknown job:", job.name);
   }
 }
@@ -139,6 +158,21 @@ async function processJob(job: Job<JobData>): Promise<void> {
 export async function enqueueJob(jobName: JobName, brandId: number, delay = 0): Promise<void> {
   if (!mainQueue || !bullEnabled) return;
   await mainQueue.add(jobName, { brand_id: brandId }, { delay, jobId: `${jobName}_${brandId}_${Date.now()}` });
+}
+
+export async function enqueueCampaignDelivery(
+  data: CampaignDeliveryJobData,
+  delay = 0,
+): Promise<boolean> {
+  if (!mainQueue || !bullEnabled) return false;
+  const jobId = buildCampaignDeliveryJobId(data.campaign_id, data.engager_id, data.channel as CampaignDeliveryChannel);
+  await mainQueue.add(JOB.CAMPAIGN_DELIVERY, data, {
+    delay,
+    jobId,
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+  });
+  return true;
 }
 
 export async function scheduleRecurringJobs(brandId: number): Promise<void> {

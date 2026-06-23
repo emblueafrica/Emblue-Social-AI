@@ -6,6 +6,8 @@ import { requireToolAccess } from '../middleware/toolAccess';
 import { publishReply } from '../stream/publisher';
 import { getRequiredBrandId, requireNonEmptyString, sendServerError, sendValidationError } from '../utils/validation';
 import { ApprovalQueueItem, Platform } from '../types';
+import { verifyMetaWebhookSignature } from '../campaigns/unified';
+import { processLiveEngagementEvent, resolveBrandForPlatformAccount } from '../campaigns/liveEngagement';
 
 const router = Router();
 
@@ -30,12 +32,43 @@ router.get('/webhook/meta', (req: Request, res: Response) => {
   else res.sendStatus(403);
 });
 
-router.post('/webhook/meta', (req: Request, res: Response) => {
-  const body = req.body as { entry?: { id: string; changes?: { value: { comments?: unknown[] } }[] }[] };
-  (body.entry ?? []).forEach(entry => (entry.changes ?? []).forEach(change => {
-    if (change.value.comments) broadcastToClients(0, 'new_comment', change.value.comments);
-  }));
-  res.json({ ok: true });
+router.post('/webhook/meta', async (req: Request, res: Response) => {
+  if (!verifyMetaWebhookSignature(req.rawBody ?? Buffer.alloc(0), req.header('x-hub-signature-256'), process.env.META_APP_SECRET)) {
+    res.status(401).json({ error: 'Invalid webhook signature' });
+    return;
+  }
+  const body = req.body as {
+    object?: string;
+    entry?: Array<{
+      id: string;
+      changes?: Array<{ field?: string; value?: Record<string, unknown> }>;
+    }>;
+  };
+  const accepted: Array<Promise<unknown>> = [];
+  for (const entry of body.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      const value = change.value ?? {};
+      const eventId = String(value['id'] ?? value['comment_id'] ?? '');
+      const text = String(value['text'] ?? value['message'] ?? '');
+      if (!eventId || !text) continue;
+      const platform = body.object === 'instagram' ? 'instagram' : 'facebook';
+      const brandId = await resolveBrandForPlatformAccount(platform, entry.id);
+      if (!brandId) continue;
+      const from = value['from'] && typeof value['from'] === 'object' ? value['from'] as Record<string, unknown> : {};
+      accepted.push(processLiveEngagementEvent(brandId, {
+        platform,
+        accountId: entry.id,
+        eventId,
+        postId: value['media_id'] ? String(value['media_id']) : value['post_id'] ? String(value['post_id']) : null,
+        commentId: eventId,
+        authorId: from['id'] ? String(from['id']) : value['user_id'] ? String(value['user_id']) : null,
+        authorHandle: String(from['username'] ?? from['name'] ?? value['username'] ?? 'customer'),
+        text,
+      }));
+    }
+  }
+  await Promise.allSettled(accepted);
+  res.json({ ok: true, accepted: accepted.length });
 });
 
 async function fetchPendingApprovalRows(brandId: number) {

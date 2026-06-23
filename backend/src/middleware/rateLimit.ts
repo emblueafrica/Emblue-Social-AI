@@ -24,11 +24,11 @@ const AUTH_LIMIT: LimitRule = { limit: 5, windowMs: FIFTEEN_MINUTES, scope: 'ip'
 const AI_LIMIT: LimitRule = { limit: 10, windowMs: ONE_MINUTE, scope: 'identity' };
 const UPLOAD_LIMIT: LimitRule = { limit: 5, windowMs: ONE_MINUTE, scope: 'ip' };
 const CAMPAIGN_ACTION_LIMIT: LimitRule = { limit: 10, windowMs: ONE_MINUTE, scope: 'identity' };
+const WEBHOOK_LIMIT: LimitRule = { limit: 120, windowMs: ONE_MINUTE, scope: 'ip' };
 
 function isSkippedPath(method: string, path: string): boolean {
   if (method === 'GET' && path === '/') return true;
   if (method === 'GET' && path === '/api/v1/health') return true;
-  if (path.startsWith('/api/v1/rt/webhook/')) return true;
   return false;
 }
 
@@ -46,10 +46,24 @@ function isAiPath(path: string): boolean {
 }
 
 function limitForPath(path: string): LimitRule {
+  if (path.startsWith('/api/v1/rt/webhook/')) return WEBHOOK_LIMIT;
   if (path === '/api/v1/auth/me' || path.startsWith('/api/v1/auth/connections/')) return SESSION_LIMIT;
   if (path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/onboarding')) return AUTH_LIMIT;
   if (path.includes('/upload') || path.includes('/uploads')) return UPLOAD_LIMIT;
-  if (path.startsWith('/api/v1/campaigns') && (path.endsWith('/sync') || path.endsWith('/activate') || path.includes('/retry') || path.includes('/campaigns/keyword'))) return CAMPAIGN_ACTION_LIMIT;
+  if (
+    path.startsWith('/api/v1/campaigns') &&
+    (
+      path.endsWith('/activate') ||
+      path.endsWith('/pause') ||
+      path.endsWith('/resume') ||
+      path.endsWith('/sync') ||
+      path.endsWith('/post-urls/fetch') ||
+      path.endsWith('/post-urls/run') ||
+      path.endsWith('/export') ||
+      path.includes('/activity/') ||
+      path.includes('/campaigns/keyword')
+    )
+  ) return CAMPAIGN_ACTION_LIMIT;
   if (isAiPath(path)) return AI_LIMIT;
   return GENERAL_LIMIT;
 }

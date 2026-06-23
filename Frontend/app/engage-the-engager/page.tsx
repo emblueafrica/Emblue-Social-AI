@@ -9,24 +9,28 @@ import { PlatformLogo } from "@/components/PlatformLogo";
 import { useAuth } from "@/hooks/use-auth";
 import {
   ApiError,
+  actOnCampaignActivity,
   activateCampaign,
   deleteCampaign,
-  dismissCampaignEngagement,
-  getCampaignEngagements,
+  downloadCampaignActivityCsv,
+  fetchPostUrlPreview,
+  getCampaignActivity,
   getCampaigns,
   getCampaignStatus,
-  getPostUrlCampaignStatus,
   preflightCampaign,
   preflightKeywordCampaign,
-  retryCampaignEngagement,
-  runPostUrlCampaign,
+  runPostUrlPreview,
   saveCampaign,
   saveKeywordCampaign,
   syncCampaignEngagements,
-  toggleCampaign,
+  setCampaignState,
+  updateCampaign,
   type CampaignPayload,
+  type CampaignActivationPayload,
+  type CampaignActivityResponse,
   type CampaignEngagementResponse,
   type CampaignRecord,
+  type PostUrlPreviewResponse,
 } from "@/lib/api";
 
 type Platform = "instagram" | "facebook" | "tiktok" | "x";
@@ -45,6 +49,7 @@ type Campaign = {
   stat: string;
   state: "running" | "paused";
   activationStatus: string;
+  mode: "live" | "post_url" | "keyword";
   draft: CampaignDraft;
 };
 
@@ -54,6 +59,9 @@ const seedDraft = (over: Partial<CampaignDraft>): CampaignDraft => ({
   name: "",
   platforms: [],
   sourceMode: "existing",
+  priority: 0,
+  liveScope: "all_owned_posts",
+  replyMode: "dm_with_public_fallback",
   postCaption: "",
   existingPosts: {},
   media: [],
@@ -61,6 +69,8 @@ const seedDraft = (over: Partial<CampaignDraft>): CampaignDraft => ({
   tone: "",
   maxPerHour: 50,
   maxPerDay: 50,
+  maxDmPerDay: 25,
+  spacingMinutes: 10,
   intentFilter: ["complaint", "purchase_intent"],
   urgencyThreshold: 3,
   replyTemplateId: null,
@@ -73,6 +83,11 @@ const seedDraft = (over: Partial<CampaignDraft>): CampaignDraft => ({
   threshold: 85,
   events: { comments: true, likes: true, reposts: true, mentions: true, dms: true },
   allocation: { instagram: 40, facebook: 25, tiktok: 20, x: 15 },
+  campaignType: "brand_mention",
+  minFollowers: 0,
+  skipVerified: false,
+  skipReposts: true,
+  skipNewAccountsDays: 0,
   ...over,
 });
 
@@ -81,6 +96,7 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
   const platforms = Array.from(
     new Set(
       [
+        ...(record.platforms ?? []),
         record.platform,
         ...Object.entries(allocation)
           .filter(([, value]) => Number(value) > 0)
@@ -96,6 +112,11 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
     tone: record.tone ?? "",
     maxPerHour: record.max_per_hour ?? 50,
     maxPerDay: record.max_per_day ?? 50,
+    maxDmPerDay: record.max_dm_per_day ?? 25,
+    spacingMinutes: record.spacing_minutes ?? 10,
+    priority: record.priority ?? 0,
+    liveScope: record.scope_type ?? "all_owned_posts",
+    replyMode: record.reply_mode ?? "dm_with_public_fallback",
     intentFilter: record.intent_filter ?? [],
     urgencyThreshold: record.urgency_threshold ?? 3,
     replyTemplateId: record.reply_template_id ?? null,
@@ -110,11 +131,16 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
       tiktok: allocation.tiktok ?? 0,
       x: allocation.x ?? 0,
     },
-    sourceMode: record.source_mode ?? "existing",
+    sourceMode: record.mode === "live" ? "live" : record.mode === "keyword" ? "keyword" : "existing",
     postCaption: record.post_caption ?? "",
     privateTemplate: record.private_followup_template ?? record.reply_template ?? "",
     template: record.public_reply_template ?? record.reply_template ?? "",
     events: record.event_settings ?? { comments: true, likes: true, reposts: true, mentions: true, dms: true },
+    campaignType: (record.mode_config?.campaign_type as CampaignDraft["campaignType"]) ?? "brand_mention",
+    minFollowers: Number(record.mode_config?.min_followers ?? 0),
+    skipVerified: Boolean(record.mode_config?.skip_verified),
+    skipReposts: record.mode_config?.skip_reposts !== false,
+    skipNewAccountsDays: Number(record.mode_config?.skip_accounts_newer_than_days ?? 0),
   });
 
   return {
@@ -125,6 +151,7 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
     stat: record.is_active === false ? "Paused" : `${record.total_sent ?? 0} sent total`,
     state: record.is_active === false ? "paused" : "running",
     activationStatus: record.activation_status ?? (record.is_active === false ? "draft" : "active"),
+    mode: record.mode ?? (record.source_mode === "keyword" ? "keyword" : "post_url"),
     draft,
   };
 }
@@ -147,12 +174,14 @@ function apiErrorMessage(error: unknown) {
 
 export default function EngageTheEngager() {
   const queryClient = useQueryClient();
-  const { activeBrandId } = useAuth();
+  const { activeBrandId, authContext } = useAuth();
+  const [selectedMode, setSelectedMode] = useState<"live" | "post_url" | "keyword">("live");
   const [posts, setPosts] = useState<PostRow[]>([{ id: nextId++, platform: "instagram", url: "" }]);
   const [allocation, setAllocation] = useState({ instagram: 40, facebook: 25, tiktok: 20, x: 15 });
   const [postTemplate, setPostTemplate] = useState("");
   const [postCtaLink, setPostCtaLink] = useState("");
-  const [lastPostUrlCampaignId, setLastPostUrlCampaignId] = useState<string | null>(null);
+  const [postUrlPreviewCampaignId, setPostUrlPreviewCampaignId] = useState<number | null>(null);
+  const [postUrlPreview, setPostUrlPreview] = useState<PostUrlPreviewResponse | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingDraft, setEditingDraft] = useState<CampaignDraft | null>(null);
@@ -164,24 +193,16 @@ export default function EngageTheEngager() {
   const [activityDrafts, setActivityDrafts] = useState<Record<string, string>>({});
 
   const campaignsQuery = useQuery({
-    queryKey: ["campaigns", activeBrandId],
-    queryFn: () => getCampaigns(activeBrandId!),
+    queryKey: ["campaigns", activeBrandId, selectedMode],
+    queryFn: () => getCampaigns(activeBrandId!, selectedMode),
     enabled: Boolean(activeBrandId),
     retry: false,
   });
 
-  const postUrlStatusQuery = useQuery({
-    queryKey: ["post-url-campaign-status", activeBrandId, lastPostUrlCampaignId],
-    queryFn: () => getPostUrlCampaignStatus(activeBrandId!, lastPostUrlCampaignId!),
-    enabled: Boolean(activeBrandId && lastPostUrlCampaignId),
-    retry: false,
-    refetchInterval: (query) => query.state.data?.summary.complete ? false : 5000,
-  });
-
   const activityQuery = useQuery({
-    queryKey: ["campaign-engagements", activeBrandId, activityCampaignId],
-    queryFn: () => getCampaignEngagements(activityCampaignId!, activeBrandId!),
-    enabled: Boolean(activeBrandId && activityCampaignId),
+    queryKey: ["campaign-activity", activeBrandId, selectedMode, activityCampaignId],
+    queryFn: () => getCampaignActivity({ brandId: activeBrandId!, mode: selectedMode, campaignId: activityCampaignId ?? undefined }),
+    enabled: Boolean(activeBrandId),
     retry: false,
     refetchInterval: 15000,
   });
@@ -195,7 +216,7 @@ export default function EngageTheEngager() {
   const saveKeywordCampaignMutation = useMutation({ mutationFn: saveKeywordCampaign });
 
   const toggleCampaignMutation = useMutation({
-    mutationFn: toggleCampaign,
+    mutationFn: ({ campaignId, action }: { campaignId: number; action: "pause" | "resume" }) => setCampaignState(activeBrandId!, campaignId, action),
     onSuccess: async () => {
       if (activeBrandId) await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
     },
@@ -208,15 +229,21 @@ export default function EngageTheEngager() {
     },
   });
 
-  const runPostUrlMutation = useMutation({ mutationFn: runPostUrlCampaign });
+  const fetchPostUrlMutation = useMutation({
+    mutationFn: ({ campaignId, postUrls }: { campaignId: number; postUrls: { platform: Platform; url: string }[] }) =>
+      fetchPostUrlPreview(campaignId, activeBrandId!, postUrls),
+  });
+  const runPostUrlMutation = useMutation({
+    mutationFn: (campaignId: number) => runPostUrlPreview(campaignId, activeBrandId!),
+  });
   const campaignSyncMutation = useMutation({
     mutationFn: (campaignId: number) => syncCampaignEngagements(campaignId, activeBrandId!),
   });
   const campaignRetryMutation = useMutation({
-    mutationFn: ({ campaignId, engagerId, replyText }: { campaignId: number; engagerId: number; replyText?: string }) => retryCampaignEngagement(campaignId, engagerId, activeBrandId!, replyText),
+    mutationFn: ({ engagerId, replyText }: { engagerId: number; replyText?: string }) => actOnCampaignActivity(engagerId, replyText ? "edit-and-send" : "retry", { brand_id: activeBrandId!, reply_text: replyText }),
   });
   const campaignDismissMutation = useMutation({
-    mutationFn: ({ campaignId, engagerId }: { campaignId: number; engagerId: number }) => dismissCampaignEngagement(campaignId, engagerId, activeBrandId!),
+    mutationFn: ({ engagerId }: { engagerId: number }) => actOnCampaignActivity(engagerId, "dismiss", { brand_id: activeBrandId! }),
   });
 
   useEffect(() => {
@@ -226,6 +253,11 @@ export default function EngageTheEngager() {
   }, [toast]);
 
   const campaigns = campaignsQuery.data?.campaigns.map(mapCampaignRecord) ?? [];
+  const canMutate = Boolean(
+    authContext?.platform_role === "super_admin" ||
+    authContext?.platform_role === "platform_admin" ||
+    authContext?.active_brand?.role === "client_owner",
+  );
   const runningCount = campaigns.filter((campaign) => campaign.state === "running").length;
   const pausedCount = campaigns.filter((campaign) => campaign.state === "paused").length;
   const sentTotal = campaigns.reduce((sum, campaign) => {
@@ -246,6 +278,11 @@ export default function EngageTheEngager() {
     brand_id: activeBrandId!,
     name: campaign.name,
     platform: campaign.platforms[0] ?? "instagram",
+    mode: campaign.sourceMode === "live" ? "live" : campaign.sourceMode === "keyword" ? "keyword" : "post_url",
+    platforms: campaign.platforms,
+    priority: campaign.priority,
+    scope_type: campaign.sourceMode === "live" ? campaign.liveScope : "selected_posts",
+    reply_mode: campaign.replyMode,
     keywords: campaign.keywords,
     tone: campaign.tone,
     reply_template: campaign.template,
@@ -255,9 +292,22 @@ export default function EngageTheEngager() {
     image_url: campaign.imageUrl,
     auto_fire_threshold: campaign.threshold,
     max_per_hour: campaign.maxPerHour,
+    max_per_day: campaign.maxPerDay,
+    max_dm_per_day: campaign.maxDmPerDay,
+    spacing_minutes: campaign.spacingMinutes,
+    mode_config: {
+      campaign_type: campaign.campaignType,
+      min_followers: campaign.minFollowers,
+      skip_verified: campaign.skipVerified,
+      skip_reposts: campaign.skipReposts,
+      skip_accounts_newer_than_days: campaign.skipNewAccountsDays,
+    },
+    selected_posts: campaign.sourceMode === "live" && campaign.liveScope === "selected_posts"
+      ? campaign.platforms.map(platform => ({ platform, url: campaign.existingPosts[platform] ?? "" }))
+      : undefined,
     is_active: false,
     platform_allocation: selectedAllocation(campaign),
-    source_mode: campaign.sourceMode,
+    source_mode: campaign.sourceMode === "keyword" ? "keyword" : "existing",
     post_caption: campaign.postCaption,
     event_settings: campaign.events,
     activation_status: "draft",
@@ -284,6 +334,17 @@ export default function EngageTheEngager() {
           urgency_threshold: campaign.urgencyThreshold,
           reply_template_id: campaign.replyTemplateId,
           max_per_day: campaign.maxPerDay,
+          max_dm_per_day: campaign.maxDmPerDay,
+          spacing_minutes: campaign.spacingMinutes,
+          priority: campaign.priority,
+          reply_mode: campaign.replyMode,
+          mode_config: {
+            campaign_type: campaign.campaignType,
+            min_followers: campaign.minFollowers,
+            skip_verified: campaign.skipVerified,
+            skip_reposts: campaign.skipReposts,
+            skip_accounts_newer_than_days: campaign.skipNewAccountsDays,
+          },
           public_reply_enabled: campaign.publicReplyEnabled,
           direct_message_enabled: campaign.directMessageEnabled,
           tone: campaign.tone,
@@ -300,11 +361,13 @@ export default function EngageTheEngager() {
         await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
         return;
       }
-      const saved = await saveCampaignMutation.mutateAsync(toPayload(campaign));
+      const saved = editingId
+        ? await updateCampaign(editingId, toPayload(campaign))
+        : await saveCampaignMutation.mutateAsync(toPayload(campaign));
       const campaignId = saved.campaign.campaign_id;
-      const activationPayload = {
+      const activationPayload: CampaignActivationPayload = {
         brand_id: activeBrandId,
-        source_mode: campaign.sourceMode,
+        source_mode: "existing",
         platforms: campaign.platforms,
         existing_posts: campaign.sourceMode === "existing"
           ? campaign.platforms.map((platform) => ({ platform, url: campaign.existingPosts[platform] ?? "" }))
@@ -318,8 +381,8 @@ export default function EngageTheEngager() {
         await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
         return;
       }
-      const preflight = await preflightCampaign(campaignId, activationPayload);
-      if (!preflight.platforms.some((platform) => platform.ready)) {
+      const preflight = campaign.sourceMode === "live" ? null : await preflightCampaign(campaignId, activationPayload);
+      if (preflight && !preflight.platforms.some((platform) => platform.ready)) {
         throw new Error(preflight.platforms.flatMap((platform) => platform.issues).join(" ") || "No selected platform is ready to activate.");
       }
       const activation = await activateCampaign(campaignId, activationPayload);
@@ -376,7 +439,7 @@ export default function EngageTheEngager() {
   const handleRetryEngagement = async (engagerId: number, replyText?: string) => {
     if (!activityCampaignId) return;
     try {
-      const result = await campaignRetryMutation.mutateAsync({ campaignId: activityCampaignId, engagerId, replyText });
+      const result = await campaignRetryMutation.mutateAsync({ engagerId, replyText });
       await activityQuery.refetch();
       setToast(result.status === "sent" ? "Campaign reply sent." : `Campaign reply status: ${result.status.replaceAll("_", " ")}.`);
       if (result.error) setApiNotice(result.error);
@@ -386,7 +449,7 @@ export default function EngageTheEngager() {
   const handleDismissEngagement = async (engagerId: number) => {
     if (!activityCampaignId) return;
     try {
-      await campaignDismissMutation.mutateAsync({ campaignId: activityCampaignId, engagerId });
+      await campaignDismissMutation.mutateAsync({ engagerId });
       await activityQuery.refetch();
       setToast("Campaign engagement dismissed.");
     } catch (error) { setApiNotice(apiErrorMessage(error)); }
@@ -399,7 +462,7 @@ export default function EngageTheEngager() {
     }
 
     try {
-      await toggleCampaignMutation.mutateAsync(campaignId);
+      await toggleCampaignMutation.mutateAsync({ campaignId, action: currentState === "paused" ? "resume" : "pause" });
       setApiNotice(null);
       setToast(currentState === "paused" ? "Campaign resumed." : "Campaign paused.");
     } catch (error) {
@@ -424,7 +487,7 @@ export default function EngageTheEngager() {
     }
   };
 
-  const handleRunPostUrls = async () => {
+  const handleFetchPostUrlPreview = async () => {
     const validPosts = posts.filter((post) => post.url.trim()).map((post) => ({ platform: post.platform, url: post.url.trim() }));
 
     if (!activeBrandId) {
@@ -449,16 +512,48 @@ export default function EngageTheEngager() {
     }
 
     try {
-      const result = await runPostUrlMutation.mutateAsync({
+      const saved = await saveCampaignMutation.mutateAsync({
         brand_id: activeBrandId,
-        post_urls: validPosts,
+        name: `Post URL Campaign ${new Date().toLocaleDateString()}`,
+        platform: validPosts[0]?.platform ?? "instagram",
+        mode: "post_url",
+        platforms: Array.from(new Set(validPosts.map((post) => post.platform))),
+        scope_type: "selected_posts",
+        reply_mode: "dm_with_public_fallback",
+        selected_posts: validPosts,
         platform_allocation: allocation,
         reply_template: postTemplate.trim(),
         cta_link: postCtaLink.trim() || undefined,
+        auto_fire_threshold: 85,
+        max_per_hour: 50,
+        max_per_day: 100,
+        max_dm_per_day: 50,
+        spacing_minutes: 10,
+        source_mode: "existing",
       });
-      setLastPostUrlCampaignId(result.campaign_id);
+      const campaignId = saved.campaign.campaign_id ?? saved.campaign.id;
+      const preview = await fetchPostUrlMutation.mutateAsync({ campaignId, postUrls: validPosts });
+      setPostUrlPreviewCampaignId(campaignId);
+      setPostUrlPreview(preview);
+      setActivityCampaignId(campaignId);
       setApiNotice(null);
-      setToast(`${result.message}. Tracking run ${result.campaign_id}.`);
+      setToast(`Preview ready: ${preview.counts.selected} selected, ${preview.counts.review} for review.`);
+    } catch (error) {
+      setApiNotice(apiErrorMessage(error));
+    }
+  };
+
+  const handleConfirmPostUrlRun = async () => {
+    if (!activeBrandId || !postUrlPreviewCampaignId) {
+      setApiNotice("Fetch engagers before confirming this post URL campaign.");
+      return;
+    }
+    try {
+      const result = await runPostUrlMutation.mutateAsync(postUrlPreviewCampaignId);
+      await activityQuery.refetch();
+      await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+      setToast(`Post URL campaign queued: ${result.queued} selected, ${result.review} needing review.`);
+      setApiNotice(null);
     } catch (error) {
       setApiNotice(apiErrorMessage(error));
     }
@@ -471,9 +566,9 @@ export default function EngageTheEngager() {
         <DashHeader
           title="Engage the Engager"
           action={
-            <button onClick={() => setModalOpen(true)} className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-lg text-sm font-semibold hover:opacity-90">
+            canMutate ? <button onClick={() => setModalOpen(true)} className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-lg text-sm font-semibold hover:opacity-90">
               <Plus className="size-4" /> New Campaign
-            </button>
+            </button> : null
           }
         />
 
@@ -492,6 +587,17 @@ export default function EngageTheEngager() {
 
         <main className="flex-1 p-6 md:p-8 space-y-6 max-w-[1200px] w-full mx-auto text-safe layout-safe">
           {apiNotice && <Notice>{apiNotice}</Notice>}
+          <div className="flex max-w-full gap-1 overflow-x-auto rounded-lg border bg-card p-1" role="tablist" aria-label="Campaign modes">
+            {([
+              ["live", "Live Engagement"],
+              ["post_url", "Post URL Campaign"],
+              ["keyword", "Keyword Campaign"],
+            ] as const).map(([mode, label]) => (
+              <button key={mode} type="button" role="tab" aria-selected={selectedMode === mode} onClick={() => { setSelectedMode(mode); setActivityCampaignId(null); }} className={`shrink-0 whitespace-nowrap rounded-md px-4 py-2.5 text-sm font-semibold ${selectedMode === mode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
           {campaignsQuery.isLoading && <Surface>Loading campaigns...</Surface>}
           {campaignsQuery.error && <Notice>{apiErrorMessage(campaignsQuery.error)}</Notice>}
 
@@ -538,31 +644,17 @@ export default function EngageTheEngager() {
 
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <span className="mr-1 whitespace-nowrap text-sm text-muted-foreground">{campaign.stat}</span>
-                      <button onClick={() => void handleEditCampaign(campaign)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Pencil className="size-4 shrink-0" />Edit</button>
+                      {canMutate && <button onClick={() => void handleEditCampaign(campaign)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Pencil className="size-4 shrink-0" />Edit</button>}
                       <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Activity className="size-4 shrink-0" />Activity</button>
-                      <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">
+                      {canMutate && <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">
                         {campaign.state === "paused" ? <Play className="size-4" /> : <Pause className="size-4" />}
                         {campaign.state === "paused" ? "Resume" : "Pause"}
-                      </button>
-                      <button onClick={() => setConfirmDeleteId(campaign.id)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium text-destructive hover:bg-muted">
+                      </button>}
+                      {canMutate && <button onClick={() => setConfirmDeleteId(campaign.id)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium text-destructive hover:bg-muted">
                         <Trash2 className="size-4" /> Delete
-                      </button>
+                      </button>}
                     </div>
                     </div>
-                    {activityCampaignId === campaign.id && (
-                      <CampaignActivityPanel
-                        data={activityQuery.data}
-                        loading={activityQuery.isLoading}
-                        error={activityQuery.error}
-                        syncing={campaignSyncMutation.isPending}
-                        mutating={campaignRetryMutation.isPending || campaignDismissMutation.isPending}
-                        drafts={activityDrafts}
-                        onDraftChange={(id, value) => setActivityDrafts(current => ({ ...current, [id]: value }))}
-                        onSync={() => void handleSyncCampaign(campaign.id)}
-                        onRetry={(id, reply) => void handleRetryEngagement(id, reply)}
-                        onDismiss={(id) => void handleDismissEngagement(id)}
-                      />
-                    )}
                   </li>
                 ))}
               </ul>
@@ -572,7 +664,7 @@ export default function EngageTheEngager() {
 
           </Surface>
 
-          <Surface>
+          {selectedMode === "post_url" && <Surface>
             <div className="flex items-center justify-between mb-5">
               <div>
                 <h2 className="font-bold">Message everyone on existing posts</h2>
@@ -633,39 +725,48 @@ export default function EngageTheEngager() {
             />
 
             <div className="mt-6 flex items-center gap-3">
-              <button onClick={() => void handleRunPostUrls()} disabled={runPostUrlMutation.isPending} className="rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60">
-                {runPostUrlMutation.isPending ? "Running..." : "Run post URL campaign"}
+              <button onClick={() => void handleFetchPostUrlPreview()} disabled={fetchPostUrlMutation.isPending || saveCampaignMutation.isPending} className="rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60">
+                {fetchPostUrlMutation.isPending || saveCampaignMutation.isPending ? "Fetching..." : "Fetch Engagers"}
               </button>
-              <span className="text-sm text-muted-foreground">The backend will reject runs until allocation equals 100%.</span>
+              <span className="text-sm text-muted-foreground">This previews the audience first. Nothing is sent until you confirm.</span>
             </div>
 
-            {lastPostUrlCampaignId && (
+            {postUrlPreviewCampaignId && (
               <div className="mt-6 rounded-xl border bg-muted/30 p-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <p className="text-sm font-bold">Run status: {lastPostUrlCampaignId}</p>
+                    <p className="text-sm font-bold">Preview campaign: {postUrlPreviewCampaignId}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {postUrlStatusQuery.isFetching ? "Refreshing status..." : postUrlStatusQuery.data?.summary.complete ? "Complete" : "Processing"}
+                      {postUrlPreview ? `Preview expires ${new Date(postUrlPreview.expires_at).toLocaleString()}` : "No preview fetched yet."}
                     </p>
                   </div>
-                  <button onClick={() => void postUrlStatusQuery.refetch()} className="rounded-lg border bg-background px-3 py-2 text-sm font-medium hover:bg-muted">
-                    Refresh status
+                  <button
+                    onClick={() => void handleConfirmPostUrlRun()}
+                    disabled={!postUrlPreview || runPostUrlMutation.isPending}
+                    className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
+                  >
+                    {runPostUrlMutation.isPending ? "Queueing..." : "Confirm & Run"}
                   </button>
                 </div>
 
-                {postUrlStatusQuery.data && (
+                {postUrlPreview && (
                   <div className="mt-4 space-y-4">
-                    <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
-                      <MiniStat label="Fetched" value={postUrlStatusQuery.data.summary.fetched} />
-                      <MiniStat label="Engagers" value={postUrlStatusQuery.data.summary.engagers} />
-                      <MiniStat label="Sent" value={postUrlStatusQuery.data.summary.sent} />
-                      <MiniStat label="Queued" value={postUrlStatusQuery.data.summary.queued} />
-                      <MiniStat label="Manual" value={postUrlStatusQuery.data.summary.manual} />
-                      <MiniStat label="Errors" value={postUrlStatusQuery.data.summary.errors} />
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                      <MiniStat label="Fetched" value={postUrlPreview.counts.total} />
+                      <MiniStat label="Selected" value={postUrlPreview.counts.selected} />
+                      <MiniStat label="Review" value={postUrlPreview.counts.review} />
+                      <MiniStat label="Ignored" value={postUrlPreview.counts.ignored} />
+                      <MiniStat label="Commenters" value={postUrlPreview.counts.commenters} />
                     </div>
                     <div className="space-y-2">
-                      {postUrlStatusQuery.data.post_urls.map((item) => (
-                        <div key={`${item.platform}-${item.url}`} className="rounded-lg border bg-background p-3 text-sm">
+                      {Object.entries(postUrlPreview.by_platform).map(([platform, item]) => ({
+                        platform,
+                        url: "preview",
+                        status: `${item.selected} selected`,
+                        total_fetched: item.total,
+                        error: null,
+                      })).map((item) => (
+                        <div key={item.platform} className="rounded-lg border bg-background p-3 text-sm">
                           <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
                             <span className="min-w-0 truncate font-semibold">{item.platform.toUpperCase()} · {item.url}</span>
                             <span className="text-muted-foreground">{item.status} · {item.total_fetched} fetched</span>
@@ -674,9 +775,15 @@ export default function EngageTheEngager() {
                         </div>
                       ))}
                     </div>
-                    {postUrlStatusQuery.data.engagers.length > 0 && (
+                    {postUrlPreview.errors.length > 0 && (
                       <div className="space-y-2">
-                        {postUrlStatusQuery.data.engagers.slice(0, 5).map((item) => (
+                        {postUrlPreview.errors.map((error) => ({
+                          platform: "error",
+                          author_handle: error,
+                          created_at: error,
+                          action: "",
+                          status: "error",
+                        })).map((item) => (
                           <div key={`${item.platform}-${item.author_handle}-${item.created_at}`} className="flex items-center justify-between rounded-lg border bg-background p-3 text-sm">
                             <span>{item.author_handle || "unknown"} · {item.action}</span>
                             <span className="text-muted-foreground">{item.status || "pending"}</span>
@@ -687,18 +794,42 @@ export default function EngageTheEngager() {
                   </div>
                 )}
 
-                {postUrlStatusQuery.error && (
-                  <p className="mt-3 text-sm text-destructive">{apiErrorMessage(postUrlStatusQuery.error)}</p>
+                {fetchPostUrlMutation.error && (
+                  <p className="mt-3 text-sm text-destructive">{apiErrorMessage(fetchPostUrlMutation.error)}</p>
                 )}
               </div>
             )}
-          </Surface>
+          </Surface>}
+
+          <UnifiedActivityFeed
+            data={activityQuery.data}
+            loading={activityQuery.isLoading}
+            error={activityQuery.error}
+            canMutate={canMutate}
+            selectedCampaignId={activityCampaignId}
+            syncing={campaignSyncMutation.isPending}
+            mutating={campaignRetryMutation.isPending || campaignDismissMutation.isPending}
+            drafts={activityDrafts}
+            onDraftChange={(id, value) => setActivityDrafts(current => ({ ...current, [id]: value }))}
+            onSync={() => activityCampaignId && void handleSyncCampaign(activityCampaignId)}
+            onRetry={(id, reply) => void handleRetryEngagement(id, reply)}
+            onDismiss={(id) => void handleDismissEngagement(id)}
+            onExport={async () => {
+              if (!activeBrandId) return;
+              const blob = await downloadCampaignActivityCsv(activeBrandId, { mode: selectedMode });
+              const url = URL.createObjectURL(blob);
+              const anchor = document.createElement("a");
+              anchor.href = url; anchor.download = `campaign-activity-${selectedMode}.csv`; anchor.click();
+              URL.revokeObjectURL(url);
+            }}
+          />
         </main>
 
         <NewCampaignModal
           open={modalOpen}
           brandId={activeBrandId}
           initial={editingDraft ?? undefined}
+          initialMode={selectedMode === "post_url" ? "existing" : selectedMode}
           saving={saveCampaignMutation.isPending || saveKeywordCampaignMutation.isPending || campaignActivating}
           errorMessage={apiNotice}
           onClose={() => {
@@ -772,6 +903,46 @@ function CampaignActivityPanel({ data, loading, error, syncing, mutating, drafts
       </div>}
     </div>
   );
+}
+
+function UnifiedActivityFeed({ data, loading, error, canMutate, selectedCampaignId, syncing, mutating, drafts, onDraftChange, onSync, onRetry, onDismiss, onExport }: {
+  data?: CampaignActivityResponse;
+  loading: boolean;
+  error: unknown;
+  canMutate: boolean;
+  selectedCampaignId: number | null;
+  syncing: boolean;
+  mutating: boolean;
+  drafts: Record<string, string>;
+  onDraftChange: (id: string, value: string) => void;
+  onSync: () => void;
+  onRetry: (id: number, reply?: string) => void;
+  onDismiss: (id: number) => void;
+  onExport: () => void | Promise<void>;
+}) {
+  return <Surface>
+    <div className="flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-center sm:justify-between">
+      <div><h2 className="font-bold">Activity Feed</h2><p className="mt-1 text-xs text-muted-foreground">{selectedCampaignId ? "Filtered to the selected campaign." : "All delivery outcomes for this mode."} Auto-refreshes every 15 seconds.</p></div>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => void onExport()} className="shrink-0 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">Export CSV</button>
+        {canMutate && selectedCampaignId && <button onClick={onSync} disabled={syncing} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50"><RefreshCw className={`size-4 ${syncing ? "animate-spin" : ""}`} />{syncing ? "Syncing..." : "Sync now"}</button>}
+      </div>
+    </div>
+    {loading && <p className="py-6 text-sm text-muted-foreground">Loading activity...</p>}
+    {Boolean(error) && <p className="py-4 text-sm text-destructive">{apiErrorMessage(error)}</p>}
+    {data && <div className="divide-y">
+      {data.items.length ? data.items.map(item => {
+        const actionable = ["needs_review", "partial", "failed", "error", "generation_failed", "rate_limited", "manual_action_required", "bot_blocked"].includes(item.status);
+        const draft = drafts[String(item.id)] ?? item.reply_text ?? "";
+        return <div key={item.id} className="grid min-w-0 gap-3 py-4 lg:grid-cols-[180px_120px_minmax(0,1fr)_170px]">
+          <div className="min-w-0"><p className="truncate text-sm font-semibold">{item.campaign_name}</p><p className="truncate text-xs text-muted-foreground">{item.author_handle || "Unknown"}</p><p className="text-xs capitalize text-muted-foreground">{item.platform} - {item.action}</p></div>
+          <span className="h-fit w-fit whitespace-nowrap rounded-full bg-muted px-2.5 py-1 text-xs font-semibold capitalize">{item.status.replaceAll("_", " ")}</span>
+          <div className="min-w-0"><p className="break-words text-sm">{item.original_text || "No message text"}</p>{item.error && <p className="mt-1 break-words text-xs text-destructive">{item.error}</p>}<div className="mt-2 flex flex-wrap gap-2">{item.deliveries.map(delivery => <span key={`${item.id}-${delivery.channel}`} className="whitespace-nowrap rounded-full border px-2 py-1 text-xs capitalize">{delivery.channel.replaceAll("_", " ")}: {delivery.status.replaceAll("_", " ")}</span>)}</div>{canMutate && actionable && <textarea value={draft} onChange={event => onDraftChange(String(item.id), event.target.value)} className="mt-2 min-h-20 w-full rounded-lg border bg-background p-2 text-sm" placeholder="Edit the reply before sending" />}</div>
+          {canMutate && actionable ? <div className="flex flex-wrap items-start gap-2"><button disabled={mutating} onClick={() => onRetry(item.id, draft || undefined)} className="whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">{draft ? "Edit & send" : "Retry"}</button><button disabled={mutating} onClick={() => onDismiss(item.id)} className="whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-50">Dismiss</button></div> : <span className="text-xs text-muted-foreground">{new Date(item.created_at).toLocaleString()}</span>}
+        </div>;
+      }) : <p className="my-5 rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No campaign activity has been captured for this view.</p>}
+    </div>}
+  </Surface>;
 }
 
 function Notice({ children }: { children: React.ReactNode }) {
