@@ -4,6 +4,7 @@ import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { mapEngageCampaign } from '../db/mappers';
 import {
+  buildCampaignReplyDraft,
   engageEngager,
   fetchFacebookPostEngagers,
   fetchInstagramPostEngagers,
@@ -16,7 +17,7 @@ import { syncXRepliesForPost } from './xReplySync';
 import { eligibleForCampaign } from './lifecycle';
 import { runAgent1 } from '../agents/agent1_listening';
 import { Intent } from '../types';
-import { prepareCampaignDelivery } from './deliveryWorker';
+import { prepareCampaignDelivery, recordCampaignDeliveryUnavailable } from './deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 import { deliveryChannelsForReplyMode } from './unified';
 
@@ -301,9 +302,36 @@ async function syncTrackedPost(
       continue;
     }
 
+    const draft = await buildCampaignReplyDraft(brandId, {
+      platform: engager.platform,
+      author_handle: engager.author_handle,
+      author_id: engager.author_id,
+      comment_id: engager.raw_comment_id ?? engager.raw_tweet_id ?? null,
+      post_id: engager.raw_video_id ?? post.postIdExt,
+      tweet_id: engager.raw_tweet_id ?? engager.raw_comment_id ?? null,
+      text: engager.text,
+      action: engager.action,
+    }, config);
+    await updateCampaignEngagerStatus(brandId, campaignId, engager, 'pending', draft.reply, undefined, draft.confidence);
+
+    if (draft.confidence < (config.auto_fire_threshold ?? 85)) {
+      totals.queued += 1;
+      await updateCampaignEngagerStatus(brandId, campaignId, engager, 'needs_review', draft.reply, undefined, draft.confidence);
+      continue;
+    }
+
     if (!isBullEnabled()) {
       totals.manual += 1;
-      await updateCampaignEngagerStatus(brandId, campaignId, engager, 'setup_required', undefined, 'Campaign delivery queue unavailable.');
+      const numericCampaignId = Number(campaignId);
+      for (const channel of deliveryChannelsForReplyMode(config.reply_mode)) {
+        await recordCampaignDeliveryUnavailable({
+          brand_id: brandId,
+          campaign_id: numericCampaignId,
+          engager_id: Number(engagerId),
+          channel,
+        }, 'Campaign delivery queue unavailable.');
+      }
+      await updateCampaignEngagerStatus(brandId, campaignId, engager, 'setup_required', draft.reply, 'Campaign delivery queue unavailable.', draft.confidence);
       continue;
     }
 

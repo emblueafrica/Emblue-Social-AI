@@ -389,6 +389,24 @@ async function generateReply(
 }
 
 // ── MAIN ENGAGE FUNCTION ──────────────────────────────────────────────────────
+export async function buildCampaignReplyDraft(
+  brandId: number,
+  event: EngageEvent,
+  config: CampaignConfig,
+): Promise<{ reply: string; confidence: number; image_url: string | null; tracked_link: string | null }> {
+  const campaignId = String(config.id ?? config.campaign_id ?? 'default');
+  const trackedLink = await getTrackedLink(brandId, campaignId) ?? config.cta_link ?? null;
+  const imageUrl = config.image_url ?? await getCampaignImage(brandId, campaignId);
+  const action = event.action ?? 'commented';
+  const generated = await generateReply(event, { ...config, brand_id: brandId }, trackedLink, action);
+  return {
+    reply: generated.text,
+    confidence: generated.confidence,
+    image_url: imageUrl,
+    tracked_link: trackedLink,
+  };
+}
+
 export async function engageEngager(
   brandId: number, event: EngageEvent, config: CampaignConfig, credentials: Credentials
 ): Promise<EngageResult> {

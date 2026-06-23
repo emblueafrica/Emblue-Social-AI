@@ -7,7 +7,7 @@ import { fillVariables } from '../stream/engageEngagers';
 import { publishReply } from '../stream/publisher';
 import { eligibleForCampaign } from './lifecycle';
 import { CampaignConfig } from '../types';
-import { prepareCampaignDelivery } from './deliveryWorker';
+import { prepareCampaignDelivery, recordCampaignDeliveryUnavailable } from './deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 import { deliveryChannelsForReplyMode } from './unified';
 
@@ -235,7 +235,32 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
     }
 
     if (numericCampaignId && config) {
+      const draft = await generateXReplyDraft(brandId, engager.text, engager.author_handle, config);
+      await prisma.campaignPostEngager.update({
+        where: { engagerId: campaignEngager.engagerId },
+        data: { replyText: draft.text, replyConfidence: draft.confidence, updatedAt: new Date() },
+      });
+
+      const threshold = config.auto_fire_threshold ?? 85;
+      if (draft.confidence < threshold || draft.riskFlags.length > 0) {
+        queued += 1;
+        await prisma.campaignPostEngager.update({
+          where: { engagerId: campaignEngager.engagerId },
+          data: { status: 'needs_review', processedAt: new Date(), updatedAt: new Date() },
+        });
+        continue;
+      }
+
       if (!isBullEnabled()) {
+        const campaignIdNumber = Number(numericCampaignId);
+        for (const channel of deliveryChannelsForReplyMode(config.reply_mode)) {
+          await recordCampaignDeliveryUnavailable({
+            brand_id: brandId,
+            campaign_id: campaignIdNumber,
+            engager_id: Number(campaignEngager.engagerId),
+            channel,
+          }, 'Campaign delivery queue unavailable.');
+        }
         await prisma.campaignPostEngager.update({
           where: { engagerId: campaignEngager.engagerId },
           data: { status: 'setup_required', deliveryError: 'Campaign delivery queue unavailable.', processedAt: new Date(), updatedAt: new Date() },
