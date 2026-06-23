@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, CheckCircle2, ChevronDown, Pause, Pencil, Play, Plus, RefreshCw, Trash2, X as XClose } from "lucide-react";
+import { CheckCircle2, MoreVertical, Plus, RefreshCw, X as XClose } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { NewCampaignModal, type CampaignDraft } from "@/components/dashboard/NewCampaignModal";
 import { PlatformLogo } from "@/components/PlatformLogo";
@@ -253,6 +253,15 @@ export default function EngageTheEngager() {
   }, [toast]);
 
   const campaigns = campaignsQuery.data?.campaigns.map(mapCampaignRecord) ?? [];
+  const existingPostAllocationPlatforms = (posts.some((post) => post.platform === "x")
+    ? ["instagram", "facebook", "tiktok", "x"]
+    : ["instagram", "facebook", "tiktok"]) as Platform[];
+  const existingPostAllocation = {
+    instagram: allocation.instagram,
+    facebook: allocation.facebook,
+    tiktok: allocation.tiktok,
+    x: existingPostAllocationPlatforms.includes("x") ? allocation.x : 0,
+  };
   const canMutate = Boolean(
     authContext?.platform_role === "super_admin" ||
     authContext?.platform_role === "platform_admin" ||
@@ -264,7 +273,7 @@ export default function EngageTheEngager() {
     const match = campaign.stat.match(/^(\d+)/);
     return sum + (match ? Number(match[1]) : 0);
   }, 0);
-  const allocationTotal = allocation.instagram + allocation.facebook + allocation.tiktok + allocation.x;
+  const allocationTotal = existingPostAllocationPlatforms.reduce((sum, platform) => sum + allocation[platform], 0);
 
   const selectedAllocation = (campaign: CampaignDraft) => ({
     instagram: campaign.platforms.includes("instagram") ? campaign.allocation.instagram : 0,
@@ -531,7 +540,7 @@ export default function EngageTheEngager() {
         scope_type: "selected_posts",
         reply_mode: "dm_with_public_fallback",
         selected_posts: validPosts,
-        platform_allocation: allocation,
+        platform_allocation: existingPostAllocation,
         reply_template: postTemplate.trim(),
         cta_link: postCtaLink.trim() || undefined,
         auto_fire_threshold: 85,
@@ -645,7 +654,7 @@ export default function EngageTheEngager() {
                       {canMutate && <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className={`shrink-0 whitespace-nowrap rounded-lg border px-4 py-2 text-sm font-semibold ${campaign.state === "paused" ? "border-emerald-500 text-emerald-600" : "border-red-500 text-red-500"}`}>
                         {campaign.state === "paused" ? "Resume" : "Pause"}
                       </button>}
-                      <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="shrink-0 rounded-lg px-2 py-2 text-muted-foreground hover:bg-muted" title="Activity"><Activity className="size-4 shrink-0" /></button>
+                      <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="shrink-0 rounded-lg px-2 py-2 text-muted-foreground hover:bg-muted" title="Activity"><MoreVertical className="size-4 shrink-0" /></button>
                     </div>
                     </div>
                   </li>
@@ -663,9 +672,6 @@ export default function EngageTheEngager() {
                 <h2 className="text-lg font-bold">Message Everyone on Existing Posts</h2>
               </div>
               <p className="hidden text-sm text-muted-foreground md:block">Retroactively engage everyone who liked or commented</p>
-              <button onClick={() => setPosts((current) => [...current, { id: nextId++, platform: "instagram", url: "" }])} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">
-                + Add Another Post
-              </button>
             </div>
 
             <div className="space-y-4">
@@ -694,6 +700,10 @@ export default function EngageTheEngager() {
               ))}
             </div>
 
+            <button onClick={() => setPosts((current) => [...current, { id: nextId++, platform: "instagram", url: "" }])} className="mt-4 rounded-lg px-1 py-1 text-sm font-semibold text-primary hover:bg-primary/5">
+              + Add Another Post
+            </button>
+
             <div className={`mt-6 rounded-xl p-5 ${allocationTotal === 100 ? "bg-muted/30" : "bg-red-50"}`}>
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="font-bold">Platform Send Allocation</h3>
@@ -702,7 +712,7 @@ export default function EngageTheEngager() {
                 </span>
               </div>
               <div className="space-y-4">
-                {(["instagram", "facebook", "tiktok", "x"] as const).map((platform) => (
+                {existingPostAllocationPlatforms.map((platform) => (
                   <div key={platform} className="grid grid-cols-[120px_minmax(0,1fr)_52px] items-center gap-4">
                     <span className="flex items-center gap-2 text-sm capitalize"><PlatformLogo platform={platform} size={18} />{platform === "x" ? "X" : platform}</span>
                     <input type="range" min={0} max={100} value={allocation[platform]} onChange={(event) => setAllocation((current) => ({ ...current, [platform]: Number(event.target.value) }))} className="accent-primary" />
@@ -847,15 +857,15 @@ export default function EngageTheEngager() {
         />
 
         {confirmDeleteId !== null && (
-          <div className="fixed inset-0 z-40 bg-black/35 p-0">
-            <div className="relative mx-auto flex min-h-[78dvh] w-full max-w-[1256px] flex-col items-center justify-center rounded-[28px] bg-white px-8 shadow-2xl">
-              <button onClick={() => setConfirmDeleteId(null)} className="absolute right-10 top-10 rounded-lg p-2 hover:bg-muted" title="Close">
-                <XClose className="size-10" />
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4">
+            <div className="relative flex w-full max-w-[680px] flex-col items-center rounded-[24px] bg-white px-8 py-20 shadow-2xl">
+              <button onClick={() => setConfirmDeleteId(null)} className="absolute right-7 top-7 rounded-lg p-2 hover:bg-muted" title="Close">
+                <XClose className="size-8" />
               </button>
-              <h3 className="max-w-2xl text-center text-5xl font-bold leading-tight">Are you sure you want to delete this Campaign?</h3>
-              <div className="mt-20 grid w-full max-w-[760px] gap-12">
-                <button onClick={() => setConfirmDeleteId(null)} className="rounded-xl border-2 border-primary px-8 py-5 text-3xl font-semibold text-primary hover:bg-primary/5">No, Cancel</button>
-                <button onClick={() => void handleDeleteConfirmed()} className="rounded-xl bg-destructive px-8 py-5 text-3xl font-semibold text-white hover:opacity-90 disabled:opacity-60" disabled={deleteCampaignMutation.isPending}>
+              <h3 className="max-w-md text-center text-3xl font-bold leading-tight">Are you sure you want to delete this Campaign?</h3>
+              <div className="mt-12 grid w-full max-w-[420px] gap-6">
+                <button onClick={() => setConfirmDeleteId(null)} className="rounded-xl border-2 border-primary px-8 py-3.5 text-base font-semibold text-primary hover:bg-primary/5">No, Cancel</button>
+                <button onClick={() => void handleDeleteConfirmed()} className="rounded-xl bg-destructive px-8 py-3.5 text-base font-semibold text-white hover:opacity-90 disabled:opacity-60" disabled={deleteCampaignMutation.isPending}>
                   {deleteCampaignMutation.isPending ? "Deleting..." : "Yes, Delete Campaign"}
                 </button>
               </div>
