@@ -302,9 +302,13 @@ export default function EngageTheEngager() {
       skip_reposts: campaign.skipReposts,
       skip_accounts_newer_than_days: campaign.skipNewAccountsDays,
     },
-    selected_posts: campaign.sourceMode === "live" && campaign.liveScope === "selected_posts"
-      ? campaign.platforms.map(platform => ({ platform, url: campaign.existingPosts[platform] ?? "" }))
-      : undefined,
+    selected_posts:
+      campaign.sourceMode === "existing" ||
+      (campaign.sourceMode === "live" && campaign.liveScope === "selected_posts")
+        ? campaign.platforms
+            .map(platform => ({ platform, url: campaign.existingPosts[platform] ?? "" }))
+            .filter(post => post.url.trim())
+        : undefined,
     is_active: false,
     platform_allocation: selectedAllocation(campaign),
     source_mode: campaign.sourceMode === "keyword" ? "keyword" : "existing",
@@ -321,6 +325,12 @@ export default function EngageTheEngager() {
 
     setCampaignActivating(true);
     try {
+      if (status === "active" && campaign.sourceMode === "existing") {
+        const hasPostUrl = campaign.platforms.some((platform) => campaign.existingPosts[platform]?.trim());
+        if (!hasPostUrl) {
+          throw new Error("Add at least one social post URL before activating a Post URL campaign.");
+        }
+      }
       if (campaign.sourceMode === "keyword") {
         const preflight = status === "active" ? await preflightKeywordCampaign(activeBrandId, campaign.platforms) : null;
         const saved = await saveKeywordCampaignMutation.mutateAsync({
