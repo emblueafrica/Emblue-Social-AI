@@ -175,9 +175,9 @@ function apiErrorMessage(error: unknown) {
 export default function EngageTheEngager() {
   const queryClient = useQueryClient();
   const { activeBrandId, authContext } = useAuth();
-  const [selectedMode, setSelectedMode] = useState<"live" | "post_url" | "keyword">("live");
+  const selectedMode = "post_url" as const;
   const [posts, setPosts] = useState<PostRow[]>([{ id: nextId++, platform: "instagram", url: "" }]);
-  const [allocation, setAllocation] = useState({ instagram: 40, facebook: 25, tiktok: 20, x: 15 });
+  const [allocation, setAllocation] = useState({ instagram: 50, facebook: 30, tiktok: 20, x: 0 });
   const [postTemplate, setPostTemplate] = useState("");
   const [postCtaLink, setPostCtaLink] = useState("");
   const [postUrlPreviewCampaignId, setPostUrlPreviewCampaignId] = useState<number | null>(null);
@@ -193,15 +193,15 @@ export default function EngageTheEngager() {
   const [activityDrafts, setActivityDrafts] = useState<Record<string, string>>({});
 
   const campaignsQuery = useQuery({
-    queryKey: ["campaigns", activeBrandId, selectedMode],
-    queryFn: () => getCampaigns(activeBrandId!, selectedMode),
+    queryKey: ["campaigns", activeBrandId],
+    queryFn: () => getCampaigns(activeBrandId!),
     enabled: Boolean(activeBrandId),
     retry: false,
   });
 
   const activityQuery = useQuery({
-    queryKey: ["campaign-activity", activeBrandId, selectedMode, activityCampaignId],
-    queryFn: () => getCampaignActivity({ brandId: activeBrandId!, mode: selectedMode, campaignId: activityCampaignId ?? undefined }),
+    queryKey: ["campaign-activity", activeBrandId, activityCampaignId],
+    queryFn: () => getCampaignActivity({ brandId: activeBrandId!, campaignId: activityCampaignId ?? undefined }),
     enabled: Boolean(activeBrandId),
     retry: false,
     refetchInterval: 15000,
@@ -585,39 +585,28 @@ export default function EngageTheEngager() {
           </div>
         )}
 
-        <main className="flex-1 p-6 md:p-8 space-y-6 max-w-[1200px] w-full mx-auto text-safe layout-safe">
+        <main className="flex-1 space-y-7 p-6 md:p-8 max-w-[1200px] w-full mx-auto text-safe layout-safe">
           {apiNotice && <Notice>{apiNotice}</Notice>}
-          <div className="flex max-w-full gap-1 overflow-x-auto rounded-lg border bg-card p-1" role="tablist" aria-label="Campaign modes">
-            {([
-              ["live", "Live Engagement"],
-              ["post_url", "Post URL Campaign"],
-              ["keyword", "Keyword Campaign"],
-            ] as const).map(([mode, label]) => (
-              <button key={mode} type="button" role="tab" aria-selected={selectedMode === mode} onClick={() => { setSelectedMode(mode); setActivityCampaignId(null); }} className={`shrink-0 whitespace-nowrap rounded-md px-4 py-2.5 text-sm font-semibold ${selectedMode === mode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
-                {label}
-              </button>
-            ))}
-          </div>
           {campaignsQuery.isLoading && <Surface>Loading campaigns...</Surface>}
           {campaignsQuery.error && <Notice>{apiErrorMessage(campaignsQuery.error)}</Notice>}
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <InfoCard title="User comments" body="The system watches approved campaign surfaces and picks up inbound engagement automatically." />
-            <InfoCard title="AI personalizes" body="Replies and follow-up messages use the saved campaign tone, CTA link, and keyword rules." />
-            <InfoCard title="Fires instantly" body="Saved campaigns can route to backend workflows without requiring manual monitoring." />
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <InfoCard title="User Comments" body="Someone engages with your post on Instagram, Facebook, or X. The system detects every comment and like within minutes, automatically - 24/7, no monitoring needed." />
+            <InfoCard title="AI Personalises" body="AI writes a unique reply using their @handle, your brand voice, campaign message, and a tracked CTA link. No two replies are ever identical." />
+            <InfoCard title="Fires Instantly" body="IG/FB -> personal DM with branded image + tracked link. X -> thread reply with image embed. All within seconds, zero human intervention required." />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <Kpi color="bg-primary" label="Active Campaigns" value={String(runningCount)} sub="Running now" />
-            <Kpi color="bg-brand-pink" label="Replies Sent" value={String(sentTotal)} sub="Total across saved campaigns" />
-            <Kpi color="bg-brand-olive" label="Paused Campaigns" value={String(pausedCount)} sub="Currently not running" />
-            <Kpi color="bg-destructive" label="Total Campaigns" value={String(campaigns.length)} sub="Saved in this workspace" />
+            <Kpi color="bg-brand-pink" label="Sent Today" value={String(sentTotal)} sub="Across all platforms" />
+            <Kpi color="bg-brand-olive" label="Queued for Review" value={String(activityQuery.data?.items.filter(item => item.status === "needs_review").length ?? 0)} sub="Below 85% confidence" />
+            <Kpi color="bg-neutral-600" label="Manual Copy" value={String(activityQuery.data?.items.filter(item => item.status === "manual_action_required").length ?? 0)} sub="TikTok / X pending" />
           </div>
 
           <Surface>
             <div className="flex items-center justify-between pb-4 border-b">
               <div>
-                <h2 className="font-bold">Saved campaigns</h2>
+                <h2 className="text-lg font-bold">Active Campaigns</h2>
                 <p className="text-xs text-muted-foreground mt-1">{campaigns.length ? `${runningCount} running | ${pausedCount} paused` : "No campaigns saved yet"}</p>
               </div>
             </div>
@@ -629,30 +618,24 @@ export default function EngageTheEngager() {
                     <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`size-2 rounded-full ${campaign.state === "running" ? "bg-emerald-500" : "bg-slate-300"}`} />
                         <h3 className="font-semibold">{campaign.title}</h3>
-                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${campaign.activationStatus === "active" ? "bg-emerald-100 text-emerald-700" : campaign.activationStatus === "partial" ? "bg-amber-100 text-amber-800" : "bg-slate-200 text-slate-700"}`}>
-                          {campaign.activationStatus === "active" ? campaign.state : campaign.activationStatus}
-                        </span>
                       </div>
                       <p className="text-sm text-muted-foreground mt-1 text-safe">{campaign.meta}</p>
-                      <div className="flex items-center gap-2 mt-3">
+                    </div>
+
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         {campaign.platforms.map((platform) => (
                           <PlatformLogo key={`${campaign.id}-${platform}`} platform={platform} size={18} />
                         ))}
                       </div>
-                    </div>
-
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="mr-1 whitespace-nowrap text-sm text-muted-foreground">{campaign.stat}</span>
-                      {canMutate && <button onClick={() => void handleEditCampaign(campaign)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Pencil className="size-4 shrink-0" />Edit</button>}
-                      <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"><Activity className="size-4 shrink-0" />Activity</button>
-                      {canMutate && <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">
-                        {campaign.state === "paused" ? <Play className="size-4" /> : <Pause className="size-4" />}
+                      <span className="mx-2 whitespace-nowrap text-xs font-semibold">{campaign.stat}</span>
+                      {canMutate && <button onClick={() => void handleEditCampaign(campaign)} className="shrink-0 whitespace-nowrap rounded-lg bg-primary/10 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/15">Edit</button>}
+                      {canMutate && <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className={`shrink-0 whitespace-nowrap rounded-lg border px-4 py-2 text-sm font-semibold ${campaign.state === "paused" ? "border-emerald-500 text-emerald-600" : "border-red-500 text-red-500"}`}>
                         {campaign.state === "paused" ? "Resume" : "Pause"}
                       </button>}
-                      {canMutate && <button onClick={() => setConfirmDeleteId(campaign.id)} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium text-destructive hover:bg-muted">
-                        <Trash2 className="size-4" /> Delete
-                      </button>}
+                      <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="shrink-0 rounded-lg px-2 py-2 text-muted-foreground hover:bg-muted" title="Activity"><Activity className="size-4 shrink-0" /></button>
                     </div>
                     </div>
                   </li>
@@ -664,20 +647,20 @@ export default function EngageTheEngager() {
 
           </Surface>
 
-          {selectedMode === "post_url" && <Surface>
+          <Surface>
             <div className="flex items-center justify-between mb-5">
               <div>
-                <h2 className="font-bold">Message everyone on existing posts</h2>
-                <p className="text-sm text-muted-foreground mt-1">Use live post URLs and current backend allocation rules.</p>
+                <h2 className="text-lg font-bold">Message Everyone on Existing Posts</h2>
               </div>
+              <p className="hidden text-sm text-muted-foreground md:block">Retroactively engage everyone who liked or commented</p>
               <button onClick={() => setPosts((current) => [...current, { id: nextId++, platform: "instagram", url: "" }])} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">
-                Add post
+                + Add Another Post
               </button>
             </div>
 
             <div className="space-y-4">
               {posts.map((post) => (
-                <div key={post.id} className="grid gap-3 md:grid-cols-[180px_1fr_auto]">
+                <div key={post.id} className="grid gap-3 md:grid-cols-[150px_minmax(0,1fr)_auto_auto_auto]">
                   <select
                     value={post.platform}
                     onChange={(event) => setPosts((current) => current.map((row) => (row.id === post.id ? { ...row, platform: event.target.value as Platform } : row)))}
@@ -694,21 +677,31 @@ export default function EngageTheEngager() {
                     placeholder="https://..."
                     className="rounded-lg border bg-background px-3 py-2 text-sm"
                   />
-                  <button onClick={() => setPosts((current) => current.length > 1 ? current.filter((row) => row.id !== post.id) : current)} className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">
-                    Remove
-                  </button>
+                  <label className="flex items-center gap-2 whitespace-nowrap text-sm text-muted-foreground"><input type="checkbox" defaultChecked={post.platform !== "tiktok"} />Comments</label>
+                  <label className="flex items-center gap-2 whitespace-nowrap text-sm text-muted-foreground"><input type="checkbox" defaultChecked />Likes</label>
+                  <button onClick={() => setPosts((current) => current.length > 1 ? current.filter((row) => row.id !== post.id) : current)} className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted">⋮</button>
                 </div>
               ))}
             </div>
 
-            <div className="grid gap-4 md:grid-cols-4 mt-6">
-              <NumberField label="Instagram %" value={allocation.instagram} onChange={(value) => setAllocation((current) => ({ ...current, instagram: value }))} />
-              <NumberField label="Facebook %" value={allocation.facebook} onChange={(value) => setAllocation((current) => ({ ...current, facebook: value }))} />
-              <NumberField label="TikTok %" value={allocation.tiktok} onChange={(value) => setAllocation((current) => ({ ...current, tiktok: value }))} />
-              <NumberField label="X %" value={allocation.x} onChange={(value) => setAllocation((current) => ({ ...current, x: value }))} />
+            <div className={`mt-6 rounded-xl p-5 ${allocationTotal === 100 ? "bg-muted/30" : "bg-red-50"}`}>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="font-bold">Platform Send Allocation</h3>
+                <span className={`text-sm font-semibold ${allocationTotal === 100 ? "text-emerald-600" : "text-destructive"}`}>
+                  {allocationTotal}% {allocationTotal === 100 ? <span aria-hidden="true">&#10003;</span> : "must = 100%"}
+                </span>
+              </div>
+              <div className="space-y-4">
+                {(["instagram", "facebook", "tiktok"] as const).map((platform) => (
+                  <div key={platform} className="grid grid-cols-[120px_minmax(0,1fr)_52px] items-center gap-4">
+                    <span className="flex items-center gap-2 text-sm capitalize"><PlatformLogo platform={platform} size={18} />{platform}</span>
+                    <input type="range" min={0} max={100} value={allocation[platform]} onChange={(event) => setAllocation((current) => ({ ...current, [platform]: Number(event.target.value) }))} className="accent-primary" />
+                    <span className={`text-right text-sm font-bold ${platform === "instagram" ? "text-pink-700" : platform === "facebook" ? "text-primary" : "text-muted-foreground"}`}>{allocation[platform]}%</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-4 text-xs text-muted-foreground">Controls % of engagers per platform who receive the message.</p>
             </div>
-
-            <div className="mt-2 text-sm text-muted-foreground">Allocation total: {allocationTotal}%</div>
 
             <input
               value={postCtaLink}
@@ -724,11 +717,10 @@ export default function EngageTheEngager() {
               className="mt-6 min-h-[120px] w-full rounded-lg border bg-background px-3 py-2 text-sm"
             />
 
-            <div className="mt-6 flex items-center gap-3">
-              <button onClick={() => void handleFetchPostUrlPreview()} disabled={fetchPostUrlMutation.isPending || saveCampaignMutation.isPending} className="rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60">
-                {fetchPostUrlMutation.isPending || saveCampaignMutation.isPending ? "Fetching..." : "Fetch Engagers"}
+            <div className="mt-6">
+              <button onClick={() => void handleFetchPostUrlPreview()} disabled={fetchPostUrlMutation.isPending || saveCampaignMutation.isPending} className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60">
+                {fetchPostUrlMutation.isPending || saveCampaignMutation.isPending ? "Fetching..." : <><CheckCircle2 className="size-4" /> Fetch & Message all Engagers</>}
               </button>
-              <span className="text-sm text-muted-foreground">This previews the audience first. Nothing is sent until you confirm.</span>
             </div>
 
             {postUrlPreviewCampaignId && (
@@ -768,8 +760,8 @@ export default function EngageTheEngager() {
                       })).map((item) => (
                         <div key={item.platform} className="rounded-lg border bg-background p-3 text-sm">
                           <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
-                            <span className="min-w-0 truncate font-semibold">{item.platform.toUpperCase()} · {item.url}</span>
-                            <span className="text-muted-foreground">{item.status} · {item.total_fetched} fetched</span>
+                            <span className="min-w-0 truncate font-semibold">{item.platform.toUpperCase()} - {item.url}</span>
+                            <span className="text-muted-foreground">{item.status} - {item.total_fetched} fetched</span>
                           </div>
                           {item.error && <p className="mt-2 text-xs text-destructive">{item.error}</p>}
                         </div>
@@ -785,7 +777,7 @@ export default function EngageTheEngager() {
                           status: "error",
                         })).map((item) => (
                           <div key={`${item.platform}-${item.author_handle}-${item.created_at}`} className="flex items-center justify-between rounded-lg border bg-background p-3 text-sm">
-                            <span>{item.author_handle || "unknown"} · {item.action}</span>
+                            <span>{item.author_handle || "unknown"} - {item.action}</span>
                             <span className="text-muted-foreground">{item.status || "pending"}</span>
                           </div>
                         ))}
@@ -799,7 +791,7 @@ export default function EngageTheEngager() {
                 )}
               </div>
             )}
-          </Surface>}
+          </Surface>
 
           <UnifiedActivityFeed
             data={activityQuery.data}
@@ -829,7 +821,7 @@ export default function EngageTheEngager() {
           open={modalOpen}
           brandId={activeBrandId}
           initial={editingDraft ?? undefined}
-          initialMode={selectedMode === "post_url" ? "existing" : selectedMode}
+          initialMode="existing"
           saving={saveCampaignMutation.isPending || saveKeywordCampaignMutation.isPending || campaignActivating}
           errorMessage={apiNotice}
           onClose={() => {
@@ -845,14 +837,16 @@ export default function EngageTheEngager() {
         />
 
         {confirmDeleteId !== null && (
-          <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4">
-            <div className="w-full max-w-md rounded-2xl bg-card p-6 shadow-xl">
-              <h3 className="font-bold">Delete campaign</h3>
-              <p className="mt-2 text-sm text-muted-foreground">This will permanently remove the campaign from the backend.</p>
-              <div className="mt-6 flex items-center justify-end gap-3">
-                <button onClick={() => setConfirmDeleteId(null)} className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted">Cancel</button>
-                <button onClick={() => void handleDeleteConfirmed()} className="rounded-lg bg-destructive px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60" disabled={deleteCampaignMutation.isPending}>
-                  {deleteCampaignMutation.isPending ? "Deleting..." : "Delete"}
+          <div className="fixed inset-0 z-40 bg-black/35 p-0">
+            <div className="relative mx-auto flex min-h-[78dvh] w-full max-w-[1256px] flex-col items-center justify-center rounded-[28px] bg-white px-8 shadow-2xl">
+              <button onClick={() => setConfirmDeleteId(null)} className="absolute right-10 top-10 rounded-lg p-2 hover:bg-muted" title="Close">
+                <XClose className="size-10" />
+              </button>
+              <h3 className="max-w-2xl text-center text-5xl font-bold leading-tight">Are you sure you want to delete this Campaign?</h3>
+              <div className="mt-20 grid w-full max-w-[760px] gap-12">
+                <button onClick={() => setConfirmDeleteId(null)} className="rounded-xl border-2 border-primary px-8 py-5 text-3xl font-semibold text-primary hover:bg-primary/5">No, Cancel</button>
+                <button onClick={() => void handleDeleteConfirmed()} className="rounded-xl bg-destructive px-8 py-5 text-3xl font-semibold text-white hover:opacity-90 disabled:opacity-60" disabled={deleteCampaignMutation.isPending}>
+                  {deleteCampaignMutation.isPending ? "Deleting..." : "Yes, Delete Campaign"}
                 </button>
               </div>
             </div>
@@ -894,7 +888,7 @@ function CampaignActivityPanel({ data, loading, error, syncing, mutating, drafts
           const actionable = ["needs_review", "partial", "failed", "error", "generation_failed", "rate_limited", "manual_copy", "manual_action_required", "bot_blocked"].includes(item.status ?? "");
           const draft = drafts[item.id] ?? item.reply_text ?? "";
           return <div key={item.id} className="grid min-w-0 gap-3 border-t pt-3 lg:grid-cols-[140px_110px_minmax(0,1fr)_150px]">
-            <div className="min-w-0"><p className="truncate text-sm font-medium">{item.author_handle || "Unknown"}</p><p className="text-xs capitalize text-muted-foreground">{item.platform} - {item.action}</p>{item.intent && <p className="mt-1 text-xs text-muted-foreground">{item.intent.replaceAll("_", " ")} · urgency {item.urgency_score ?? "-"} · confidence {item.reply_confidence ?? "-"}%</p>}</div>
+            <div className="min-w-0"><p className="truncate text-sm font-medium">{item.author_handle || "Unknown"}</p><p className="text-xs capitalize text-muted-foreground">{item.platform} - {item.action}</p>{item.intent && <p className="mt-1 text-xs text-muted-foreground">{item.intent.replaceAll("_", " ")} - urgency {item.urgency_score ?? "-"} - confidence {item.reply_confidence ?? "-"}%</p>}</div>
             <span className="h-fit w-fit whitespace-nowrap rounded-full bg-muted px-2.5 py-1 text-xs font-semibold capitalize">{(item.status || "pending").replaceAll("_", " ")}</span>
             <div className="min-w-0"><p className="break-words text-sm">{item.original_text || "No message text"}</p>{item.delivery_error && <p className="mt-1 break-words text-xs text-destructive">{item.delivery_error}</p>}{item.deliveries.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{item.deliveries.map(delivery => <span key={delivery.channel} title={delivery.error ?? undefined} className="whitespace-nowrap rounded-full border px-2 py-1 text-xs capitalize">{delivery.channel.replaceAll("_", " ")}: {delivery.status.replaceAll("_", " ")}</span>)}</div>}{actionable && <textarea value={draft} onChange={event => onDraftChange(item.id, event.target.value)} className="mt-2 min-h-20 w-full rounded-lg border bg-background p-2 text-sm" placeholder="Edit the reply before retrying" />}</div>
             {actionable && <div className="flex flex-wrap items-start gap-2"><button disabled={mutating} onClick={() => onRetry(Number(item.id), draft || undefined)} className="shrink-0 whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">Retry reply</button><button disabled={mutating} onClick={() => onDismiss(Number(item.id))} className="shrink-0 whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-50">Dismiss</button></div>}
@@ -922,8 +916,9 @@ function UnifiedActivityFeed({ data, loading, error, canMutate, selectedCampaign
 }) {
   return <Surface>
     <div className="flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-center sm:justify-between">
-      <div><h2 className="font-bold">Activity Feed</h2><p className="mt-1 text-xs text-muted-foreground">{selectedCampaignId ? "Filtered to the selected campaign." : "All delivery outcomes for this mode."} Auto-refreshes every 15 seconds.</p></div>
+      <div><h2 className="text-lg font-bold">Live Activity Feed</h2></div>
       <div className="flex flex-wrap gap-2">
+        <span className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-emerald-600"><span className="size-2 rounded-full bg-emerald-500" />Updating Live</span>
         <button onClick={() => void onExport()} className="shrink-0 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">Export CSV</button>
         {canMutate && selectedCampaignId && <button onClick={onSync} disabled={syncing} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50"><RefreshCw className={`size-4 ${syncing ? "animate-spin" : ""}`} />{syncing ? "Syncing..." : "Sync now"}</button>}
       </div>
