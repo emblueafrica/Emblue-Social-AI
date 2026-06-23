@@ -926,11 +926,11 @@ export function NewCampaignModal({
           ) : (
             <button
               type="button"
-              disabled={!formValid || saving || uploading}
-              onClick={() => void onSave(draft, "draft")}
+              disabled={saving || uploading}
+              onClick={onClose}
               className="rounded-lg border border-primary px-8 py-4 text-lg font-semibold text-primary disabled:opacity-40"
             >
-              Save Draft
+              Cancel
             </button>
           )}
         </footer>

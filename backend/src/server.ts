@@ -20,6 +20,7 @@ import { bootstrapSuperAdmin } from './auth/bootstrap';
 import { autoStartAll } from './automation/scheduler';
 import { apiRateLimit } from './middleware/rateLimit';
 import { securityHeaders } from './middleware/securityHeaders';
+import { initBullQueue, isBullEnabled } from './queue/jobs';
 
 const app: Application = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -106,6 +107,9 @@ app.get('/api/v1/health', (_req: Request, res: Response) => {
     status:  'ok',
     service: 'social-emblue-ai-backend',
     version: '2.0.0',
+    queue: {
+      campaign_delivery: isBullEnabled(),
+    },
     ts:      new Date().toISOString(),
   });
 });
@@ -149,6 +153,7 @@ app.listen(PORT, async () => {
 
   // Start automation for all connected brands
   try {
+    await initBullQueue();
     await bootstrapSuperAdmin();
     await autoStartAll();
   } catch (err) {
