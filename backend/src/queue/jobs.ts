@@ -136,7 +136,6 @@ async function processJob(job: Job<JobData>): Promise<void> {
       break;
     }
     case JOB.CAMPAIGN_DELIVERY: {
-      if (!(await canProcessTool(brand_id, "tool_10", JOB.CAMPAIGN_DELIVERY))) break;
       const delivery = job.data as unknown as CampaignDeliveryJobData;
       const result = await processCampaignDeliveryJob(delivery);
       if (result.fallback_to_public) {

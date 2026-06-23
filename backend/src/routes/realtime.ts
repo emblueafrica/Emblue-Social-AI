@@ -111,7 +111,7 @@ async function fetchCampaignQueueDeliveries(brandId: number) {
   return prisma.campaignDeliveryAttempt.findMany({
     where: {
       brandId,
-      status: { in: ['queued', 'processing', 'manual_action_required', 'failed', 'rate_limited'] },
+      status: { in: ['queued', 'processing', 'needs_review', 'manual_action_required', 'failed', 'rate_limited'] },
     },
     orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
     take: 100,
@@ -246,10 +246,12 @@ async function updateCampaignEngagerFromDeliveries(brandId: number, engagerId: b
   const deliveries = await prisma.campaignDeliveryAttempt.findMany({ where: { brandId, engagerId } });
   const hasSent = deliveries.some(delivery => delivery.status === 'sent');
   const hasQueued = deliveries.some(delivery => delivery.status === 'queued' || delivery.status === 'processing');
+  const hasReview = deliveries.some(delivery => delivery.status === 'needs_review');
   const hasManual = deliveries.some(delivery => delivery.status === 'manual_action_required');
   const hasFailed = deliveries.some(delivery => delivery.status === 'failed' || delivery.status === 'rate_limited');
-  const status = hasSent && (hasQueued || hasManual || hasFailed) ? 'partial'
+  const status = hasSent && (hasQueued || hasReview || hasManual || hasFailed) ? 'partial'
     : hasSent ? 'sent'
+      : hasReview ? 'needs_review'
       : hasQueued ? 'queued'
         : hasManual ? 'manual_action_required'
           : hasFailed ? 'failed'

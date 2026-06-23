@@ -24,13 +24,15 @@ async function aggregateEngagerDeliveryStatus(engagerId: bigint): Promise<{ stat
   });
   const hasSent = deliveries.some(delivery => delivery.status === 'sent');
   const hasQueued = deliveries.some(delivery => delivery.status === 'queued' || delivery.status === 'processing');
+  const hasReview = deliveries.some(delivery => delivery.status === 'needs_review');
   const hasManual = deliveries.some(delivery => delivery.status === 'manual_action_required');
   const hasRateLimit = deliveries.some(delivery => delivery.status === 'rate_limited');
   const hasFailed = deliveries.some(delivery => delivery.status === 'failed');
   const error = deliveries.map(delivery => delivery.error).filter(Boolean).join(' ') || null;
 
-  if (hasSent && (hasQueued || hasManual || hasRateLimit || hasFailed)) return { status: 'partial', error };
+  if (hasSent && (hasQueued || hasReview || hasManual || hasRateLimit || hasFailed)) return { status: 'partial', error };
   if (hasSent) return { status: 'sent', error: null };
+  if (hasReview) return { status: 'needs_review', error };
   if (hasQueued) return { status: 'queued', error };
   if (hasManual) return { status: 'manual_action_required', error };
   if (hasRateLimit) return { status: 'rate_limited', error };
@@ -90,6 +92,10 @@ export async function processCampaignDeliveryJob(
   });
 
   const config = mapEngageCampaign(campaign);
+  if (engager.replyText) {
+    config.reply_template = engager.replyText;
+    config.public_reply_template = engager.replyText;
+  }
   config.public_reply_enabled = data.channel === 'public_reply';
   config.direct_message_enabled = data.channel === 'direct_message';
   const credentials = await getCampaignCredentials(data.brand_id);
@@ -111,6 +117,17 @@ export async function processCampaignDeliveryJob(
     engager.platform,
     result,
   );
+
+  if (result.status === 'queued_for_approval') {
+    await prisma.campaignDeliveryAttempt.update({
+      where: { engagerId_channel: { engagerId: engager.engagerId, channel: data.channel } },
+      data: {
+        status: 'needs_review',
+        error: result.error ?? null,
+        updatedAt: new Date(),
+      },
+    });
+  }
 
   const delivered = (result.deliveries ?? []).some(delivery => delivery.status === 'sent');
   const aggregate = await aggregateEngagerDeliveryStatus(engager.engagerId);
@@ -166,4 +183,29 @@ export async function prepareCampaignDelivery(
     },
   });
   return jobId;
+}
+
+export async function recordCampaignDeliveryUnavailable(
+  data: CampaignDeliveryJobData,
+  error: string,
+): Promise<void> {
+  const engagerId = BigInt(data.engager_id);
+  await prisma.campaignDeliveryAttempt.upsert({
+    where: { engagerId_channel: { engagerId, channel: data.channel } },
+    create: {
+      engagerId,
+      brandId: data.brand_id,
+      campaignId: BigInt(data.campaign_id),
+      platform: (await prisma.campaignPostEngager.findUniqueOrThrow({ where: { engagerId }, select: { platform: true } })).platform,
+      channel: data.channel,
+      status: 'manual_action_required',
+      error,
+      attemptCount: 0,
+    },
+    update: {
+      status: 'manual_action_required',
+      error,
+      updatedAt: new Date(),
+    },
+  });
 }

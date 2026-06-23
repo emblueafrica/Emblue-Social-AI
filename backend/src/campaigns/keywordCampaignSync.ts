@@ -3,10 +3,12 @@ import { Prisma } from '@prisma/client';
 import prisma from '../db/prisma';
 import { runAgent14 } from '../agents/agents9_to_14';
 import { createSearchRun, runListeningSearch } from '../listening/searchService';
+import { mapEngageCampaign } from '../db/mappers';
+import { buildCampaignReplyDraft } from '../stream/engageEngagers';
 import { broadcastToClients } from '../stream/eventQueue';
 import { Intent, Platform } from '../types';
 import { evaluateKeywordCampaignEvent } from './lifecycle';
-import { prepareCampaignDelivery } from './deliveryWorker';
+import { prepareCampaignDelivery, recordCampaignDeliveryUnavailable } from './deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 import { deliveryChannelsForReplyMode } from './unified';
 
@@ -60,6 +62,7 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
     if (!group.campaignId) continue;
     const campaign = await prisma.engageCampaign.findFirst({ where: { brandId, campaignId: group.campaignId, isActive: true, sourceMode: 'keyword' } });
     if (!campaign) continue;
+    const config = mapEngageCampaign(campaign);
     totals.checked += 1;
     const campaignId = Number(campaign.campaignId);
     const runId = await createSearchRun({ brandId, groupId: Number(group.groupId), keywords: group.keywords, platforms: group.platforms as Platform[], mode: 'realtime' });
@@ -136,12 +139,44 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           platformSummary.ignored += 1;
           continue;
         }
-        if (initialStatus === 'needs_review' || initialStatus === 'bot_blocked') {
+        if (initialStatus === 'bot_blocked') {
+          totals.review += 1;
+          platformSummary.review += 1;
+          continue;
+        }
+        const draft = await buildCampaignReplyDraft(brandId, {
+          platform,
+          author_handle: item.authorHandle ?? item.authorIdExt ?? 'customer',
+          author_id: item.authorIdExt,
+          comment_id: ids.commentId,
+          post_id: ids.postId,
+          tweet_id: ids.tweetId,
+          text: item.text,
+          action: 'commented',
+          matched_keyword: item.matchedKeyword ?? undefined,
+        }, config);
+        await prisma.campaignPostEngager.update({
+          where: { engagerId: engagement.engagerId },
+          data: { replyText: draft.reply, replyConfidence: draft.confidence, updatedAt: new Date() },
+        });
+        if (initialStatus === 'needs_review' || draft.confidence < (campaign.autoFireThreshold ?? 75)) {
+          await prisma.campaignPostEngager.update({
+            where: { engagerId: engagement.engagerId },
+            data: { status: 'needs_review', processedAt: new Date(), updatedAt: new Date() },
+          });
           totals.review += 1;
           platformSummary.review += 1;
           continue;
         }
         if (!isBullEnabled()) {
+          for (const channel of deliveryChannelsForReplyMode(campaign.replyMode)) {
+            await recordCampaignDeliveryUnavailable({
+              brand_id: brandId,
+              campaign_id: campaignId,
+              engager_id: Number(engagement.engagerId),
+              channel,
+            }, 'Campaign delivery queue unavailable.');
+          }
           await prisma.campaignPostEngager.update({
             where: { engagerId: engagement.engagerId },
             data: { status: 'setup_required', deliveryError: 'Campaign delivery queue unavailable.', updatedAt: new Date() },
