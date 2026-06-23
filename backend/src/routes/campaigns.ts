@@ -219,6 +219,7 @@ router.get('/activity', requireBrandAccess, requireToolAccess('tool_10'), async 
   const mode = isUnifiedMode(req.query['mode']) ? req.query['mode'] : null;
   const platform = isPlatform(req.query['platform']) ? req.query['platform'] : null;
   const status = typeof req.query['status'] === 'string' && req.query['status'].length <= 40 ? req.query['status'] : null;
+  const deliveryStatusFilter = status && ['sent', 'queued', 'processing', 'failed', 'rate_limited', 'manual_action_required', 'manual_copy'].includes(status) ? status : null;
   const cursor = getRequiredBrandId(req.query['cursor']);
   const limit = boundedInteger(req.query['limit'], 25, 1, 100);
   if (!brandId || limit === null) { sendValidationError(res, 'brand_id and a limit between 1 and 100 are required'); return; }
@@ -233,7 +234,7 @@ router.get('/activity', requireBrandAccess, requireToolAccess('tool_10'), async 
         brandId,
         campaignId: { in: Array.from(campaignById.keys()) },
         ...(platform ? { platform } : {}),
-        ...(status ? { status } : {}),
+        ...(status && !deliveryStatusFilter ? { status } : {}),
         ...(cursor ? { engagerId: { lt: BigInt(cursor) } } : {}),
       },
       orderBy: { engagerId: 'desc' },
@@ -246,13 +247,17 @@ router.get('/activity', requireBrandAccess, requireToolAccess('tool_10'), async 
       const key = String(delivery.engagerId);
       deliveriesByEngager.set(key, [...(deliveriesByEngager.get(key) ?? []), delivery]);
     }
-    const items = page.map(item => ({
-      id: Number(item.engagerId), campaign_id: Number(item.campaignId), campaign_name: campaignById.get(item.campaignId)?.name ?? 'Campaign',
-      mode: campaignById.get(item.campaignId)?.mode ?? 'post_url', platform: item.platform, action: item.action,
+    const items = page.map(item => {
+      const campaign = campaignById.get(String(item.campaignId));
+      const itemDeliveries = deliveriesByEngager.get(String(item.engagerId)) ?? [];
+      return {
+      id: Number(item.engagerId), campaign_id: Number(item.campaignId), campaign_name: campaign?.name ?? 'Campaign',
+      mode: campaign?.mode ?? 'post_url', platform: item.platform, action: item.action,
       author_handle: item.authorHandle, original_text: item.originalText, reply_text: item.replyText, status: item.status,
       confidence: item.replyConfidence, error: item.deliveryError, created_at: item.createdAt,
-      deliveries: (deliveriesByEngager.get(String(item.engagerId)) ?? []).map(delivery => ({ channel: delivery.channel, status: delivery.status, error: delivery.error, delivered_at: delivery.deliveredAt })),
-    }));
+      deliveries: itemDeliveries.map(delivery => ({ channel: delivery.channel, status: delivery.status, error: delivery.error, delivered_at: delivery.deliveredAt })),
+    };
+    }).filter(item => !deliveryStatusFilter || item.deliveries.some(delivery => delivery.status === deliveryStatusFilter));
     if (req.query['format'] === 'csv') {
       const header = ['id', 'campaign', 'mode', 'platform', 'action', 'author', 'status', 'reply', 'error', 'created_at'];
       const csv = [header.map(csvCell).join(','), ...items.map(item => [item.id, item.campaign_name, item.mode, item.platform, item.action, item.author_handle, item.status, item.reply_text, item.error, item.created_at.toISOString()].map(csvCell).join(','))].join('\n');
@@ -1534,7 +1539,20 @@ router.get('/:brand_id', requireBrandAccess, requireToolAccess('tool_10'), async
       where: { brandId },
       orderBy: { createdAt: 'desc' },
     });
-    res.json({ campaigns: rows.map(mapEngageCampaign) });
+    const sentCounts = rows.length
+      ? await prisma.campaignDeliveryAttempt.groupBy({
+          by: ['campaignId'],
+          where: { brandId, campaignId: { in: rows.map(row => row.campaignId) }, status: 'sent' },
+          _count: { _all: true },
+        })
+      : [];
+    const sentByCampaign = new Map(sentCounts.map(row => [String(row.campaignId), row._count._all]));
+    res.json({
+      campaigns: rows.map(row => ({
+        ...mapEngageCampaign(row),
+        total_sent: sentByCampaign.get(String(row.campaignId)) ?? row.totalSent ?? 0,
+      })),
+    });
   } catch (err) {
     sendServerError(res, 'Engagement run failed', err);
   }
@@ -1572,21 +1590,31 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
     const since = new Date(Date.now() - SOCIAL_RESPONSE_DAYS * 86400000);
     const trendKeys = recentDayKeys(7);
     const [
-      grouped,
-      engagements,
+      deliveries,
+      recentEngagers,
       messages,
       kpiSnapshots,
       linkTotals,
+      revenueTotals,
       riskMessages,
     ] = await Promise.all([
-      prisma.autoEngagement.groupBy({
-        by: ['platform', 'status'],
-        where: { brandId, firedAt: { gt: since } },
-        _count: { _all: true },
+      prisma.campaignDeliveryAttempt.findMany({
+        where: { brandId, createdAt: { gt: since } },
+        select: {
+          engagerId: true,
+          platform: true,
+          status: true,
+          channel: true,
+          createdAt: true,
+          deliveredAt: true,
+        },
       }),
-      prisma.autoEngagement.findMany({
-        where: { brandId, firedAt: { gt: since } },
-        select: { platform: true, status: true, firedAt: true },
+      prisma.campaignPostEngager.findMany({
+        where: {
+          brandId,
+          createdAt: { gt: since },
+        },
+        select: { engagerId: true, platform: true, status: true, createdAt: true },
       }),
       prisma.socialMessage.findMany({
         where: { brandId, capturedAt: { gt: since } },
@@ -1607,6 +1635,10 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
       prisma.trackedLink.aggregate({
         where: { brandId },
         _sum: { clicks: true, conversions: true },
+      }),
+      prisma.campaignMetric.aggregate({
+        where: { brandId, metric: { in: ['revenue_attributed', 'revenue', 'attributed_revenue'] } },
+        _sum: { value: true },
       }),
       prisma.socialMessage.findMany({
         where: {
@@ -1631,15 +1663,25 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
     ]);
 
     const byPlatform = new Map<string, { platform: string; total: number; sent: number; manual: number; queued: number }>();
-    for (const row of grouped) {
-      if (!row.platform) continue;
-      const stats = byPlatform.get(row.platform) ?? { platform: row.platform, total: 0, sent: 0, manual: 0, queued: 0 };
-      const count = row._count._all;
-      stats.total += count;
-      if (row.status === 'sent') stats.sent += count;
-      if (row.status === 'manual_copy') stats.manual += count;
-      if (row.status === 'queued' || row.status === 'queued_for_approval') stats.queued += count;
-      byPlatform.set(row.platform, stats);
+    const platformStats = (platform: string) => byPlatform.get(platform) ?? { platform, total: 0, sent: 0, manual: 0, queued: 0 };
+    for (const delivery of deliveries) {
+      const stats = platformStats(delivery.platform);
+      stats.total += 1;
+      if (delivery.status === 'sent') stats.sent += 1;
+      else if (delivery.status === 'manual_action_required' || delivery.status === 'manual_copy') stats.manual += 1;
+      else if (delivery.status === 'queued' || delivery.status === 'processing' || delivery.status === 'rate_limited' || delivery.status === 'failed') stats.queued += 1;
+      byPlatform.set(delivery.platform, stats);
+    }
+    const pendingStatuses = new Set(['queued', 'needs_review', 'queued_for_approval', 'manual_action_required', 'manual_copy', 'failed', 'rate_limited']);
+    for (const engager of recentEngagers) {
+      if (!pendingStatuses.has(engager.status ?? '')) continue;
+      const hasDelivery = deliveries.some(delivery => delivery.engagerId === engager.engagerId);
+      if (hasDelivery) continue;
+      const stats = platformStats(engager.platform);
+      stats.total += 1;
+      if (engager.status === 'manual_action_required' || engager.status === 'manual_copy') stats.manual += 1;
+      else stats.queued += 1;
+      byPlatform.set(engager.platform, stats);
     }
 
     const messageVolume = new Map<string, { d: string; classified: number; total: number }>();
@@ -1665,19 +1707,32 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
     const sentByDay = new Map<string, number>();
     const manualByDay = new Map<string, number>();
     const queuedByDay = new Map<string, number>();
-    for (const engagement of engagements) {
-      const key = dayKey(engagement.firedAt);
+    for (const delivery of deliveries) {
+      const key = dayKey(delivery.deliveredAt ?? delivery.createdAt);
       if (!trendKeys.includes(key)) continue;
-      if (engagement.status === 'sent') sentByDay.set(key, (sentByDay.get(key) ?? 0) + 1);
-      if (engagement.status === 'manual_copy') manualByDay.set(key, (manualByDay.get(key) ?? 0) + 1);
-      if (engagement.status === 'queued' || engagement.status === 'queued_for_approval') queuedByDay.set(key, (queuedByDay.get(key) ?? 0) + 1);
+      if (delivery.status === 'sent') sentByDay.set(key, (sentByDay.get(key) ?? 0) + 1);
+      if (delivery.status === 'manual_action_required' || delivery.status === 'manual_copy') manualByDay.set(key, (manualByDay.get(key) ?? 0) + 1);
+      if (delivery.status === 'queued' || delivery.status === 'processing' || delivery.status === 'rate_limited' || delivery.status === 'failed') queuedByDay.set(key, (queuedByDay.get(key) ?? 0) + 1);
     }
 
     const latestKpi = kpiSnapshots[0];
+    const totalMessages = messages.length;
+    const sentDeliveries = deliveries.filter(delivery => delivery.status === 'sent');
+    const manualDeliveries = deliveries.filter(delivery => delivery.status === 'manual_action_required' || delivery.status === 'manual_copy');
+    const queuedDeliveries = deliveries.filter(delivery => delivery.status === 'queued' || delivery.status === 'processing' || delivery.status === 'rate_limited' || delivery.status === 'failed');
+    const replyDenominator = sentDeliveries.length + manualDeliveries.length + queuedDeliveries.length;
+    const conversions = linkTotals._sum.conversions ?? 0;
+    const clicks = linkTotals._sum.clicks ?? 0;
     const fallbackScores = {
-      listening: latestKpi?.listeningKpi === null || latestKpi?.listeningKpi === undefined ? null : Number(latestKpi.listeningKpi),
-      reply: latestKpi?.replyKpi === null || latestKpi?.replyKpi === undefined ? null : Number(latestKpi.replyKpi),
-      funnel: latestKpi?.funnelKpi === null || latestKpi?.funnelKpi === undefined ? null : Number(latestKpi.funnelKpi),
+      listening: latestKpi?.listeningKpi === null || latestKpi?.listeningKpi === undefined
+        ? Math.min(100, totalMessages * 5)
+        : Number(latestKpi.listeningKpi),
+      reply: latestKpi?.replyKpi === null || latestKpi?.replyKpi === undefined
+        ? (replyDenominator ? Math.round((sentDeliveries.length / replyDenominator) * 100) : 0)
+        : Number(latestKpi.replyKpi),
+      funnel: latestKpi?.funnelKpi === null || latestKpi?.funnelKpi === undefined
+        ? (clicks ? Math.round((conversions / Math.max(clicks, 1)) * 100) : 0)
+        : Number(latestKpi.funnelKpi),
     };
     const snapshotByDay = new Map(kpiSnapshots.map(snapshot => [dayKey(snapshot.createdAt), snapshot]));
     const score_trend = trendKeys.map(key => {
@@ -1700,6 +1755,17 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
       }),
       { total: 0, sent: 0, manual: 0, queued: 0 },
     );
+    const responseSamples = deliveries
+      .filter(delivery => delivery.status === 'sent' && delivery.deliveredAt)
+      .map(delivery => {
+        const source = recentEngagers.find(engager => engager.engagerId === delivery.engagerId);
+        return source ? Math.max(0, delivery.deliveredAt!.getTime() - source.createdAt.getTime()) / 60000 : null;
+      })
+      .filter((value): value is number => value !== null);
+    const avgResponseTime = responseSamples.length
+      ? Math.round(responseSamples.reduce((sum, value) => sum + value, 0) / responseSamples.length)
+      : null;
+    const revenue = Number(revenueTotals._sum.value ?? 0);
 
     const risk_events = riskMessages.map(message => {
       const risk = severityFor(message.urgencyScore, message.sentiment);
@@ -1726,17 +1792,17 @@ router.get('/:brand_id/stats', requireBrandAccess, requireToolAccess('tool_10'),
         reply_score: fallbackScores.reply,
         funnel_score: fallbackScores.funnel,
         risk_events: risk_events.length || latestKpi?.riskEvents || 0,
-        avg_response_time_minutes: null,
-        revenue_attributed: null,
+        avg_response_time_minutes: avgResponseTime,
+        revenue_attributed: revenue,
       },
       score_trend,
       message_volume: Array.from(messageVolume.values()),
       sentiment: Array.from(sentiment.values()),
       risk_events,
       attribution: {
-        clicks: linkTotals._sum.clicks ?? 0,
-        conversions: linkTotals._sum.conversions ?? 0,
-        revenue: null,
+        clicks,
+        conversions,
+        revenue,
       },
     });
   } catch (err) {

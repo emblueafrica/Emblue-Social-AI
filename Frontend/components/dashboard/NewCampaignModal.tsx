@@ -176,11 +176,10 @@ export function NewCampaignModal({
           allocation: { ...EMPTY_ALLOCATION, ...initial.allocation },
         }
       : { ...blankDraft(), sourceMode: initialMode ?? "existing" };
-    setDraft(
-      value.sourceMode === "publish_new"
-        ? { ...value, sourceMode: "existing" }
-        : value,
-    );
+    setDraft({
+      ...value,
+      sourceMode: value.sourceMode === "keyword" ? "keyword" : "existing",
+    });
     setKeywordInput("");
     setError(null);
     setShowPreview(false);
@@ -308,32 +307,24 @@ export function NewCampaignModal({
           </div>
         )}
 
-        {!initial && (
-          <div
-            className="mx-11 mb-6 flex max-w-full gap-1 overflow-x-auto rounded-xl bg-muted/40 p-1"
-            role="tablist"
-            aria-label="Campaign type"
+        <div
+          className="mx-11 mb-6 flex max-w-full gap-1 overflow-x-auto rounded-xl bg-muted/40 p-1"
+          role="tablist"
+          aria-label="Campaign type"
+        >
+          <ModeTab
+            active={draft.sourceMode === "existing"}
+            onClick={() => update("sourceMode", "existing")}
           >
-            <ModeTab
-              active={draft.sourceMode === "live"}
-              onClick={() => update("sourceMode", "live")}
-            >
-              Live Engagement
-            </ModeTab>
-            <ModeTab
-              active={draft.sourceMode === "existing"}
-              onClick={() => update("sourceMode", "existing")}
-            >
-              Post URL Campaign
-            </ModeTab>
-            <ModeTab
-              active={draft.sourceMode === "keyword"}
-              onClick={() => update("sourceMode", "keyword")}
-            >
-              Keyword Campaign
-            </ModeTab>
-          </div>
-        )}
+            Post URL Campaign
+          </ModeTab>
+          <ModeTab
+            active={draft.sourceMode === "keyword"}
+            onClick={() => update("sourceMode", "keyword")}
+          >
+            Keyword Campaign
+          </ModeTab>
+        </div>
 
         <div className="grid gap-12 px-11 py-3 lg:grid-cols-2">
           <div className="space-y-8">

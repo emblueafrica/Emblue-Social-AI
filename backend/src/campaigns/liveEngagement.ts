@@ -4,7 +4,7 @@ import { runAgent1 } from '../agents/agent1_listening';
 import { runAgent14 } from '../agents/agents9_to_14';
 import { broadcastToClients } from '../stream/eventQueue';
 import { CampaignPlatform } from './lifecycle';
-import { selectLiveCampaign } from './unified';
+import { deliveryChannelsForReplyMode, selectLiveCampaign } from './unified';
 import { prepareCampaignDelivery } from './deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 
@@ -116,10 +116,11 @@ export async function processLiveEngagementEvent(brandId: number, event: LiveInb
     await prisma.campaignPostEngager.update({ where: { engagerId: engager.engagerId }, data: { status: 'setup_required', deliveryError: 'Campaign delivery queue unavailable.' } });
     return { status: 'setup_required', campaign_id: selected.campaignId };
   }
-  const channel = campaign.replyMode === 'public' ? 'public_reply' : 'direct_message';
-  const data = { brand_id: brandId, campaign_id: selected.campaignId, engager_id: Number(engager.engagerId), channel } as const;
-  await prepareCampaignDelivery(data, new Date());
-  await enqueueCampaignDelivery(data, 0);
+  for (const channel of deliveryChannelsForReplyMode(campaign.replyMode)) {
+    const data = { brand_id: brandId, campaign_id: selected.campaignId, engager_id: Number(engager.engagerId), channel } as const;
+    await prepareCampaignDelivery(data, new Date());
+    await enqueueCampaignDelivery(data, 0);
+  }
   await prisma.campaignPostEngager.update({ where: { engagerId: engager.engagerId }, data: { status: 'queued', updatedAt: new Date() } });
   broadcastToClients(brandId, 'campaign_activity_created', { campaign_id: selected.campaignId, engager_id: Number(engager.engagerId), platform: event.platform, status: 'queued' });
   return { status: 'queued', campaign_id: selected.campaignId };

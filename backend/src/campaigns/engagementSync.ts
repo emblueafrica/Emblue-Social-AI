@@ -18,6 +18,7 @@ import { runAgent1 } from '../agents/agent1_listening';
 import { Intent } from '../types';
 import { prepareCampaignDelivery } from './deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
+import { deliveryChannelsForReplyMode } from './unified';
 
 type TrackedPost = {
   urlId: bigint;
@@ -189,17 +190,19 @@ export async function persistCampaignDeliveryOutcomes(
   }
 
   if ((result.deliveries ?? []).some(delivery => delivery.status === 'sent')) {
-    const firstDelivery = await prisma.campaignPostEngager.updateMany({
+    await prisma.campaignPostEngager.updateMany({
       where: { engagerId, brandId, campaignId: String(campaignId), firstDeliveredAt: null },
       data: { firstDeliveredAt: new Date(), updatedAt: new Date() },
     });
-    if (firstDelivery.count) {
-      await prisma.engageCampaign.updateMany({
-        where: { brandId, campaignId: BigInt(campaignId) },
-        data: { totalSent: { increment: 1 }, updatedAt: new Date() },
-      });
-    }
   }
+
+  const sentDeliveries = await prisma.campaignDeliveryAttempt.count({
+    where: { brandId, campaignId: BigInt(campaignId), status: 'sent' },
+  });
+  await prisma.engageCampaign.updateMany({
+    where: { brandId, campaignId: BigInt(campaignId) },
+    data: { totalSent: sentDeliveries, updatedAt: new Date() },
+  });
 }
 
 async function updateCampaignEngagerStatus(
@@ -305,12 +308,13 @@ async function syncTrackedPost(
     }
 
     const numericCampaignId = Number(campaignId);
-    const channel = config.reply_mode === 'public' ? 'public_reply' : 'direct_message';
     const delay = Math.max(0, totals.queued) * Math.max(0, config.spacing_minutes ?? 0) * 60_000;
-    const data = { brand_id: brandId, campaign_id: numericCampaignId, engager_id: Number(engagerId), channel } as const;
-    const scheduledAt = new Date(Date.now() + delay);
-    await prepareCampaignDelivery(data, scheduledAt);
-    await enqueueCampaignDelivery(data, delay);
+    for (const channel of deliveryChannelsForReplyMode(config.reply_mode)) {
+      const data = { brand_id: brandId, campaign_id: numericCampaignId, engager_id: Number(engagerId), channel } as const;
+      const scheduledAt = new Date(Date.now() + delay);
+      await prepareCampaignDelivery(data, scheduledAt);
+      await enqueueCampaignDelivery(data, delay);
+    }
     totals.queued += 1;
     await updateCampaignEngagerStatus(brandId, campaignId, engager, 'queued');
   }

@@ -9,6 +9,9 @@ import { useAuth } from "@/hooks/use-auth";
 import {
   ApiError,
   approveQueueItem,
+  markQueueItemSent,
+  retryQueueItem,
+  skipQueueItem,
   getApprovalQueue,
   type ApprovalQueueItem,
 } from "@/lib/api";
@@ -16,6 +19,7 @@ import {
 type Platform = "instagram" | "x" | "tiktok" | "facebook";
 type QueueItem = {
   id: number;
+  queueKey: string;
   handle: string;
   platform: Platform;
   confidence: number;
@@ -25,6 +29,8 @@ type QueueItem = {
   reply: string;
   tags: { label: string; cls: string }[];
   category: string;
+  manualCopy: boolean;
+  status?: string | null;
 };
 
 const SORTS = ["Confidence", "Time in queue", "Platform"];
@@ -46,11 +52,12 @@ function mapApprovalItem(item: ApprovalQueueItem, index: number): QueueItem {
 
   return {
     id: index + 1,
+    queueKey: item.queue_key ?? (item.queue_id ? `approval:${item.queue_id}` : `approval:${index}`),
     handle: author,
     platform: normalizePlatform(item.platform),
     confidence: item.manual_copy_required ? 50 : 72,
     ago: "Live",
-    preview: item.reply.slice(0, 72) || "Reply waiting for review.",
+    preview: item.reply.slice(0, 72) || item.delivery_error || "Reply waiting for review.",
     original: item.original,
     reply: item.reply,
     tags: [
@@ -59,9 +66,14 @@ function mapApprovalItem(item: ApprovalQueueItem, index: number): QueueItem {
         : { label: "Ready to send", cls: "bg-emerald-100 text-emerald-700" },
       item.tracked_link
         ? { label: "Tracked link", cls: "bg-indigo-100 text-indigo-700" }
-        : { label: "Reply", cls: "bg-pink-100 text-pink-700" },
+        : { label: item.channel === "direct_message" ? "DM" : "Reply", cls: "bg-pink-100 text-pink-700" },
+      item.campaign_name
+        ? { label: item.campaign_name, cls: "bg-slate-100 text-slate-700" }
+        : { label: "General", cls: "bg-slate-100 text-slate-700" },
     ],
     category,
+    manualCopy: Boolean(item.manual_copy_required),
+    status: item.status,
   };
 }
 
@@ -90,11 +102,23 @@ export default function ApprovalQueue() {
   const items = queueQuery.data?.queue.map(mapApprovalItem) ?? [];
 
   const approveMutation = useMutation({
-    mutationFn: ({ brandId, index, replyText }: { brandId: number; index: number; replyText?: string }) =>
-      approveQueueItem(brandId, index, replyText),
+    mutationFn: ({ brandId, queueKey, replyText }: { brandId: number; queueKey: string; replyText?: string }) =>
+      approveQueueItem(brandId, queueKey, replyText),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["approval-queue", activeBrandId] });
     },
+  });
+  const markSentMutation = useMutation({
+    mutationFn: ({ brandId, queueKey }: { brandId: number; queueKey: string }) => markQueueItemSent(brandId, queueKey),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["approval-queue", activeBrandId] }),
+  });
+  const retryMutation = useMutation({
+    mutationFn: ({ brandId, queueKey }: { brandId: number; queueKey: string }) => retryQueueItem(brandId, queueKey),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["approval-queue", activeBrandId] }),
+  });
+  const rejectMutation = useMutation({
+    mutationFn: ({ brandId, queueKey }: { brandId: number; queueKey: string }) => skipQueueItem(brandId, queueKey),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["approval-queue", activeBrandId] }),
   });
 
   const selected = items.find((i) => i.id === selectedId);
@@ -115,11 +139,10 @@ export default function ApprovalQueue() {
     setApiNotice(null);
 
     if (activeBrandId && queueQuery.data) {
-      const index = items.findIndex((item) => item.id === selected.id);
       try {
         await approveMutation.mutateAsync({
           brandId: activeBrandId,
-          index,
+          queueKey: selected.queueKey,
           replyText: draftText.trim() || selected.reply,
         });
         setToast({ handle: selected.handle });
@@ -134,6 +157,35 @@ export default function ApprovalQueue() {
   };
 
   const undo = () => setToast(null);
+  const markSelectedSent = async () => {
+    if (!selected || !activeBrandId) return;
+    setApiNotice(null);
+    try {
+      await markSentMutation.mutateAsync({ brandId: activeBrandId, queueKey: selected.queueKey });
+      setToast({ handle: selected.handle });
+      setTimeout(() => setToast(null), 5000);
+    } catch (error) {
+      setApiNotice(apiErrorMessage(error));
+    }
+  };
+  const retrySelected = async () => {
+    if (!selected || !activeBrandId) return;
+    setApiNotice(null);
+    try {
+      await retryMutation.mutateAsync({ brandId: activeBrandId, queueKey: selected.queueKey });
+    } catch (error) {
+      setApiNotice(apiErrorMessage(error));
+    }
+  };
+  const rejectSelected = async () => {
+    if (!selected || !activeBrandId) return;
+    setApiNotice(null);
+    try {
+      await rejectMutation.mutateAsync({ brandId: activeBrandId, queueKey: selected.queueKey });
+    } catch (error) {
+      setApiNotice(apiErrorMessage(error));
+    }
+  };
 
   return (
     <div className="min-h-screen flex bg-muted/30">
@@ -241,6 +293,9 @@ export default function ApprovalQueue() {
                   <div className="bg-muted/40 rounded-xl p-4 text-sm leading-relaxed mb-3">
                     {selected.original}
                   </div>
+                  {selected.status && (
+                    <p className="text-xs text-muted-foreground mb-3">Status: {selected.status.replaceAll("_", " ")}</p>
+                  )}
 
                   <div className="flex gap-2 mb-6">
                     {selected.tags.map((t) => (
@@ -285,7 +340,25 @@ export default function ApprovalQueue() {
                   >
                     <Check className="size-4" /> {approveMutation.isPending ? "Approving..." : "Approve & Send"}
                   </button>
-                  <button className="w-full border border-red-300 text-red-500 rounded-xl py-3.5 font-semibold hover:bg-red-50 transition">
+                  {selected.manualCopy && (
+                    <button
+                      onClick={markSelectedSent}
+                      disabled={markSentMutation.isPending}
+                      className="w-full border border-emerald-300 text-emerald-600 rounded-xl py-3.5 font-semibold hover:bg-emerald-50 transition mb-3 disabled:opacity-60"
+                    >
+                      {markSentMutation.isPending ? "Marking..." : "Mark Manual Send Complete"}
+                    </button>
+                  )}
+                  {selected.status === "failed" || selected.status === "rate_limited" ? (
+                    <button
+                      onClick={retrySelected}
+                      disabled={retryMutation.isPending}
+                      className="w-full border border-amber-300 text-amber-600 rounded-xl py-3.5 font-semibold hover:bg-amber-50 transition mb-3 disabled:opacity-60"
+                    >
+                      {retryMutation.isPending ? "Retrying..." : "Retry"}
+                    </button>
+                  ) : null}
+                  <button onClick={rejectSelected} disabled={rejectMutation.isPending} className="w-full border border-red-300 text-red-500 rounded-xl py-3.5 font-semibold hover:bg-red-50 transition disabled:opacity-60">
                     Reject
                   </button>
 

@@ -38,7 +38,7 @@ function buildCorsOptions(): CorsOptions {
   const normalizeOrigin = (value: string): string => value.trim().replace(/\/+$/, '');
 
   // Origins that are always allowed, independent of the FRONTEND_URL env var.
-  const STATIC_ALLOWED = ['http://localhost:3000', 'https://emblue-social-ai.vercel.app']
+  const STATIC_ALLOWED = ['http://localhost:3000', 'https://emblue-social-ai.vercel.app', 'https://marketool.tech']
     .map(normalizeOrigin);
 
   const envOrigins = (process.env.FRONTEND_URL ?? '')

@@ -9,6 +9,7 @@ import { eligibleForCampaign } from './lifecycle';
 import { CampaignConfig } from '../types';
 import { prepareCampaignDelivery } from './deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
+import { deliveryChannelsForReplyMode } from './unified';
 
 export type XReplySyncResult = {
   ok: true;
@@ -243,11 +244,12 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
         continue;
       }
       const campaignIdNumber = Number(numericCampaignId);
-      const channel = config.reply_mode === 'public' ? 'public_reply' : 'direct_message';
       const delay = queued * Math.max(0, config.spacing_minutes ?? 0) * 60_000;
-      const data = { brand_id: brandId, campaign_id: campaignIdNumber, engager_id: Number(campaignEngager.engagerId), channel } as const;
-      await prepareCampaignDelivery(data, new Date(Date.now() + delay));
-      await enqueueCampaignDelivery(data, delay);
+      for (const channel of deliveryChannelsForReplyMode(config.reply_mode)) {
+        const data = { brand_id: brandId, campaign_id: campaignIdNumber, engager_id: Number(campaignEngager.engagerId), channel } as const;
+        await prepareCampaignDelivery(data, new Date(Date.now() + delay));
+        await enqueueCampaignDelivery(data, delay);
+      }
       await prisma.campaignPostEngager.update({ where: { engagerId: campaignEngager.engagerId }, data: { status: 'queued', processedAt: new Date(), updatedAt: new Date() } });
       queued += 1;
       continue;

@@ -583,9 +583,14 @@ export type PostUrlCampaignStatus = {
 };
 
 export type ApprovalQueueItem = {
+  queue_key?: string;
   queue_id?: number;
   brand_id: number;
   campaign_id?: number | null;
+  campaign_name?: string | null;
+  source?: "approval" | "campaign";
+  channel?: "public_reply" | "direct_message" | null;
+  status?: string | null;
   platform: Platform;
   author: string;
   original: string;
@@ -1064,14 +1069,42 @@ export function getApprovalQueue(brandId: number) {
   return apiRequest<{ queue: ApprovalQueueItem[] }>(`/api/v1/rt/queue/${brandId}`);
 }
 
-export function approveQueueItem(brandId: number, index: number, replyText?: string) {
+export function approveQueueItem(brandId: number, queueKey: string, replyText?: string) {
   return apiRequest<{
     ok: true;
     item: ApprovalQueueItem;
     publish?: { success: boolean; platform: Platform; message_id?: string; error?: string };
-  }>("/api/v1/rt/queue/approve", {
+  }>(`/api/v1/rt/queue/${encodeURIComponent(queueKey)}/approve`, {
     method: "POST",
-    body: JSON.stringify({ brand_id: brandId, index, reply_text: replyText }),
+    body: JSON.stringify({ brand_id: brandId, reply_text: replyText }),
+  });
+}
+
+export function editAndSendQueueItem(brandId: number, queueKey: string, replyText: string) {
+  return apiRequest<{ ok: true; item: ApprovalQueueItem }>(`/api/v1/rt/queue/${encodeURIComponent(queueKey)}/edit-and-send`, {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId, reply_text: replyText }),
+  });
+}
+
+export function markQueueItemSent(brandId: number, queueKey: string) {
+  return apiRequest<{ ok: true; item: ApprovalQueueItem }>(`/api/v1/rt/queue/${encodeURIComponent(queueKey)}/mark-sent`, {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId }),
+  });
+}
+
+export function retryQueueItem(brandId: number, queueKey: string) {
+  return apiRequest<{ ok: true; item: ApprovalQueueItem }>(`/api/v1/rt/queue/${encodeURIComponent(queueKey)}/retry`, {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId }),
+  });
+}
+
+export function skipQueueItem(brandId: number, queueKey: string) {
+  return apiRequest<{ ok: true; item: ApprovalQueueItem }>(`/api/v1/rt/queue/${encodeURIComponent(queueKey)}/skip`, {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId }),
   });
 }
 

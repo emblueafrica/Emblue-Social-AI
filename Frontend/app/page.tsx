@@ -97,6 +97,14 @@ export default function LoginPage() {
             {loading ? "Checking..." : "Login"}
           </button>
         </form>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-4 text-xs font-medium text-muted-foreground">
+          <Link href="/privacy" className="hover:text-primary hover:underline">
+            Privacy Policy
+          </Link>
+          <Link href="/terms" className="hover:text-primary hover:underline">
+            Terms of Service
+          </Link>
+        </div>
       </div>
     </LoginLayout>
   );
