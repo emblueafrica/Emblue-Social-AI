@@ -334,6 +334,11 @@ export interface CampaignConfig {
   brand_id?:            number;
   name?:                string;
   platform?:            Platform;
+  mode?:                'live' | 'post_url' | 'keyword';
+  platforms?:           Platform[];
+  priority?:            number;
+  scope_type?:          'all_owned_posts' | 'selected_posts';
+  reply_mode?:          'public' | 'dm_with_public_fallback' | 'dm_only';
   keywords?:            string[];
   engage_all?:          boolean;
   engage_negative?:     boolean;
@@ -358,6 +363,8 @@ export interface CampaignConfig {
   urgency_threshold?:   number;
   reply_template_id?:   number | null;
   max_per_day?:         number;
+  max_dm_per_day?:      number;
+  spacing_minutes?:     number;
   public_reply_enabled?: boolean;
   direct_message_enabled?: boolean;
   post_caption?:        string;
@@ -370,6 +377,9 @@ export interface CampaignConfig {
     mentions: boolean;
     dms: boolean;
   };
+  mode_config?:         Record<string, unknown>;
+  preview_fetched_at?:  Date | string | null;
+  preview_expires_at?:  Date | string | null;
   activation_status?:   string;
   last_activated_at?:   Date | string | null;
 }

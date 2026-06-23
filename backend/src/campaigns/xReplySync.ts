@@ -2,11 +2,13 @@ import prisma from '../db/prisma';
 import { contextualFallbackReply, runAgent4 } from '../agents/agent4_reply_assistant';
 import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
-import { engageEngager, fetchXPostEngagers } from '../stream/engageEngagers';
+import { fetchXPostEngagers } from '../stream/engageEngagers';
 import { fillVariables } from '../stream/engageEngagers';
 import { publishReply } from '../stream/publisher';
 import { eligibleForCampaign } from './lifecycle';
 import { CampaignConfig } from '../types';
+import { prepareCampaignDelivery } from './deliveryWorker';
+import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 
 export type XReplySyncResult = {
   ok: true;
@@ -232,33 +234,22 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
     }
 
     if (numericCampaignId && config) {
-      const delivery = await engageEngager(brandId, {
-        platform: 'x',
-        author_handle: engager.author_handle,
-        author_id: engager.author_id,
-        comment_id: replyTweetId,
-        tweet_id: replyTweetId,
-        post_id: tweetId,
-        text: engager.text,
-        action: 'commented',
-      }, config, { X_OAUTH_TOKEN: token });
-      for (const outcome of delivery.deliveries ?? []) {
-        await prisma.campaignDeliveryAttempt.upsert({
-          where: { engagerId_channel: { engagerId: campaignEngager.engagerId, channel: outcome.channel } },
-          create: { engagerId: campaignEngager.engagerId, brandId, campaignId: numericCampaignId, platform: 'x', channel: outcome.channel, status: outcome.status, externalMessageId: outcome.external_message_id, error: outcome.error, deliveredAt: outcome.status === 'sent' ? new Date() : null },
-          update: { status: outcome.status, externalMessageId: outcome.external_message_id, error: outcome.error, attemptCount: { increment: 1 }, deliveredAt: outcome.status === 'sent' ? new Date() : undefined, updatedAt: new Date() },
+      if (!isBullEnabled()) {
+        await prisma.campaignPostEngager.update({
+          where: { engagerId: campaignEngager.engagerId },
+          data: { status: 'setup_required', deliveryError: 'Campaign delivery queue unavailable.', processedAt: new Date(), updatedAt: new Date() },
         });
+        skipped += 1;
+        continue;
       }
-      if ((delivery.deliveries ?? []).some(outcome => outcome.status === 'sent')) {
-        const first = await prisma.campaignPostEngager.updateMany({ where: { engagerId: campaignEngager.engagerId, firstDeliveredAt: null }, data: { firstDeliveredAt: new Date() } });
-        if (first.count) await prisma.engageCampaign.update({ where: { campaignId: numericCampaignId }, data: { totalSent: { increment: 1 }, updatedAt: new Date() } });
-      }
-      const status = delivery.status === 'queued_for_approval' ? 'needs_review' : delivery.status;
-      await prisma.campaignPostEngager.update({ where: { engagerId: campaignEngager.engagerId }, data: { status, replyText: delivery.reply, replyConfidence: delivery.confidence, deliveryError: delivery.error ?? null, processedAt: new Date(), updatedAt: new Date() } });
-      if (status === 'sent' || status === 'partial') sent += 1;
-      else if (status === 'needs_review' || status === 'bot_blocked') queued += 1;
-      else if (status === 'error' || status === 'rate_limited' || status === 'generation_failed') failed += 1;
-      else skipped += 1;
+      const campaignIdNumber = Number(numericCampaignId);
+      const channel = config.reply_mode === 'public' ? 'public_reply' : 'direct_message';
+      const delay = queued * Math.max(0, config.spacing_minutes ?? 0) * 60_000;
+      const data = { brand_id: brandId, campaign_id: campaignIdNumber, engager_id: Number(campaignEngager.engagerId), channel } as const;
+      await prepareCampaignDelivery(data, new Date(Date.now() + delay));
+      await enqueueCampaignDelivery(data, delay);
+      await prisma.campaignPostEngager.update({ where: { engagerId: campaignEngager.engagerId }, data: { status: 'queued', processedAt: new Date(), updatedAt: new Date() } });
+      queued += 1;
       continue;
     }
 

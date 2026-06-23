@@ -317,6 +317,11 @@ export type CampaignRecord = {
   brand_id: number;
   name: string;
   platform?: Platform;
+  mode?: "live" | "post_url" | "keyword";
+  platforms?: Platform[];
+  priority?: number;
+  scope_type?: "all_owned_posts" | "selected_posts";
+  reply_mode?: "public" | "dm_with_public_fallback" | "dm_only";
   post_ids: string[];
   keywords: string[];
   engage_all?: boolean;
@@ -339,6 +344,12 @@ export type CampaignRecord = {
   urgency_threshold?: number;
   reply_template_id?: number | null;
   max_per_day?: number;
+  max_dm_per_day?: number;
+  spacing_minutes?: number;
+  mode_config?: Record<string, unknown>;
+  selected_posts?: { platform: Platform; url: string }[];
+  preview_fetched_at?: string | null;
+  preview_expires_at?: string | null;
   public_reply_enabled?: boolean;
   direct_message_enabled?: boolean;
   post_caption?: string;
@@ -356,6 +367,11 @@ export type CampaignPayload = {
   brand_id: number;
   name: string;
   platform: Platform;
+  mode?: "live" | "post_url" | "keyword";
+  platforms?: Platform[];
+  priority?: number;
+  scope_type?: "all_owned_posts" | "selected_posts";
+  reply_mode?: "public" | "dm_with_public_fallback" | "dm_only";
   keywords?: string[];
   tone?: string;
   reply_template?: string;
@@ -363,6 +379,11 @@ export type CampaignPayload = {
   image_url?: string;
   auto_fire_threshold?: number;
   max_per_hour?: number;
+  max_per_day?: number;
+  max_dm_per_day?: number;
+  spacing_minutes?: number;
+  mode_config?: Record<string, unknown>;
+  selected_posts?: { platform: Platform; url: string }[];
   is_active?: boolean;
   platform_allocation?: PlatformAllocation;
   source_mode?: "publish_new" | "existing" | "keyword";
@@ -420,6 +441,37 @@ export type CampaignEngagementResponse = {
   engagers: { id: string; platform: Platform; action: string; author_handle?: string | null; original_text?: string | null; reply_text?: string | null; delivery_error?: string | null; external_event_id: string; source: string; intent?: string | null; urgency_score?: number | null; reply_confidence?: number | null; status?: string | null; created_at: string; processed_at?: string | null; deliveries: { channel: string; status: string; external_message_id?: string | null; error?: string | null; attempt_count: number; delivered_at?: string | null }[] }[];
 };
 
+export type CampaignActivityItem = {
+  id: number;
+  campaign_id: number;
+  campaign_name: string;
+  mode: "live" | "post_url" | "keyword";
+  platform: Platform;
+  action: string;
+  author_handle?: string | null;
+  original_text?: string | null;
+  reply_text?: string | null;
+  status: string;
+  confidence?: number | null;
+  error?: string | null;
+  created_at: string;
+  deliveries: { channel: string; status: string; error?: string | null; delivered_at?: string | null }[];
+};
+
+export type CampaignActivityResponse = {
+  items: CampaignActivityItem[];
+  next_cursor: number | null;
+};
+
+export type PostUrlPreviewResponse = {
+  campaign_id: number;
+  counts: { total: number; commenters: number; likers: number; selected: number; review: number; ignored: number };
+  by_platform: Record<string, { total: number; selected: number }>;
+  errors: string[];
+  fetched_at: string;
+  expires_at: string;
+};
+
 export type KeywordCampaignPayload = {
   brand_id: number;
   campaign_id?: number;
@@ -431,6 +483,11 @@ export type KeywordCampaignPayload = {
   urgency_threshold: number;
   reply_template_id?: number | null;
   max_per_day: number;
+  max_dm_per_day?: number;
+  spacing_minutes?: number;
+  priority?: number;
+  reply_mode?: "public" | "dm_with_public_fallback" | "dm_only";
+  mode_config?: Record<string, unknown>;
   public_reply_enabled: boolean;
   direct_message_enabled: boolean;
   tone?: string;
@@ -798,8 +855,10 @@ export function disconnectPlatform(brandId: number, platform: "facebook" | "inst
   });
 }
 
-export function getCampaigns(brandId: number) {
-  return apiRequest<{ campaigns: CampaignRecord[] }>(`/api/v1/campaigns/${brandId}`);
+export function getCampaigns(brandId: number, mode?: "live" | "post_url" | "keyword") {
+  const query = new URLSearchParams({ brand_id: String(brandId) });
+  if (mode) query.set("mode", mode);
+  return apiRequest<{ campaigns: CampaignRecord[] }>(`/api/v1/campaigns?${query.toString()}`);
 }
 
 export function getCampaignStats(brandId: number) {
@@ -807,8 +866,9 @@ export function getCampaignStats(brandId: number) {
 }
 
 export function deleteCampaign(brandId: number, campaignId: number) {
-  return apiRequest<{ ok: true; campaign_id: number }>(`/api/v1/campaigns/by-brand/${brandId}/${campaignId}`, {
+  return apiRequest<{ ok: true; campaign_id: number }>(`/api/v1/campaigns/${campaignId}`, {
     method: "DELETE",
+    body: JSON.stringify({ brand_id: brandId }),
   });
 }
 
@@ -817,6 +877,81 @@ export function saveCampaign(payload: CampaignPayload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function updateCampaign(campaignId: number, payload: Partial<CampaignPayload> & { brand_id: number }) {
+  return apiRequest<{ ok: true; campaign: CampaignRecord }>(`/api/v1/campaigns/${campaignId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function setCampaignState(brandId: number, campaignId: number, action: "pause" | "resume") {
+  return apiRequest<{ ok: true; campaign_id: number; status: string }>(`/api/v1/campaigns/${campaignId}/${action}`, {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId }),
+  });
+}
+
+export function getCampaignCapabilities(brandId: number, platforms: Platform[]) {
+  const query = new URLSearchParams({ brand_id: String(brandId), platforms: platforms.join(",") });
+  return apiRequest<{ capabilities: CampaignCapability[]; queue_available: boolean }>(`/api/v1/campaigns/capabilities?${query.toString()}`);
+}
+
+export function fetchPostUrlPreview(campaignId: number, brandId: number, postUrls: { platform: Platform; url: string }[]) {
+  return apiRequest<PostUrlPreviewResponse>(`/api/v1/campaigns/${campaignId}/post-urls/fetch`, {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId, post_urls: postUrls }),
+  });
+}
+
+export function runPostUrlPreview(campaignId: number, brandId: number) {
+  return apiRequest<{ ok: true; campaign_id: number; queued: number; review: number }>(`/api/v1/campaigns/${campaignId}/post-urls/run`, {
+    method: "POST",
+    body: JSON.stringify({ brand_id: brandId }),
+  });
+}
+
+export function getCampaignActivity(params: {
+  brandId: number;
+  mode?: "live" | "post_url" | "keyword";
+  campaignId?: number;
+  platform?: Platform;
+  status?: string;
+  cursor?: number;
+  limit?: number;
+}) {
+  const query = new URLSearchParams({ brand_id: String(params.brandId), limit: String(params.limit ?? 25) });
+  if (params.mode) query.set("mode", params.mode);
+  if (params.campaignId) query.set("campaign_id", String(params.campaignId));
+  if (params.platform) query.set("platform", params.platform);
+  if (params.status) query.set("status", params.status);
+  if (params.cursor) query.set("cursor", String(params.cursor));
+  return apiRequest<CampaignActivityResponse>(`/api/v1/campaigns/activity?${query.toString()}`);
+}
+
+export function actOnCampaignActivity(
+  engagerId: number,
+  action: "approve" | "edit-and-send" | "retry" | "dismiss",
+  payload: { brand_id: number; reply_text?: string; channel?: "public_reply" | "direct_message" },
+) {
+  return apiRequest<{ ok: true; id: number; status: string; error?: string | null }>(`/api/v1/campaigns/activity/${engagerId}/${action}`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function downloadCampaignActivityCsv(brandId: number, filters: { mode?: string; platform?: Platform; status?: string } = {}) {
+  if (!env.apiUrl) throw new ApiError({ status: 500, message: "NEXT_PUBLIC_API_URL is not configured." });
+  const query = new URLSearchParams({ brand_id: String(brandId), format: "csv", limit: "100" });
+  if (filters.mode) query.set("mode", filters.mode);
+  if (filters.platform) query.set("platform", filters.platform);
+  if (filters.status) query.set("status", filters.status);
+  const response = await fetch(`${env.apiUrl}/api/v1/campaigns/activity?${query.toString()}`, {
+    headers: { Authorization: `Bearer ${await getAccessToken()}` },
+  });
+  if (!response.ok) throw await parseError(response);
+  return response.blob();
 }
 
 export function saveKeywordCampaign(payload: KeywordCampaignPayload) {

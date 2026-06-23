@@ -1,5 +1,6 @@
 // src/routes/campaigns.ts
 import { Router, Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import multer from 'multer';
 import prisma from '../db/prisma';
 import { mapEngageCampaign, toInputJson } from '../db/mappers';
@@ -11,6 +12,9 @@ import { syncXRepliesForPost, trackPublishedXPost } from '../campaigns/xReplySyn
 import { retryCampaignEngagement, syncTrackedCampaignEngagements } from '../campaigns/engagementSync';
 import { syncKeywordCampaigns } from '../campaigns/keywordCampaignSync';
 import { resolveCampaignCapability } from '../campaigns/capabilities';
+import { fetchPostUrlCampaignPreview, runPostUrlCampaignPreview } from '../campaigns/postUrlCampaign';
+import { prepareCampaignDelivery } from '../campaigns/deliveryWorker';
+import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 import { withSchedulerLease } from '../automation/schedulerLease';
 import { CampaignConfig, PostUrlItem, Credentials, Intent, Platform } from '../types';
 import {
@@ -50,6 +54,47 @@ type UploadedCampaignMedia = CampaignMediaInput & {
   public_id: string;
   media_type: 'image' | 'video';
 };
+
+const UNIFIED_MODES = ['live', 'post_url', 'keyword'] as const;
+type UnifiedMode = typeof UNIFIED_MODES[number];
+
+function isUnifiedMode(value: unknown): value is UnifiedMode {
+  return typeof value === 'string' && UNIFIED_MODES.includes(value as UnifiedMode);
+}
+
+function cleanPlatforms(value: unknown): CampaignPlatform[] {
+  return Array.isArray(value)
+    ? Array.from(new Set(value)).filter((platform): platform is CampaignPlatform => CAMPAIGN_PLATFORMS.includes(platform as CampaignPlatform))
+    : [];
+}
+
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number | null {
+  const parsed = value === undefined ? fallback : Number(value);
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : null;
+}
+
+function cleanModeConfig(value: unknown): Prisma.InputJsonObject {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const input = value as Record<string, unknown>;
+  const output: Record<string, Prisma.InputJsonValue> = {};
+  const campaignTypes = ['brand_mention', 'competitor_complaint', 'category_intent'];
+  if (typeof input['campaign_type'] === 'string' && campaignTypes.includes(input['campaign_type'])) output['campaign_type'] = input['campaign_type'];
+  const audienceTypes = ['regular', 'influencer', 'brand'];
+  if (Array.isArray(input['audience_types'])) output['audience_types'] = input['audience_types'].filter(item => typeof item === 'string' && audienceTypes.includes(item));
+  for (const key of ['skip_verified', 'skip_reposts', 'include_tracked_link']) {
+    if (typeof input[key] === 'boolean') output[key] = input[key];
+  }
+  for (const [key, max] of [['min_followers', 10_000_000], ['skip_accounts_newer_than_days', 3650]] as const) {
+    const parsed = boundedInteger(input[key], 0, 0, max);
+    if (parsed !== null) output[key] = parsed;
+  }
+  return output as Prisma.InputJsonObject;
+}
+
+function csvCell(value: unknown): string {
+  const text = String(value ?? '').replace(/\r?\n/g, ' ');
+  return `"${text.replace(/"/g, '""')}"`;
+}
 
 function keywordAllocation(platforms: CampaignPlatform[]): Record<CampaignPlatform, number> {
   const allocation = { instagram: 0, facebook: 0, tiktok: 0, x: 0 };
@@ -159,6 +204,101 @@ router.post('/media/upload', requireBrandRole('client_owner'), requireBrandAcces
   }
 });
 
+router.get('/capabilities', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.query['brand_id']);
+  const requested = typeof req.query['platforms'] === 'string' ? req.query['platforms'].split(',') : CAMPAIGN_PLATFORMS;
+  const platforms = cleanPlatforms(requested);
+  if (!brandId || !platforms.length) { sendValidationError(res, 'brand_id and at least one supported platform are required'); return; }
+  try { res.json({ capabilities: await campaignCapabilities(brandId, platforms), queue_available: isBullEnabled() }); }
+  catch (err) { sendServerError(res, 'Campaign capability lookup failed', err); }
+});
+
+router.get('/activity', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.query['brand_id']);
+  const campaignId = getRequiredBrandId(req.query['campaign_id']);
+  const mode = isUnifiedMode(req.query['mode']) ? req.query['mode'] : null;
+  const platform = isPlatform(req.query['platform']) ? req.query['platform'] : null;
+  const status = typeof req.query['status'] === 'string' && req.query['status'].length <= 40 ? req.query['status'] : null;
+  const cursor = getRequiredBrandId(req.query['cursor']);
+  const limit = boundedInteger(req.query['limit'], 25, 1, 100);
+  if (!brandId || limit === null) { sendValidationError(res, 'brand_id and a limit between 1 and 100 are required'); return; }
+  try {
+    const campaigns = await prisma.engageCampaign.findMany({
+      where: { brandId, ...(mode ? { mode } : {}), ...(campaignId ? { campaignId: BigInt(campaignId) } : {}) },
+      select: { campaignId: true, name: true, mode: true },
+    });
+    const campaignById = new Map(campaigns.map(item => [String(item.campaignId), item]));
+    const rows = await prisma.campaignPostEngager.findMany({
+      where: {
+        brandId,
+        campaignId: { in: Array.from(campaignById.keys()) },
+        ...(platform ? { platform } : {}),
+        ...(status ? { status } : {}),
+        ...(cursor ? { engagerId: { lt: BigInt(cursor) } } : {}),
+      },
+      orderBy: { engagerId: 'desc' },
+      take: limit + 1,
+    });
+    const page = rows.slice(0, limit);
+    const deliveries = page.length ? await prisma.campaignDeliveryAttempt.findMany({ where: { engagerId: { in: page.map(item => item.engagerId) } } }) : [];
+    const deliveriesByEngager = new Map<string, typeof deliveries>();
+    for (const delivery of deliveries) {
+      const key = String(delivery.engagerId);
+      deliveriesByEngager.set(key, [...(deliveriesByEngager.get(key) ?? []), delivery]);
+    }
+    const items = page.map(item => ({
+      id: Number(item.engagerId), campaign_id: Number(item.campaignId), campaign_name: campaignById.get(item.campaignId)?.name ?? 'Campaign',
+      mode: campaignById.get(item.campaignId)?.mode ?? 'post_url', platform: item.platform, action: item.action,
+      author_handle: item.authorHandle, original_text: item.originalText, reply_text: item.replyText, status: item.status,
+      confidence: item.replyConfidence, error: item.deliveryError, created_at: item.createdAt,
+      deliveries: (deliveriesByEngager.get(String(item.engagerId)) ?? []).map(delivery => ({ channel: delivery.channel, status: delivery.status, error: delivery.error, delivered_at: delivery.deliveredAt })),
+    }));
+    if (req.query['format'] === 'csv') {
+      const header = ['id', 'campaign', 'mode', 'platform', 'action', 'author', 'status', 'reply', 'error', 'created_at'];
+      const csv = [header.map(csvCell).join(','), ...items.map(item => [item.id, item.campaign_name, item.mode, item.platform, item.action, item.author_handle, item.status, item.reply_text, item.error, item.created_at.toISOString()].map(csvCell).join(','))].join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="campaign-activity-${brandId}.csv"`);
+      res.send(csv);
+      return;
+    }
+    res.json({ items, next_cursor: rows.length > limit ? Number(page.at(-1)?.engagerId) : null });
+  } catch (err) { sendServerError(res, 'Campaign activity lookup failed', err); }
+});
+
+async function queueActivityAction(req: Request, res: Response): Promise<void> {
+  const engagerId = getRequiredBrandId(req.params['engager_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  const channel = req.body?.channel === 'direct_message' ? 'direct_message' : 'public_reply';
+  if (!engagerId || !brandId) { sendValidationError(res, 'brand_id and engager_id must be positive integers'); return; }
+  if (!isBullEnabled()) { res.status(503).json({ error: 'Campaign delivery queue unavailable', message: 'Configure REDIS_URL before sending campaign activity.' }); return; }
+  try {
+    const engager = await prisma.campaignPostEngager.findFirst({ where: { engagerId: BigInt(engagerId), brandId } });
+    if (!engager || !/^\d+$/.test(engager.campaignId)) { res.status(404).json({ error: 'Campaign activity not found' }); return; }
+    const campaignId = Number(engager.campaignId);
+    const replyText = typeof req.body?.reply_text === 'string' ? req.body.reply_text.trim().slice(0, 2000) : '';
+    if (replyText) await prisma.campaignPostEngager.update({ where: { engagerId: engager.engagerId }, data: { replyText, deliveryError: null, updatedAt: new Date() } });
+    const data = { brand_id: brandId, campaign_id: campaignId, engager_id: engagerId, channel } as const;
+    await prepareCampaignDelivery(data, new Date());
+    await enqueueCampaignDelivery(data, 0);
+    await prisma.campaignPostEngager.update({ where: { engagerId: engager.engagerId }, data: { status: 'queued', updatedAt: new Date() } });
+    res.json({ ok: true, id: engagerId, status: 'queued' });
+  } catch (err) { sendServerError(res, 'Campaign activity queue failed', err); }
+}
+
+router.post('/activity/:engager_id/approve', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), (req, res) => void queueActivityAction(req, res));
+router.post('/activity/:engager_id/edit-and-send', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), (req, res) => void queueActivityAction(req, res));
+router.post('/activity/:engager_id/retry', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), (req, res) => void queueActivityAction(req, res));
+router.post('/activity/:engager_id/dismiss', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const engagerId = getRequiredBrandId(req.params['engager_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!engagerId || !brandId) { sendValidationError(res, 'brand_id and engager_id must be positive integers'); return; }
+  try {
+    const result = await prisma.campaignPostEngager.updateMany({ where: { engagerId: BigInt(engagerId), brandId }, data: { status: 'dismissed', processedAt: new Date(), updatedAt: new Date() } });
+    if (!result.count) { res.status(404).json({ error: 'Campaign activity not found' }); return; }
+    res.json({ ok: true, id: engagerId, status: 'dismissed' });
+  } catch (err) { sendServerError(res, 'Campaign activity dismissal failed', err); }
+});
+
 // ── LIST CAMPAIGNS ────────────────────────────────────────────────────────────
 // ── CREATE / UPDATE CAMPAIGN ──────────────────────────────────────────────────
 router.post('/keyword/preflight', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
@@ -176,6 +316,7 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
     brand_id?: number; campaign_id?: number; name?: string; keywords?: unknown; platforms?: unknown;
     intent_filter?: unknown; confidence_threshold?: number; urgency_threshold?: number; reply_template_id?: number | null;
     max_per_day?: number; public_reply_enabled?: boolean; direct_message_enabled?: boolean; status?: 'draft' | 'active';
+    max_dm_per_day?: number; spacing_minutes?: number; priority?: number; reply_mode?: 'public' | 'dm_with_public_fallback' | 'dm_only';
     tone?: string; public_reply_template?: string; private_followup_template?: string; cta_link?: string; image_url?: string;
   };
   const brandId = getRequiredBrandId(body.brand_id);
@@ -189,6 +330,9 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
   const confidenceThreshold = Number(body.confidence_threshold ?? 75);
   const urgencyThreshold = Number(body.urgency_threshold ?? 3);
   const maxPerDay = Number(body.max_per_day ?? 50);
+  const maxDmPerDay = boundedInteger(body.max_dm_per_day, maxPerDay, 0, 5000);
+  const spacingMinutes = boundedInteger(body.spacing_minutes, 10, 0, 1440);
+  const priority = boundedInteger(body.priority, 0, 0, 1000);
   const publicReplyEnabled = body.public_reply_enabled !== false;
   const directMessageEnabled = body.direct_message_enabled !== false;
   const status = body.status === 'active' ? 'active' : 'draft';
@@ -198,6 +342,7 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
   const ctaLink = typeof body.cta_link === 'string' ? body.cta_link.trim().slice(0, 2048) : '';
   const imageUrl = typeof body.image_url === 'string' ? body.image_url.trim().slice(0, 2048) : '';
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  if (maxDmPerDay === null || spacingMinutes === null || priority === null) { sendValidationError(res, 'Keyword campaign limits are outside the supported range'); return; }
   if (body.campaign_id !== undefined && !campaignId) { sendValidationError(res, 'campaign_id must be a positive integer'); return; }
   if (!name || name.length > 120) { sendValidationError(res, 'name is required and must be 120 characters or fewer'); return; }
   const validation = validateKeywordCampaignInput({ keywords, platforms, intent_filter: intents, confidence_threshold: confidenceThreshold, urgency_threshold: urgencyThreshold, max_per_day: maxPerDay, public_reply_enabled: publicReplyEnabled, direct_message_enabled: directMessageEnabled });
@@ -217,7 +362,12 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
       const data = {
         brandId,
         name,
+        mode: 'keyword' as const,
         platform: platforms[0] as never,
+        platforms: platforms as never,
+        scopeType: 'all_owned_posts' as const,
+        replyMode: body.reply_mode ?? (directMessageEnabled ? 'dm_with_public_fallback' as const : 'public' as const),
+        priority,
         keywords,
         tone,
         replyTemplate: replyTemplate?.templateText ?? (publicReplyTemplate || null),
@@ -227,6 +377,8 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
         imageUrl: imageUrl || null,
         autoFireThreshold: confidenceThreshold,
         maxPerDay,
+        maxDmPerDay,
+        spacingMinutes,
         intentFilter: intents,
         urgencyThreshold,
         replyTemplateId: replyTemplateId ? BigInt(replyTemplateId) : null,
@@ -235,6 +387,7 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
         platformAllocation: toInputJson(keywordAllocation(platforms)),
         sourceMode: 'keyword',
         eventSettings: toInputJson({ ...DEFAULT_EVENT_SETTINGS, comments: publicReplyEnabled, dms: directMessageEnabled }),
+        modeConfig: toInputJson(cleanModeConfig(req.body?.mode_config)),
         activationStatus: status,
         isActive: status === 'active',
         lastActivatedAt: status === 'active' ? new Date() : null,
@@ -252,6 +405,24 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
   } catch (err) { sendServerError(res, 'Keyword campaign save failed', err); }
 });
 
+router.get('/', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.query['brand_id']);
+  const mode = isUnifiedMode(req.query['mode']) ? req.query['mode'] : null;
+  const status = typeof req.query['status'] === 'string' ? req.query['status'] : null;
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  try {
+    const rows = await prisma.engageCampaign.findMany({
+      where: {
+        brandId,
+        ...(mode ? { mode } : {}),
+        ...(status === 'active' ? { isActive: true } : status === 'paused' ? { isActive: false, activationStatus: 'paused' } : status === 'draft' ? { activationStatus: 'draft' } : {}),
+      },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+    });
+    res.json({ campaigns: rows.map(mapEngageCampaign) });
+  } catch (err) { sendServerError(res, 'Campaign lookup failed', err); }
+});
+
 router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
   const body = req.body as CampaignConfig & {
     campaign_id?: number;
@@ -264,12 +435,31 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
     private_followup_template?: string;
     event_settings?: CampaignEventSettings;
     activation_status?: string;
+    selected_posts?: PostUrlItem[];
   };
 
   const brandId = getRequiredBrandId(body.brand_id);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
   if (!body.name?.trim()) { sendValidationError(res, 'name is required'); return; }
-  if (!isPlatform(body.platform)) { sendValidationError(res, 'platform is invalid'); return; }
+  const platforms = cleanPlatforms(body.platforms?.length ? body.platforms : [body.platform]);
+  if (!platforms.length) { sendValidationError(res, 'Select at least one supported platform'); return; }
+  const mode = isUnifiedMode(body.mode) ? body.mode : body.source_mode === 'keyword' ? 'keyword' : 'post_url';
+  const priority = boundedInteger(body.priority, 0, 0, 1000);
+  const maxPerHour = boundedInteger(body.max_per_hour, 50, 1, 1000);
+  const maxPerDay = boundedInteger(body.max_per_day, 50, 1, 5000);
+  const maxDmPerDay = boundedInteger(body.max_dm_per_day, 50, 0, 5000);
+  const spacingMinutes = boundedInteger(body.spacing_minutes, 10, 0, 1440);
+  if ([priority, maxPerHour, maxPerDay, maxDmPerDay, spacingMinutes].some(value => value === null)) {
+    sendValidationError(res, 'Campaign priority or delivery limits are outside the supported range'); return;
+  }
+  const scopeType = body.scope_type === 'all_owned_posts' ? 'all_owned_posts' : 'selected_posts';
+  const replyMode = body.reply_mode === 'dm_only' || body.reply_mode === 'dm_with_public_fallback' ? body.reply_mode : 'public';
+  const selectedPosts = Array.isArray(body.selected_posts)
+    ? body.selected_posts.filter(post => isPlatform(post?.platform) && isHttpUrl(post?.url)).slice(0, 10)
+    : null;
+  if (Array.isArray(body.selected_posts) && selectedPosts?.length !== body.selected_posts.length) {
+    sendValidationError(res, 'selected_posts must contain no more than 10 valid supported-platform URLs'); return;
+  }
   if (body.platform_allocation) {
     const allocationResult = validateAllocationTotal(body.platform_allocation as Record<string, number | undefined>);
     if (!allocationResult.ok) { sendValidationError(res, allocationResult.message); return; }
@@ -293,7 +483,12 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
         where: { campaignId: existing.campaignId },
         data: {
           name: body.name,
-          platform: body.platform as never,
+          mode,
+          platform: platforms[0] as never,
+          platforms: platforms as never,
+          priority: priority!,
+          scopeType,
+          replyMode,
           keywords: body.keywords ?? [],
           engageAll: body.engage_all ?? true,
           engageNegative: body.engage_negative ?? false,
@@ -303,14 +498,18 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
           ctaLink: body.cta_link ?? null,
           imageUrl: body.image_url ?? null,
           autoFireThreshold: body.auto_fire_threshold ?? 85,
-          maxPerHour: body.max_per_hour ?? 50,
-          isActive: body.is_active ?? true,
+          maxPerHour: maxPerHour!,
+          maxPerDay: maxPerDay!,
+          maxDmPerDay: maxDmPerDay!,
+          spacingMinutes: spacingMinutes!,
+          isActive: body.is_active ?? false,
           platformAllocation: toInputJson(body.platform_allocation ?? { instagram: 25, facebook: 25, tiktok: 25, x: 25 }),
-          sourceMode: body.source_mode ?? 'existing',
+          sourceMode: mode === 'keyword' ? 'keyword' : 'existing',
           postCaption: body.post_caption ?? null,
           publicReplyTemplate: body.public_reply_template ?? body.reply_template ?? null,
           privateFollowupTemplate: body.private_followup_template ?? body.reply_template ?? null,
           eventSettings: toInputJson(body.event_settings ?? DEFAULT_EVENT_SETTINGS),
+          modeConfig: toInputJson(cleanModeConfig(body.mode_config)),
           activationStatus: body.activation_status ?? 'draft',
           updatedAt: new Date(),
         },
@@ -321,7 +520,12 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
         data: {
           brandId,
           name: body.name,
-          platform: body.platform as never,
+          mode,
+          platform: platforms[0] as never,
+          platforms: platforms as never,
+          priority: priority!,
+          scopeType,
+          replyMode,
           keywords: body.keywords ?? [],
           engageAll: body.engage_all ?? true,
           engageNegative: body.engage_negative ?? false,
@@ -331,23 +535,159 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
           ctaLink: body.cta_link ?? null,
           imageUrl: body.image_url ?? null,
           autoFireThreshold: body.auto_fire_threshold ?? 85,
-          maxPerHour: body.max_per_hour ?? 50,
-          isActive: body.is_active ?? true,
+          maxPerHour: maxPerHour!,
+          maxPerDay: maxPerDay!,
+          maxDmPerDay: maxDmPerDay!,
+          spacingMinutes: spacingMinutes!,
+          isActive: body.is_active ?? false,
           platformAllocation: toInputJson(body.platform_allocation ?? { instagram: 25, facebook: 25, tiktok: 25, x: 25 }),
-          sourceMode: body.source_mode ?? 'existing',
+          sourceMode: mode === 'keyword' ? 'keyword' : 'existing',
           postCaption: body.post_caption ?? null,
           publicReplyTemplate: body.public_reply_template ?? body.reply_template ?? null,
           privateFollowupTemplate: body.private_followup_template ?? body.reply_template ?? null,
           eventSettings: toInputJson(body.event_settings ?? DEFAULT_EVENT_SETTINGS),
+          modeConfig: toInputJson(cleanModeConfig(body.mode_config)),
           activationStatus: body.activation_status ?? 'draft',
         },
       });
       result = mapEngageCampaign(row);
     }
+    if (selectedPosts) {
+      const savedCampaignId = BigInt(result.campaign_id);
+      await prisma.$transaction([
+        prisma.campaignPostUrl.deleteMany({ where: { brandId, campaignId: savedCampaignId } }),
+        prisma.campaignPostUrl.createMany({
+          data: selectedPosts.map(post => ({
+            brandId,
+            campaignId: savedCampaignId,
+            platform: post.platform as never,
+            postUrl: post.url,
+            postIdExt: extractPostId(post.platform, post.url),
+            includeCommenters: true,
+            includeLikers: true,
+            status: 'ready',
+            bindingStatus: 'active',
+            sourceMode: mode,
+          })),
+        }),
+      ]);
+    }
     res.json({ ok: true, campaign: result });
   } catch (err) {
     sendServerError(res, 'Campaign lookup failed', err);
   }
+});
+
+router.patch('/:campaign_id', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  try {
+    const existing = await prisma.engageCampaign.findFirst({ where: { campaignId: BigInt(campaignId), brandId } });
+    if (!existing) { res.status(404).json({ error: 'Campaign not found' }); return; }
+    const platforms = req.body?.platforms === undefined ? existing.platforms : cleanPlatforms(req.body.platforms);
+    if (!platforms.length) { sendValidationError(res, 'Select at least one supported platform'); return; }
+    const priority = boundedInteger(req.body?.priority, existing.priority, 0, 1000);
+    const maxPerHour = boundedInteger(req.body?.max_per_hour, existing.maxPerHour ?? 50, 1, 1000);
+    const maxPerDay = boundedInteger(req.body?.max_per_day, existing.maxPerDay, 1, 5000);
+    const maxDmPerDay = boundedInteger(req.body?.max_dm_per_day, existing.maxDmPerDay, 0, 5000);
+    const spacingMinutes = boundedInteger(req.body?.spacing_minutes, existing.spacingMinutes, 0, 1440);
+    if ([priority, maxPerHour, maxPerDay, maxDmPerDay, spacingMinutes].some(value => value === null)) { sendValidationError(res, 'Campaign limits are outside the supported range'); return; }
+    if (req.body?.platform_allocation) {
+      const allocation = validateAllocationTotal(req.body.platform_allocation as Record<string, number | undefined>);
+      if (!allocation.ok) { sendValidationError(res, allocation.message); return; }
+    }
+    const selectedPosts = Array.isArray(req.body?.selected_posts)
+      ? req.body.selected_posts.filter((post: PostUrlItem) => isPlatform(post?.platform) && isHttpUrl(post?.url)).slice(0, 10)
+      : null;
+    if (Array.isArray(req.body?.selected_posts) && selectedPosts?.length !== req.body.selected_posts.length) {
+      sendValidationError(res, 'selected_posts must contain no more than 10 valid supported-platform URLs'); return;
+    }
+    const row = await prisma.engageCampaign.update({
+      where: { campaignId: existing.campaignId },
+      data: {
+        name: typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 120) : existing.name,
+        mode: isUnifiedMode(req.body?.mode) ? req.body.mode : existing.mode,
+        platform: platforms[0] as never,
+        platforms: platforms as never,
+        priority: priority!,
+        scopeType: req.body?.scope_type === 'all_owned_posts' ? 'all_owned_posts' : req.body?.scope_type === 'selected_posts' ? 'selected_posts' : existing.scopeType,
+        replyMode: ['public', 'dm_with_public_fallback', 'dm_only'].includes(req.body?.reply_mode) ? req.body.reply_mode : existing.replyMode,
+        keywords: Array.isArray(req.body?.keywords) ? req.body.keywords.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 20) : existing.keywords,
+        intentFilter: Array.isArray(req.body?.intent_filter) ? req.body.intent_filter.map(String).slice(0, 6) : existing.intentFilter,
+        tone: typeof req.body?.tone === 'string' ? req.body.tone.trim().slice(0, 80) : existing.tone,
+        publicReplyTemplate: typeof req.body?.public_reply_template === 'string' ? req.body.public_reply_template.trim().slice(0, 2000) : existing.publicReplyTemplate,
+        privateFollowupTemplate: typeof req.body?.private_followup_template === 'string' ? req.body.private_followup_template.trim().slice(0, 2000) : existing.privateFollowupTemplate,
+        ctaLink: typeof req.body?.cta_link === 'string' ? req.body.cta_link.trim().slice(0, 2048) : existing.ctaLink,
+        autoFireThreshold: boundedInteger(req.body?.auto_fire_threshold, existing.autoFireThreshold ?? 85, 0, 100) ?? existing.autoFireThreshold,
+        maxPerHour: maxPerHour!, maxPerDay: maxPerDay!, maxDmPerDay: maxDmPerDay!, spacingMinutes: spacingMinutes!,
+        platformAllocation: toInputJson(req.body?.platform_allocation ?? existing.platformAllocation),
+        eventSettings: toInputJson(req.body?.event_settings ?? existing.eventSettings),
+        modeConfig: toInputJson(req.body?.mode_config ? cleanModeConfig(req.body.mode_config) : existing.modeConfig),
+        updatedAt: new Date(),
+      },
+    });
+    if (selectedPosts) {
+      await prisma.$transaction([
+        prisma.campaignPostUrl.deleteMany({ where: { brandId, campaignId: existing.campaignId } }),
+        prisma.campaignPostUrl.createMany({ data: selectedPosts.map((post: PostUrlItem) => ({ brandId, campaignId: existing.campaignId, platform: post.platform as never, postUrl: post.url, postIdExt: extractPostId(post.platform, post.url), includeCommenters: true, includeLikers: true, status: 'ready', bindingStatus: 'active', sourceMode: row.mode })) }),
+      ]);
+    }
+    res.json({ ok: true, campaign: mapEngageCampaign(row) });
+  } catch (err) { sendServerError(res, 'Campaign update failed', err); }
+});
+
+router.post('/:campaign_id/pause', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']); const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  try {
+    const result = await prisma.engageCampaign.updateMany({ where: { campaignId: BigInt(campaignId), brandId }, data: { isActive: false, activationStatus: 'paused', updatedAt: new Date() } });
+    if (!result.count) { res.status(404).json({ error: 'Campaign not found' }); return; }
+    await prisma.keywordGroup.updateMany({ where: { campaignId: BigInt(campaignId), brandId }, data: { isActive: false } });
+    res.json({ ok: true, status: 'paused' });
+  } catch (err) { sendServerError(res, 'Campaign pause failed', err); }
+});
+
+router.post('/:campaign_id/resume', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']); const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  if (process.env.NODE_ENV === 'production' && !isBullEnabled()) { res.status(503).json({ error: 'Campaign delivery queue unavailable', message: 'Configure REDIS_URL before activating campaigns.' }); return; }
+  try {
+    const result = await prisma.engageCampaign.updateMany({ where: { campaignId: BigInt(campaignId), brandId }, data: { isActive: true, activationStatus: 'active', lastActivatedAt: new Date(), updatedAt: new Date() } });
+    if (!result.count) { res.status(404).json({ error: 'Campaign not found' }); return; }
+    await prisma.keywordGroup.updateMany({ where: { campaignId: BigInt(campaignId), brandId }, data: { isActive: true } });
+    res.json({ ok: true, status: 'active' });
+  } catch (err) { sendServerError(res, 'Campaign resume failed', err); }
+});
+
+router.post('/:campaign_id/post-urls/fetch', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']); const brandId = getRequiredBrandId(req.body?.brand_id);
+  const posts = Array.isArray(req.body?.post_urls) ? req.body.post_urls.filter((post: PostUrlItem) => isPlatform(post?.platform) && isHttpUrl(post?.url)).slice(0, 10) : [];
+  if (!campaignId || !brandId || !posts.length) { sendValidationError(res, 'campaign_id, brand_id and 1-10 valid post_urls are required'); return; }
+  try { res.json(await fetchPostUrlCampaignPreview(brandId, campaignId, posts)); }
+  catch (err) { sendServerError(res, 'Post URL preview failed', err); }
+});
+
+router.post('/:campaign_id/post-urls/run', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']); const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  try { res.json({ ok: true, campaign_id: campaignId, ...(await runPostUrlCampaignPreview(brandId, campaignId)) }); }
+  catch (err) {
+    const message = (err as Error).message;
+    if (message.includes('queue is unavailable')) res.status(503).json({ error: 'Campaign delivery queue unavailable', message });
+    else if (message.includes('expired')) res.status(409).json({ error: 'Campaign preview expired', message });
+    else sendServerError(res, 'Post URL campaign run failed', err);
+  }
+});
+
+router.get('/:campaign_id/progress', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']); const brandId = getRequiredBrandId(req.query['brand_id']);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  try {
+    const rows = await prisma.campaignPostEngager.groupBy({ by: ['status'], where: { brandId, campaignId: String(campaignId) }, _count: { _all: true } });
+    const counts = Object.fromEntries(rows.map(row => [row.status ?? 'unknown', row._count._all]));
+    res.json({ campaign_id: campaignId, counts });
+  } catch (err) { sendServerError(res, 'Campaign progress lookup failed', err); }
 });
 
 router.post('/:campaign_id/preflight', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
@@ -396,6 +736,20 @@ router.post('/:campaign_id/activate', requireBrandRole('client_owner'), requireB
   const campaignId = getRequiredBrandId(req.params['campaign_id']);
   const brandId = getRequiredBrandId(req.body?.brand_id);
   if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  if (process.env.NODE_ENV === 'production' && !isBullEnabled()) { res.status(503).json({ error: 'Campaign delivery queue unavailable', message: 'Configure REDIS_URL before activating campaigns.' }); return; }
+
+  try {
+    const unifiedCampaign = await prisma.engageCampaign.findFirst({ where: { campaignId: BigInt(campaignId), brandId } });
+    if (!unifiedCampaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
+    if (unifiedCampaign.mode === 'live' || unifiedCampaign.mode === 'keyword') {
+      await prisma.$transaction([
+        prisma.engageCampaign.update({ where: { campaignId: unifiedCampaign.campaignId }, data: { isActive: true, activationStatus: 'active', lastActivatedAt: new Date(), updatedAt: new Date() } }),
+        prisma.keywordGroup.updateMany({ where: { campaignId: unifiedCampaign.campaignId, brandId }, data: { isActive: unifiedCampaign.mode === 'keyword' } }),
+      ]);
+      res.json({ ok: true, campaign_id: campaignId, activation_status: 'active' });
+      return;
+    }
+  } catch (err) { sendServerError(res, 'Campaign activation failed', err); return; }
 
   const body = req.body as {
     brand_id: number;
@@ -530,6 +884,24 @@ router.post('/:campaign_id/activate', requireBrandRole('client_owner'), requireB
   } catch (err) {
     sendServerError(res, 'Campaign activation failed', err);
   }
+});
+
+router.delete('/:campaign_id', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
+  const campaignId = getRequiredBrandId(req.params['campaign_id']);
+  const brandId = getRequiredBrandId(req.body?.brand_id ?? req.query['brand_id']);
+  if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  try {
+    const existing = await prisma.engageCampaign.findFirst({ where: { campaignId: BigInt(campaignId), brandId } });
+    if (!existing) { res.status(404).json({ error: 'Campaign not found' }); return; }
+    await prisma.$transaction([
+      prisma.keywordGroup.deleteMany({ where: { campaignId: existing.campaignId, brandId } }),
+      prisma.campaignPostUrl.deleteMany({ where: { campaignId: existing.campaignId, brandId } }),
+      prisma.campaignDeliveryAttempt.deleteMany({ where: { campaignId: existing.campaignId, brandId } }),
+      prisma.campaignPostEngager.deleteMany({ where: { campaignId: String(campaignId), brandId } }),
+      prisma.engageCampaign.delete({ where: { campaignId: existing.campaignId } }),
+    ]);
+    res.json({ ok: true, campaign_id: campaignId });
+  } catch (err) { sendServerError(res, 'Campaign deletion failed', err); }
 });
 
 router.get('/:campaign_id/status', requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {

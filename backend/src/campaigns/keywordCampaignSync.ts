@@ -1,25 +1,26 @@
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '../db/prisma';
-import { mapEngageCampaign } from '../db/mappers';
+import { runAgent14 } from '../agents/agents9_to_14';
 import { createSearchRun, runListeningSearch } from '../listening/searchService';
-import { engageEngager } from '../stream/engageEngagers';
 import { broadcastToClients } from '../stream/eventQueue';
 import { Intent, Platform } from '../types';
 import { evaluateKeywordCampaignEvent } from './lifecycle';
-import { getCampaignCredentials, persistCampaignDeliveryOutcomes } from './engagementSync';
+import { prepareCampaignDelivery } from './deliveryWorker';
+import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 
 export type KeywordCampaignSyncResult = {
   checked: number;
   fetched: number;
   captured: number;
   sent: number;
+  queued: number;
   review: number;
   ignored: number;
   failed: number;
   manual: number;
   errors: string[];
-  platforms: Array<{ platform: Platform; checked: number; fetched: number; new: number; sent: number; review: number; ignored: number; failed: number; manual: number; last_sync_time: string; error?: string }>;
+  platforms: Array<{ platform: Platform; checked: number; fetched: number; new: number; sent: number; queued: number; review: number; ignored: number; failed: number; manual: number; last_sync_time: string; error?: string }>;
 };
 
 function rawRecord(value: Prisma.JsonValue): Record<string, unknown> {
@@ -44,7 +45,7 @@ function eventIds(platform: Platform, url: string | null, raw: Record<string, un
 }
 
 function emptyResult(): KeywordCampaignSyncResult {
-  return { checked: 0, fetched: 0, captured: 0, sent: 0, review: 0, ignored: 0, failed: 0, manual: 0, errors: [], platforms: [] };
+  return { checked: 0, fetched: 0, captured: 0, sent: 0, queued: 0, review: 0, ignored: 0, failed: 0, manual: 0, errors: [], platforms: [] };
 }
 
 export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?: number): Promise<KeywordCampaignSyncResult> {
@@ -53,7 +54,6 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
     orderBy: { createdAt: 'asc' },
   });
   const totals = emptyResult();
-  const credentials = await getCampaignCredentials(brandId);
 
   for (const group of groups) {
     if (!group.campaignId) continue;
@@ -61,7 +61,6 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
     if (!campaign) continue;
     totals.checked += 1;
     const campaignId = Number(campaign.campaignId);
-    const config = mapEngageCampaign(campaign);
     const runId = await createSearchRun({ brandId, groupId: Number(group.groupId), keywords: group.keywords, platforms: group.platforms as Platform[], mode: 'realtime' });
     await runListeningSearch(runId);
     const run = await prisma.searchRun.findUnique({ where: { runId: BigInt(runId) } });
@@ -76,7 +75,7 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
     for (const platform of group.platforms as Platform[]) {
       const syncedAt = new Date().toISOString();
       const platformResults = results.filter(item => item.platform === platform);
-      const platformSummary = { platform, checked: 1, fetched: platformResults.length, new: 0, sent: 0, review: 0, ignored: 0, failed: 0, manual: 0, last_sync_time: syncedAt };
+      const platformSummary = { platform, checked: 1, fetched: platformResults.length, new: 0, sent: 0, queued: 0, review: 0, ignored: 0, failed: 0, manual: 0, last_sync_time: syncedAt };
       for (const item of platformResults) {
         const raw = rawRecord(item.raw);
         const externalId = externalEventId(platform, item.url, raw, item.authorIdExt ?? item.authorHandle, item.text);
@@ -92,7 +91,17 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           urgencyThreshold: campaign.urgencyThreshold,
           confidenceThreshold: campaign.autoFireThreshold ?? 75,
         });
-        const initialStatus = preStatus && preStatus !== 'needs_review' ? preStatus : 'pending';
+        let profile: Awaited<ReturnType<typeof runAgent14>> | null = null;
+        try {
+          profile = await runAgent14({
+            brand_id: brandId,
+            user: { handle: item.authorHandle ?? item.authorIdExt ?? 'unknown', id: item.authorIdExt, platform, text: item.text },
+          });
+        } catch { profile = null; }
+        const profileStatus = !profile ? 'needs_review'
+          : profile.classification === 'bot' || profile.risk_level === 'high' ? 'bot_blocked'
+            : null;
+        const initialStatus = profileStatus ?? preStatus ?? 'pending';
         const engagement = await prisma.campaignPostEngager.create({
           data: {
             brandId,
@@ -110,6 +119,9 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
             intent: item.intent,
             urgencyScore: item.urgencyScore,
             status: initialStatus,
+            profileClassification: profile?.classification ?? null,
+            profileFollowerCount: profile?.follower_count ?? null,
+            profileStatus: profile ? 'classified' : 'unknown',
           },
         }).catch((error: unknown) => {
           if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return null;
@@ -123,28 +135,33 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           platformSummary.ignored += 1;
           continue;
         }
+        if (initialStatus === 'needs_review' || initialStatus === 'bot_blocked') {
+          totals.review += 1;
+          platformSummary.review += 1;
+          continue;
+        }
+        if (!isBullEnabled()) {
+          await prisma.campaignPostEngager.update({
+            where: { engagerId: engagement.engagerId },
+            data: { status: 'setup_required', deliveryError: 'Campaign delivery queue unavailable.', updatedAt: new Date() },
+          });
+          totals.manual += 1;
+          platformSummary.manual += 1;
+          continue;
+        }
 
-        const delivery = await engageEngager(brandId, {
-          platform,
-          author_handle: item.authorHandle ?? item.authorIdExt ?? 'customer',
-          author_id: item.authorIdExt,
-          comment_id: ids.commentId,
-          post_id: ids.postId,
-          tweet_id: ids.tweetId,
-          text: item.text,
-          action: 'commented',
-          matched_keyword: item.matchedKeyword ?? undefined,
-        }, config, credentials);
-        const status = delivery.status === 'queued_for_approval' ? 'needs_review' : delivery.status;
-        await persistCampaignDeliveryOutcomes(engagement.engagerId, brandId, campaignId, platform, delivery);
+        const channel = campaign.replyMode === 'public' ? 'public_reply' : 'direct_message';
+        const delay = Math.max(0, platformSummary.new - 1) * campaign.spacingMinutes * 60_000;
+        const data = { brand_id: brandId, campaign_id: campaignId, engager_id: Number(engagement.engagerId), channel } as const;
+        const scheduledAt = new Date(Date.now() + delay);
+        await prepareCampaignDelivery(data, scheduledAt);
+        await enqueueCampaignDelivery(data, delay);
         await prisma.campaignPostEngager.update({
           where: { engagerId: engagement.engagerId },
-          data: { status, replyText: delivery.reply, replyConfidence: delivery.confidence, deliveryError: delivery.error ?? null, processedAt: new Date(), updatedAt: new Date() },
+          data: { status: 'queued', updatedAt: new Date() },
         });
-        if (status === 'sent' || status === 'partial') { totals.sent += 1; platformSummary.sent += 1; }
-        if (status === 'needs_review' || status === 'bot_blocked') { totals.review += 1; platformSummary.review += 1; }
-        if (status === 'manual_action_required') { totals.manual += 1; platformSummary.manual += 1; }
-        if (status === 'error' || status === 'generation_failed' || status === 'rate_limited') { totals.failed += 1; platformSummary.failed += 1; }
+        totals.queued += 1;
+        platformSummary.queued += 1;
       }
       totals.platforms.push(platformSummary);
     }
