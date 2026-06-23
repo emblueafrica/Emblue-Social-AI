@@ -213,8 +213,8 @@ export function NewCampaignModal({
     .replaceAll("{{link}}", draft.ctaLink || "https://example.com/offer");
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/35 p-0">
-      <div className="mx-auto my-0 min-h-dvh w-full max-w-[1536px] overflow-hidden rounded-[28px] bg-white shadow-2xl lg:my-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/35 p-4">
+      <div className="w-full max-w-6xl max-h-[calc(100vh-4rem)] overflow-y-auto rounded-[28px] bg-white shadow-2xl">
         <header className="flex items-center justify-between px-11 pb-7 pt-12">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-white">
