@@ -479,9 +479,14 @@ export interface TrackedLink {
 
 // ── APPROVAL QUEUE ITEM ───────────────────────────────────────────────────────
 export interface ApprovalQueueItem {
+  queue_key?:     string;
   queue_id?:      number;
   brand_id:      number;
   campaign_id?:  number | null;
+  campaign_name?: string | null;
+  source?:       'approval' | 'campaign';
+  channel?:      'public_reply' | 'direct_message' | null;
+  status?:       string | null;
   platform:      Platform;
   author:        string;
   original:      string;

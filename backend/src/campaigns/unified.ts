@@ -5,6 +5,7 @@ import { Intent } from '../types';
 export type CampaignMode = 'live' | 'post_url' | 'keyword';
 export type LiveScopeType = 'all_owned_posts' | 'selected_posts';
 export type CampaignDeliveryChannel = 'public_reply' | 'direct_message';
+export type CampaignReplyMode = 'public' | 'dm_only' | 'dm_with_public_fallback';
 
 export type LiveCampaignCandidate = {
   campaignId: number;
@@ -68,6 +69,14 @@ export function buildCampaignDeliveryJobId(
   channel: CampaignDeliveryChannel,
 ): string {
   return `campaign:${campaignId}:${engagerId}:${channel}`;
+}
+
+export function deliveryChannelsForReplyMode(
+  replyMode: CampaignReplyMode | string | null | undefined,
+): CampaignDeliveryChannel[] {
+  if (replyMode === 'dm_only') return ['direct_message'];
+  if (replyMode === 'dm_with_public_fallback') return ['public_reply', 'direct_message'];
+  return ['public_reply'];
 }
 
 export function isPreviewFresh(fetchedAt: Date, now = new Date()): boolean {

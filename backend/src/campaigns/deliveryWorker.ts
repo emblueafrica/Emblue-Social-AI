@@ -17,6 +17,27 @@ export type CampaignDeliveryJobResult = {
   error?: string;
 };
 
+async function aggregateEngagerDeliveryStatus(engagerId: bigint): Promise<{ status: string; error: string | null }> {
+  const deliveries = await prisma.campaignDeliveryAttempt.findMany({
+    where: { engagerId },
+    select: { status: true, error: true },
+  });
+  const hasSent = deliveries.some(delivery => delivery.status === 'sent');
+  const hasQueued = deliveries.some(delivery => delivery.status === 'queued' || delivery.status === 'processing');
+  const hasManual = deliveries.some(delivery => delivery.status === 'manual_action_required');
+  const hasRateLimit = deliveries.some(delivery => delivery.status === 'rate_limited');
+  const hasFailed = deliveries.some(delivery => delivery.status === 'failed');
+  const error = deliveries.map(delivery => delivery.error).filter(Boolean).join(' ') || null;
+
+  if (hasSent && (hasQueued || hasManual || hasRateLimit || hasFailed)) return { status: 'partial', error };
+  if (hasSent) return { status: 'sent', error: null };
+  if (hasQueued) return { status: 'queued', error };
+  if (hasManual) return { status: 'manual_action_required', error };
+  if (hasRateLimit) return { status: 'rate_limited', error };
+  if (hasFailed) return { status: 'failed', error };
+  return { status: 'pending', error };
+}
+
 export async function processCampaignDeliveryJob(
   data: CampaignDeliveryJobData,
 ): Promise<CampaignDeliveryJobResult> {
@@ -92,16 +113,15 @@ export async function processCampaignDeliveryJob(
   );
 
   const delivered = (result.deliveries ?? []).some(delivery => delivery.status === 'sent');
-  const status = delivered ? 'sent'
-    : result.status === 'queued_for_approval' ? 'needs_review'
-      : result.status;
+  const aggregate = await aggregateEngagerDeliveryStatus(engager.engagerId);
+  const status = result.status === 'queued_for_approval' ? 'needs_review' : aggregate.status;
   await prisma.campaignPostEngager.update({
     where: { engagerId: engager.engagerId },
     data: {
       status,
       replyText: result.reply ?? engager.replyText,
       replyConfidence: result.confidence ?? engager.replyConfidence,
-      deliveryError: result.error ?? null,
+      deliveryError: aggregate.error ?? result.error ?? null,
       processedAt: new Date(),
       updatedAt: new Date(),
     },

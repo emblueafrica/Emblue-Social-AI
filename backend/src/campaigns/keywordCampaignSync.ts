@@ -8,6 +8,7 @@ import { Intent, Platform } from '../types';
 import { evaluateKeywordCampaignEvent } from './lifecycle';
 import { prepareCampaignDelivery } from './deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
+import { deliveryChannelsForReplyMode } from './unified';
 
 export type KeywordCampaignSyncResult = {
   checked: number;
@@ -150,12 +151,13 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           continue;
         }
 
-        const channel = campaign.replyMode === 'public' ? 'public_reply' : 'direct_message';
         const delay = Math.max(0, platformSummary.new - 1) * campaign.spacingMinutes * 60_000;
-        const data = { brand_id: brandId, campaign_id: campaignId, engager_id: Number(engagement.engagerId), channel } as const;
-        const scheduledAt = new Date(Date.now() + delay);
-        await prepareCampaignDelivery(data, scheduledAt);
-        await enqueueCampaignDelivery(data, delay);
+        for (const channel of deliveryChannelsForReplyMode(campaign.replyMode)) {
+          const data = { brand_id: brandId, campaign_id: campaignId, engager_id: Number(engagement.engagerId), channel } as const;
+          const scheduledAt = new Date(Date.now() + delay);
+          await prepareCampaignDelivery(data, scheduledAt);
+          await enqueueCampaignDelivery(data, delay);
+        }
         await prisma.campaignPostEngager.update({
           where: { engagerId: engagement.engagerId },
           data: { status: 'queued', updatedAt: new Date() },

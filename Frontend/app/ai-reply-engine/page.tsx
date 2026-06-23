@@ -45,7 +45,7 @@ type Message = {
   original?: string;
   reply?: string;
   confidence?: number;
-  queueId?: number;
+  queueId?: number | string;
 };
 
 const sentimentClass: Record<Sentiment, string> = {
@@ -104,7 +104,7 @@ function mapQueueItem(item: ApprovalQueueItem, index: number): Message {
     original: item.delivery_error ? `${item.original}\n\nLast delivery error: ${item.delivery_error}` : item.original,
     reply: item.reply,
     confidence,
-    queueId: item.queue_id,
+    queueId: item.queue_key ?? item.queue_id,
   };
 }
 
@@ -156,7 +156,7 @@ export default function AIReplyEngine() {
   });
 
   const approveMutation = useMutation({
-    mutationFn: ({ queueId, replyText }: { queueId: number; replyText: string }) =>
+    mutationFn: ({ queueId, replyText }: { queueId: number | string; replyText: string }) =>
       approveAiReplyQueueItem(activeBrandId!, queueId, replyText),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
@@ -172,7 +172,7 @@ export default function AIReplyEngine() {
   });
 
   const skipMutation = useMutation({
-    mutationFn: (queueId: number) => skipAiReplyQueueItem(activeBrandId!, queueId),
+    mutationFn: (queueId: number | string) => skipAiReplyQueueItem(activeBrandId!, queueId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
       setToast({ kind: "skipped" });
@@ -192,6 +192,7 @@ export default function AIReplyEngine() {
   const manualReviewCount = queueMessages.filter((message) => message.tag === "Manual Review").length;
   const activePlatformCount = new Set(queueMessages.map((message) => message.platform)).size;
   const queueCount = queueMessages.length;
+  const generatedDraftCount = queueMessages.filter((message) => Boolean(message.reply?.trim())).length;
   const lockedError =
     (accessQuery.error instanceof ApiError && accessQuery.error.status === 403 ? accessQuery.error : null) ||
     (replyMutation.error instanceof ApiError && replyMutation.error.status === 403 ? replyMutation.error : null);
@@ -287,7 +288,7 @@ export default function AIReplyEngine() {
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <Kpi color="bg-primary" label="Queue" value={String(queueCount)} sub="Messages waiting for review" />
             <Kpi color="bg-brand-pink" label="Manual Review" value={String(manualReviewCount)} sub="Requires closer review" />
-            <Kpi color="bg-brand-olive" label="Generated Drafts" value={String(Object.keys(generatedDrafts).length)} sub="Drafts regenerated this session" />
+            <Kpi color="bg-brand-olive" label="Generated Drafts" value={String(generatedDraftCount)} sub="Drafts stored in queue" />
             <Kpi color="bg-destructive" label="Active Platforms" value={String(activePlatformCount)} sub="Platforms represented in queue" />
           </div>
 

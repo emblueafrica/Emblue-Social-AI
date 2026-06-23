@@ -13,7 +13,7 @@ import {
 import { runAgent14 } from '../agents/agents9_to_14';
 import { CampaignPlatform } from './lifecycle';
 import { Engager, PostUrlItem } from '../types';
-import { isPreviewFresh } from './unified';
+import { deliveryChannelsForReplyMode, isPreviewFresh } from './unified';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 import { prepareCampaignDelivery } from './deliveryWorker';
 
@@ -160,7 +160,7 @@ export async function runPostUrlCampaignPreview(brandId: number, campaignId: num
   }
   const selected = await prisma.campaignPostEngager.findMany({ where: { brandId, campaignId: String(campaignId), source: 'post_preview', status: 'preview_selected' }, orderBy: { engagerId: 'asc' } });
   const review = await prisma.campaignPostEngager.count({ where: { brandId, campaignId: String(campaignId), source: 'post_preview', status: 'needs_review' } });
-  const channels = campaign.replyMode === 'public' ? ['public_reply'] as const : ['direct_message'] as const;
+  const channels = deliveryChannelsForReplyMode(campaign.replyMode);
   for (let index = 0; index < selected.length; index += 1) {
     const engager = selected[index]!;
     const delay = index * campaign.spacingMinutes * 60 * 1000;

@@ -175,7 +175,7 @@ function apiErrorMessage(error: unknown) {
 export default function EngageTheEngager() {
   const queryClient = useQueryClient();
   const { activeBrandId, authContext } = useAuth();
-  const selectedMode = "post_url" as const;
+  const [selectedMode, setSelectedMode] = useState<"post_url" | "keyword">("post_url");
   const [posts, setPosts] = useState<PostRow[]>([{ id: nextId++, platform: "instagram", url: "" }]);
   const [allocation, setAllocation] = useState({ instagram: 50, facebook: 30, tiktok: 20, x: 0 });
   const [postTemplate, setPostTemplate] = useState("");
@@ -186,6 +186,8 @@ export default function EngageTheEngager() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingDraft, setEditingDraft] = useState<CampaignDraft | null>(null);
   const [activityCampaignId, setActivityCampaignId] = useState<number | null>(null);
+  const [activityStatusFilter, setActivityStatusFilter] = useState<string | null>(null);
+  const [openCampaignMenuId, setOpenCampaignMenuId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
@@ -193,15 +195,21 @@ export default function EngageTheEngager() {
   const [activityDrafts, setActivityDrafts] = useState<Record<string, string>>({});
 
   const campaignsQuery = useQuery({
-    queryKey: ["campaigns", activeBrandId],
-    queryFn: () => getCampaigns(activeBrandId!),
+    queryKey: ["campaigns", activeBrandId, selectedMode],
+    queryFn: () => getCampaigns(activeBrandId!, selectedMode),
     enabled: Boolean(activeBrandId),
     retry: false,
   });
 
   const activityQuery = useQuery({
-    queryKey: ["campaign-activity", activeBrandId, activityCampaignId],
-    queryFn: () => getCampaignActivity({ brandId: activeBrandId!, campaignId: activityCampaignId ?? undefined }),
+    queryKey: ["campaign-activity", activeBrandId, activityCampaignId, selectedMode, activityStatusFilter],
+    queryFn: () => getCampaignActivity({
+      brandId: activeBrandId!,
+      campaignId: activityCampaignId ?? undefined,
+      mode: selectedMode,
+      status: activityStatusFilter ?? undefined,
+      limit: 100,
+    }),
     enabled: Boolean(activeBrandId),
     retry: false,
     refetchInterval: 15000,
@@ -269,10 +277,16 @@ export default function EngageTheEngager() {
   );
   const runningCount = campaigns.filter((campaign) => campaign.state === "running").length;
   const pausedCount = campaigns.filter((campaign) => campaign.state === "paused").length;
-  const sentTotal = campaigns.reduce((sum, campaign) => {
-    const match = campaign.stat.match(/^(\d+)/);
-    return sum + (match ? Number(match[1]) : 0);
-  }, 0);
+  const activityItems = activityQuery.data?.items ?? [];
+  const todayKey = new Date().toDateString();
+  const sentToday = activityItems.reduce((sum, item) => (
+    sum + item.deliveries.filter((delivery) => delivery.status === "sent" && delivery.delivered_at && new Date(delivery.delivered_at).toDateString() === todayKey).length
+  ), 0);
+  const queuedForReview = activityItems.filter((item) => (
+    item.status === "needs_review" ||
+    item.deliveries.some((delivery) => ["queued", "processing", "rate_limited", "failed"].includes(delivery.status))
+  )).length;
+  const manualCopyCount = activityItems.filter((item) => item.deliveries.some((delivery) => delivery.status === "manual_action_required" || delivery.status === "manual_copy")).length;
   const allocationTotal = existingPostAllocationPlatforms.reduce((sum, platform) => sum + allocation[platform], 0);
 
   const selectedAllocation = (campaign: CampaignDraft) => ({
@@ -585,7 +599,11 @@ export default function EngageTheEngager() {
         <DashHeader
           title="Engage the Engager"
           action={
-            canMutate ? <button onClick={() => setModalOpen(true)} className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-lg text-sm font-semibold hover:opacity-90">
+            canMutate ? <button onClick={() => {
+              setEditingId(null);
+              setEditingDraft(null);
+              setModalOpen(true);
+            }} className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-lg text-sm font-semibold hover:opacity-90">
               <Plus className="size-4" /> New Campaign
             </button> : null
           }
@@ -609,6 +627,31 @@ export default function EngageTheEngager() {
           {campaignsQuery.isLoading && <Surface>Loading campaigns...</Surface>}
           {campaignsQuery.error && <Notice>{apiErrorMessage(campaignsQuery.error)}</Notice>}
 
+          <div className="flex flex-wrap gap-2">
+            {[
+              { value: "post_url" as const, label: "Post URL Campaign" },
+              { value: "keyword" as const, label: "Keyword Campaign" },
+            ].map((mode) => (
+              <button
+                key={mode.value}
+                type="button"
+                onClick={() => {
+                  setSelectedMode(mode.value);
+                  setActivityCampaignId(null);
+                  setActivityStatusFilter(null);
+                  setOpenCampaignMenuId(null);
+                }}
+                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                  selectedMode === mode.value
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-card text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <InfoCard title="User Comments" body="Someone engages with your post on Instagram, Facebook, or X. The system detects every comment and like within minutes, automatically - 24/7, no monitoring needed." />
             <InfoCard title="AI Personalises" body="AI writes a unique reply using their @handle, your brand voice, campaign message, and a tracked CTA link. No two replies are ever identical." />
@@ -616,10 +659,10 @@ export default function EngageTheEngager() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            <Kpi color="bg-primary" label="Active Campaigns" value={String(runningCount)} sub="Running now" />
-            <Kpi color="bg-brand-pink" label="Sent Today" value={String(sentTotal)} sub="Across all platforms" />
-            <Kpi color="bg-brand-olive" label="Queued for Review" value={String(activityQuery.data?.items.filter(item => item.status === "needs_review").length ?? 0)} sub="Below 85% confidence" />
-            <Kpi color="bg-neutral-600" label="Manual Copy" value={String(activityQuery.data?.items.filter(item => item.status === "manual_action_required").length ?? 0)} sub="TikTok / X pending" />
+            <Kpi color="bg-primary" label="Active Campaigns" value={String(runningCount)} sub="Running now" onClick={() => setActivityStatusFilter(null)} active={!activityStatusFilter} />
+            <Kpi color="bg-brand-pink" label="Sent Today" value={String(sentToday)} sub="Across all platforms" onClick={() => setActivityStatusFilter("sent")} active={activityStatusFilter === "sent"} />
+            <Kpi color="bg-brand-olive" label="Queued for Review" value={String(queuedForReview)} sub="Needs review or retry" onClick={() => setActivityStatusFilter("needs_review")} active={activityStatusFilter === "needs_review"} />
+            <Kpi color="bg-neutral-600" label="Manual Copy" value={String(manualCopyCount)} sub="Manual-send records" onClick={() => setActivityStatusFilter("manual_action_required")} active={activityStatusFilter === "manual_action_required"} />
           </div>
 
           <Surface>
@@ -654,7 +697,50 @@ export default function EngageTheEngager() {
                       {canMutate && <button onClick={() => void handleToggleCampaign(campaign.id, campaign.state)} className={`shrink-0 whitespace-nowrap rounded-lg border px-4 py-2 text-sm font-semibold ${campaign.state === "paused" ? "border-emerald-500 text-emerald-600" : "border-red-500 text-red-500"}`}>
                         {campaign.state === "paused" ? "Resume" : "Pause"}
                       </button>}
-                      <button onClick={() => setActivityCampaignId(current => current === campaign.id ? null : campaign.id)} className="shrink-0 rounded-lg px-2 py-2 text-muted-foreground hover:bg-muted" title="Activity"><MoreVertical className="size-4 shrink-0" /></button>
+                      <div className="relative">
+                        <button
+                          onClick={() => setOpenCampaignMenuId((current) => current === campaign.id ? null : campaign.id)}
+                          className="shrink-0 rounded-lg px-2 py-2 text-muted-foreground hover:bg-muted"
+                          title="Campaign actions"
+                        >
+                          <MoreVertical className="size-4 shrink-0" />
+                        </button>
+                        {openCampaignMenuId === campaign.id && (
+                          <div className="absolute right-0 top-10 z-20 w-40 rounded-xl border bg-card p-1 text-sm shadow-lg">
+                            {canMutate && (
+                              <button
+                                onClick={() => {
+                                  setOpenCampaignMenuId(null);
+                                  void handleEditCampaign(campaign);
+                                }}
+                                className="block w-full rounded-lg px-3 py-2 text-left hover:bg-muted"
+                              >
+                                Edit
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                setOpenCampaignMenuId(null);
+                                setActivityCampaignId((current) => current === campaign.id ? null : campaign.id);
+                              }}
+                              className="block w-full rounded-lg px-3 py-2 text-left hover:bg-muted"
+                            >
+                              View Activity
+                            </button>
+                            {canMutate && (
+                              <button
+                                onClick={() => {
+                                  setOpenCampaignMenuId(null);
+                                  setConfirmDeleteId(campaign.id);
+                                }}
+                                className="block w-full rounded-lg px-3 py-2 text-left text-destructive hover:bg-destructive/10"
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     </div>
                   </li>
@@ -828,7 +914,7 @@ export default function EngageTheEngager() {
             onDismiss={(id) => void handleDismissEngagement(id)}
             onExport={async () => {
               if (!activeBrandId) return;
-              const blob = await downloadCampaignActivityCsv(activeBrandId, { mode: selectedMode });
+              const blob = await downloadCampaignActivityCsv(activeBrandId, { mode: selectedMode, status: activityStatusFilter ?? undefined });
               const url = URL.createObjectURL(blob);
               const anchor = document.createElement("a");
               anchor.href = url; anchor.download = `campaign-activity-${selectedMode}.csv`; anchor.click();
@@ -841,7 +927,7 @@ export default function EngageTheEngager() {
           open={modalOpen}
           brandId={activeBrandId}
           initial={editingDraft ?? undefined}
-          initialMode="existing"
+          initialMode={selectedMode === "keyword" ? "keyword" : "existing"}
           saving={saveCampaignMutation.isPending || saveKeywordCampaignMutation.isPending || campaignActivating}
           errorMessage={apiNotice}
           onClose={() => {
@@ -973,13 +1059,43 @@ function InfoCard({ title, body }: { title: string; body: string }) {
   );
 }
 
-function Kpi({ color, label, value, sub }: { color: string; label: string; value: string; sub: string }) {
-  return (
-    <div className="bg-card rounded-2xl p-5 shadow-sm relative overflow-hidden">
+function Kpi({
+  color,
+  label,
+  value,
+  sub,
+  onClick,
+  active,
+}: {
+  color: string;
+  label: string;
+  value: string;
+  sub: string;
+  onClick?: () => void;
+  active?: boolean;
+}) {
+  const content = (
+    <>
       <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${color}`} />
       <p className="text-sm text-muted-foreground">{label}</p>
       <p className="text-3xl font-bold mt-2">{value}</p>
       <p className="text-xs mt-2 text-muted-foreground">{sub}</p>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`relative w-full overflow-hidden rounded-2xl bg-card p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${active ? "ring-2 ring-primary/40" : ""}`}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div className="bg-card rounded-2xl p-5 shadow-sm relative overflow-hidden">
+      {content}
     </div>
   );
 }
