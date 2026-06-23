@@ -58,6 +58,12 @@ const TONES = [
   "Casual and relatable",
   "Educational and informative",
 ];
+const INTENTS: [string, string][] = [
+  ["complaint", "Complaint"],
+  ["purchase_intent", "Purchase Intent"],
+  ["opinion", "Opinion"],
+  ["other", "Other"],
+];
 const DEFAULT_EVENTS: CampaignEventSettings = { comments: true, likes: true, reposts: true, mentions: true, dms: true };
 const EMPTY_ALLOCATION: Record<Platform, number> = { instagram: 0, facebook: 0, tiktok: 0, x: 0 };
 const DEFAULT_CAMPAIGN_KEYWORDS = ["Price", "Link", "How much", "Interested", "Order", "Where", "Available", "DM me", "Want this", "Shop", "How to get", "Love this"];
@@ -132,15 +138,14 @@ export function NewCampaignModal({
     const value = initial
       ? { ...blankDraft(), ...initial, events: { ...DEFAULT_EVENTS, ...initial.events }, allocation: { ...EMPTY_ALLOCATION, ...initial.allocation } }
       : { ...blankDraft(), sourceMode: initialMode ?? "existing" };
-    setDraft({ ...(value.sourceMode === "publish_new" ? { ...value, sourceMode: "existing" } : value), sourceMode: "existing" });
+    setDraft(value.sourceMode === "publish_new" ? { ...value, sourceMode: "existing" } : value);
     setKeywordInput("");
     setError(null);
     setShowPreview(false);
   }, [open, initial, initialMode]);
 
   const selectedPlatforms = draft.platforms;
-  const allocatablePlatforms = selectedPlatforms.filter(platform => platform !== "x");
-  const allocationTotal = allocatablePlatforms.reduce((sum, platform) => sum + Number(draft.allocation[platform] ?? 0), 0);
+  const allocationTotal = selectedPlatforms.reduce((sum, platform) => sum + Number(draft.allocation[platform] ?? 0), 0);
   const formValid = useMemo(() => {
     if (!draft.name.trim() || !selectedPlatforms.length) return false;
     if (draft.sourceMode === "keyword") {
@@ -172,11 +177,10 @@ export function NewCampaignModal({
       const selected = current.platforms.includes(platform)
         ? current.platforms.filter(item => item !== platform)
         : [...current.platforms, platform];
-      const allocatable = selected.filter(item => item !== "x");
-      const equal = allocatable.length ? Math.floor(100 / allocatable.length) : 0;
+      const equal = selected.length ? Math.floor(100 / selected.length) : 0;
       const allocation = {
         ...EMPTY_ALLOCATION,
-        ...Object.fromEntries(allocatable.map((item, index) => [item, equal + (index === 0 ? 100 - equal * allocatable.length : 0)])),
+        ...Object.fromEntries(selected.map((item, index) => [item, equal + (index === 0 ? 100 - equal * selected.length : 0)])),
       } as Record<Platform, number>;
       return { ...current, platforms: selected, allocation };
     });
@@ -229,6 +233,20 @@ export function NewCampaignModal({
           </div>
         )}
 
+        {!initial && (
+          <div className="mx-11 mb-6 flex max-w-full gap-1 overflow-x-auto rounded-xl bg-muted/40 p-1" role="tablist" aria-label="Campaign type">
+            <ModeTab active={draft.sourceMode === "live"} onClick={() => update("sourceMode", "live")}>
+              Live Engagement
+            </ModeTab>
+            <ModeTab active={draft.sourceMode === "existing"} onClick={() => update("sourceMode", "existing")}>
+              Post URL Campaign
+            </ModeTab>
+            <ModeTab active={draft.sourceMode === "keyword"} onClick={() => update("sourceMode", "keyword")}>
+              Keyword Campaign
+            </ModeTab>
+          </div>
+        )}
+
         <div className="grid gap-12 px-11 py-3 lg:grid-cols-2">
           <div className="space-y-8">
             <Field label="Campaign Name">
@@ -258,23 +276,94 @@ export function NewCampaignModal({
               </div>
             </Field>
 
-            <Field label="Trigger Keywords">
-              <input
-                value={keywordInput}
-                onChange={event => setKeywordInput(event.target.value)}
-                onKeyDown={event => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    addKeyword();
-                  }
-                }}
-                className="input"
-                placeholder="Need this"
-              />
-            </Field>
+            {draft.sourceMode === "keyword" ? (
+              <>
+                <Field label="Keywords">
+                  <div className="flex gap-2">
+                    <input
+                      value={keywordInput}
+                      onChange={event => setKeywordInput(event.target.value)}
+                      onKeyDown={event => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          addKeyword();
+                        }
+                      }}
+                      className="input"
+                      placeholder="GTBank problem"
+                    />
+                    <button type="button" onClick={addKeyword} className="rounded-lg border px-4 text-sm font-semibold">Add</button>
+                  </div>
+                </Field>
+                <Field label="Intent Filter">
+                  <div className="grid grid-cols-2 gap-2">
+                    {INTENTS.map(([value, label]) => (
+                      <label key={value} className="flex items-center gap-2 rounded-lg border p-3 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={draft.intentFilter.includes(value)}
+                          onChange={() => update(
+                            "intentFilter",
+                            draft.intentFilter.includes(value)
+                              ? draft.intentFilter.filter(item => item !== value)
+                              : [...draft.intentFilter, value],
+                          )}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </Field>
+              </>
+            ) : draft.sourceMode === "live" ? (
+              <>
+                <Field label="Live Post Scope">
+                  <select value={draft.liveScope} onChange={event => update("liveScope", event.target.value as CampaignDraft["liveScope"])} className="input">
+                    <option value="all_owned_posts">All owned posts</option>
+                    <option value="selected_posts">Selected post URLs</option>
+                  </select>
+                </Field>
+                {draft.liveScope === "selected_posts" && (
+                  <Field label="Selected Post URLs">
+                    <div className="space-y-3">
+                      {selectedPlatforms.map(platform => (
+                        <div key={platform} className="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-3">
+                          <span className="text-sm font-medium capitalize">{platform === "x" ? "X" : platform}</span>
+                          <input value={draft.existingPosts[platform] ?? ""} onChange={event => update("existingPosts", { ...draft.existingPosts, [platform]: event.target.value })} className="input min-w-0" placeholder="https://..." />
+                        </div>
+                      ))}
+                    </div>
+                  </Field>
+                )}
+                <Field label="Optional Trigger Keywords">
+                  <div className="flex gap-2">
+                    <input value={keywordInput} onChange={event => setKeywordInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addKeyword(); } }} className="input" placeholder="price, available, help" />
+                    <button type="button" onClick={addKeyword} className="rounded-lg border px-4 text-sm font-semibold">Add</button>
+                  </div>
+                </Field>
+              </>
+            ) : (
+              <Field label="Trigger Keywords">
+                <input
+                  value={keywordInput}
+                  onChange={event => setKeywordInput(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addKeyword();
+                    }
+                  }}
+                  className="input"
+                  placeholder="Need this"
+                />
+              </Field>
+            )}
 
             <div className="flex flex-wrap gap-2">
-              {[...draft.keywords, ...DEFAULT_CAMPAIGN_KEYWORDS.filter(keyword => !draft.keywords.includes(keyword))].map(keyword => (
+              {[
+                ...draft.keywords,
+                ...(draft.sourceMode === "existing" ? DEFAULT_CAMPAIGN_KEYWORDS.filter(keyword => !draft.keywords.includes(keyword)) : []),
+              ].map(keyword => (
                 <button
                   type="button"
                   key={keyword}
@@ -303,18 +392,37 @@ export function NewCampaignModal({
               </div>
             </Field>
 
-            <div className="max-w-48">
-              <Field label="Max Sends Per Hour">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label={draft.sourceMode === "keyword" ? "Max Replies Per Day" : "Max Sends Per Hour"}>
                 <input
                   type="number"
                   min={1}
                   max={500}
-                  value={draft.maxPerHour}
-                  onChange={event => update("maxPerHour", Number(event.target.value))}
+                  value={draft.sourceMode === "keyword" ? draft.maxPerDay : draft.maxPerHour}
+                  onChange={event => draft.sourceMode === "keyword"
+                    ? update("maxPerDay", Number(event.target.value))
+                    : update("maxPerHour", Number(event.target.value))}
                   className="input"
                 />
               </Field>
-              <p className="mt-3 text-sm text-muted-foreground">Throttle to avoid spam flags.</p>
+              {draft.sourceMode === "keyword" && (
+                <Field label={`Urgency Score: ${draft.urgencyThreshold}+`}>
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    value={draft.urgencyThreshold}
+                    onChange={event => update("urgencyThreshold", Number(event.target.value))}
+                    className="mt-4 w-full accent-primary"
+                  />
+                </Field>
+              )}
+              <Field label="Priority">
+                <input type="number" min={0} max={1000} value={draft.priority} onChange={event => update("priority", Number(event.target.value))} className="input" />
+              </Field>
+              <Field label="Delivery Spacing (minutes)">
+                <input type="number" min={0} max={1440} value={draft.spacingMinutes} onChange={event => update("spacingMinutes", Number(event.target.value))} className="input" />
+              </Field>
             </div>
           </div>
 
@@ -378,6 +486,43 @@ export function NewCampaignModal({
               <p className="mt-2 text-sm text-muted-foreground">Replies above this confidence auto-fire. Below it &rarr; queued for review.</p>
             </Field>
 
+            <Field label="Delivery Channels">
+              <select value={draft.replyMode} onChange={event => update("replyMode", event.target.value as CampaignDraft["replyMode"])} className="input mb-3">
+                <option value="public">Public reply only</option>
+                <option value="dm_with_public_fallback">DM with public fallback</option>
+                <option value="dm_only">DM only</option>
+              </select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ToggleCard
+                  checked={draft.publicReplyEnabled}
+                  title="Comments / replies"
+                  body="Public comment or thread reply."
+                  onChange={() => update("publicReplyEnabled", !draft.publicReplyEnabled)}
+                />
+                <ToggleCard
+                  checked={draft.directMessageEnabled}
+                  title="Direct messages"
+                  body="Private follow-up where the connected platform permits it."
+                  onChange={() => update("directMessageEnabled", !draft.directMessageEnabled)}
+                />
+              </div>
+            </Field>
+
+            {draft.sourceMode === "keyword" && (
+              <Field label="Keyword Audience Rules">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <select value={draft.campaignType} onChange={event => update("campaignType", event.target.value as CampaignDraft["campaignType"])} className="input">
+                    <option value="brand_mention">Brand mention</option>
+                    <option value="competitor_complaint">Competitor complaint</option>
+                    <option value="category_intent">Category intent</option>
+                  </select>
+                  <input type="number" min={0} value={draft.minFollowers} onChange={event => update("minFollowers", Number(event.target.value))} className="input" placeholder="Minimum followers" />
+                  <ToggleCard checked={draft.skipVerified} title="Skip verified" body="Exclude verified profiles." onChange={() => update("skipVerified", !draft.skipVerified)} />
+                  <ToggleCard checked={draft.skipReposts} title="Skip reposts" body="Only process original posts." onChange={() => update("skipReposts", !draft.skipReposts)} />
+                </div>
+              </Field>
+            )}
+
             <button type="button" onClick={() => setShowPreview(current => !current)} className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-sm font-semibold text-primary">
               <Eye className="size-4" /> Preview Sample Reply
             </button>
@@ -394,11 +539,11 @@ export function NewCampaignModal({
               </span>
             </div>
             <div className="space-y-5">
-              {allocatablePlatforms.map(platform => (
+              {selectedPlatforms.map(platform => (
                 <div key={platform} className="grid grid-cols-[150px_minmax(0,1fr)_56px] items-center gap-4">
                   <span className="flex items-center gap-2 text-lg capitalize">
                     <PlatformLogo platform={platform} size={17} />
-                    {platform}
+                    {platform === "x" ? "X" : platform}
                   </span>
                   <input
                     type="range"
@@ -437,6 +582,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return <label className="block"><span className="mb-2 block text-sm font-semibold">{label}</span>{children}</label>;
 }
 
+function ModeTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className={`shrink-0 rounded-lg px-4 py-2.5 text-sm font-semibold ${active ? "bg-white text-primary shadow-sm" : "text-muted-foreground hover:bg-white/60"}`}>
+      {children}
+    </button>
+  );
+}
+
 function VariableButtons({ onInsert }: { onInsert: (value: string) => void }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -447,5 +600,17 @@ function VariableButtons({ onInsert }: { onInsert: (value: string) => void }) {
       ))}
       <span className="text-xs text-muted-foreground">Click to insert variable</span>
     </div>
+  );
+}
+
+function ToggleCard({ checked, title, body, onChange }: { checked: boolean; title: string; body: string; onChange: () => void }) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
+      <input type="checkbox" checked={checked} onChange={onChange} className="mt-1" />
+      <span className="min-w-0">
+        <strong className="block text-sm">{title}</strong>
+        <span className="block text-xs text-muted-foreground">{body}</span>
+      </span>
+    </label>
   );
 }

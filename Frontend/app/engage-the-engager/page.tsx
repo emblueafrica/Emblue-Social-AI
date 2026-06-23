@@ -679,7 +679,7 @@ export default function EngageTheEngager() {
                   />
                   <label className="flex items-center gap-2 whitespace-nowrap text-sm text-muted-foreground"><input type="checkbox" defaultChecked={post.platform !== "tiktok"} />Comments</label>
                   <label className="flex items-center gap-2 whitespace-nowrap text-sm text-muted-foreground"><input type="checkbox" defaultChecked />Likes</label>
-                  <button onClick={() => setPosts((current) => current.length > 1 ? current.filter((row) => row.id !== post.id) : current)} className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted">⋮</button>
+                  <button onClick={() => setPosts((current) => current.length > 1 ? current.filter((row) => row.id !== post.id) : current)} className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted">...</button>
                 </div>
               ))}
             </div>
@@ -692,9 +692,9 @@ export default function EngageTheEngager() {
                 </span>
               </div>
               <div className="space-y-4">
-                {(["instagram", "facebook", "tiktok"] as const).map((platform) => (
+                {(["instagram", "facebook", "tiktok", "x"] as const).map((platform) => (
                   <div key={platform} className="grid grid-cols-[120px_minmax(0,1fr)_52px] items-center gap-4">
-                    <span className="flex items-center gap-2 text-sm capitalize"><PlatformLogo platform={platform} size={18} />{platform}</span>
+                    <span className="flex items-center gap-2 text-sm capitalize"><PlatformLogo platform={platform} size={18} />{platform === "x" ? "X" : platform}</span>
                     <input type="range" min={0} max={100} value={allocation[platform]} onChange={(event) => setAllocation((current) => ({ ...current, [platform]: Number(event.target.value) }))} className="accent-primary" />
                     <span className={`text-right text-sm font-bold ${platform === "instagram" ? "text-pink-700" : platform === "facebook" ? "text-primary" : "text-muted-foreground"}`}>{allocation[platform]}%</span>
                   </div>
