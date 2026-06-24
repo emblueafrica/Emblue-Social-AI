@@ -111,7 +111,7 @@ async function fetchCampaignQueueDeliveries(brandId: number) {
   return prisma.campaignDeliveryAttempt.findMany({
     where: {
       brandId,
-      status: { in: ['queued', 'processing', 'needs_review', 'manual_action_required', 'failed', 'rate_limited'] },
+      status: { in: ['needs_review', 'manual_action_required', 'failed', 'rate_limited'] },
     },
     orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
     take: 100,
@@ -272,7 +272,7 @@ async function updateCampaignEngagerFromDeliveries(brandId: number, engagerId: b
 
 async function getCampaignQueueItem(brandId: number, engagerId: number, channel: CampaignDeliveryChannel): Promise<ApprovalQueueItem | null> {
   const delivery = await prisma.campaignDeliveryAttempt.findFirst({ where: { brandId, engagerId: BigInt(engagerId), channel } });
-  if (!delivery) return null;
+  if (!delivery || delivery.status === 'sent' || delivery.status === 'queued' || delivery.status === 'processing' || delivery.status === 'dismissed') return null;
   return (await mapCampaignDeliveryRows(brandId, [delivery]))[0] ?? null;
 }
 
@@ -289,6 +289,10 @@ async function handleCampaignQueueAction(
   const replyText = requireNonEmptyString(replyTextInput) ? replyTextInput.trim() : null;
   if (replyText) {
     await prisma.campaignPostEngager.update({ where: { engagerId: engager.engagerId }, data: { replyText, deliveryError: null, updatedAt: new Date() } });
+  }
+  const existingDelivery = await prisma.campaignDeliveryAttempt.findFirst({ where: { brandId, engagerId: engager.engagerId, channel } });
+  if (existingDelivery && ['sent', 'queued', 'processing'].includes(existingDelivery.status)) {
+    return { item: null, publish: { success: true, platform: engager.platform, message_id: existingDelivery.externalMessageId ?? undefined } };
   }
 
   if (action === 'mark-sent') {
