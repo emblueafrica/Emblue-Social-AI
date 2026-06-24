@@ -68,7 +68,7 @@ export function buildCampaignDeliveryJobId(
   engagerId: number,
   channel: CampaignDeliveryChannel,
 ): string {
-  return `campaign:${campaignId}:${engagerId}:${channel}`;
+  return `campaign_${campaignId}_${engagerId}_${channel}`;
 }
 
 export function deliveryChannelsForReplyMode(
