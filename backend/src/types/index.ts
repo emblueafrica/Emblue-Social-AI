@@ -161,6 +161,8 @@ export interface Agent4Payload {
   message:          string;
   platform:         Platform;
   tone:             string;
+  reply_format?:    'short' | 'helpful' | 'question' | 'conversion' | 'de_escalation';
+  variation_seed?:  string;
   campaign_context: {
     name?:      string;
     objective:  string;

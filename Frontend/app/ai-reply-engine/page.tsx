@@ -61,6 +61,14 @@ const urgencyDot: Record<Urgency, string> = {
 };
 
 const TONES = ["Empathetic", "Solution-first", "Warm", "Professional", "Conversion", "Direct"];
+const REPLY_FORMATS = [
+  { id: "short", label: "Short" },
+  { id: "helpful", label: "Helpful" },
+  { id: "question", label: "Ask Question" },
+  { id: "conversion", label: "Conversion" },
+  { id: "de_escalation", label: "De-escalate" },
+] as const;
+type ReplyFormat = (typeof REPLY_FORMATS)[number]["id"];
 
 function PlatformIcon({ p, className = "size-4" }: { p: Platform; className?: string }) {
   return <PlatformLogo platform={p} size={16} className={className} />;
@@ -120,6 +128,7 @@ export default function AIReplyEngine() {
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [tone, setTone] = useState<string>("Empathetic");
+  const [replyFormat, setReplyFormat] = useState<ReplyFormat>("helpful");
   const [toast, setToast] = useState<null | { kind: "approved" | "skipped" }>(null);
   const [generatedDrafts, setGeneratedDrafts] = useState<Record<number, AiReplySuggestion>>({});
   const [apiNotice, setApiNotice] = useState<string | null>(null);
@@ -227,14 +236,16 @@ export default function AIReplyEngine() {
     replyMutation.mutate({
       brand_id: activeBrandId,
       message: selected.original || selected.preview,
-      platform: selected.platform,
-      tone,
-      campaign_context: {
-        name: selected.tag,
-        objective: "respond to social comments quickly and helpfully",
-      },
-      ruleset: {
+        platform: selected.platform,
         tone,
+        reply_format: replyFormat,
+        variation_seed: `${selected.queueId ?? selected.id}:${tone}:${replyFormat}:${Date.now()}`,
+        campaign_context: {
+          name: selected.tag,
+          objective: `respond to social comments quickly and helpfully using a ${replyFormat.replaceAll("_", " ")} reply format`,
+        },
+        ruleset: {
+          tone,
         do_not_say: ["internal policy", "AI generated"],
       },
       author_handle: selected.user,
@@ -331,6 +342,7 @@ export default function AIReplyEngine() {
                         onClick={() => {
                           setSelectedId(message.id);
                           setTone("Empathetic");
+                          setReplyFormat("helpful");
                         }}
                         className={`flex items-center gap-3 px-5 py-3.5 text-sm cursor-pointer hover:bg-muted/60 ${isSelected ? "bg-muted/50" : ""}`}
                       >
@@ -420,6 +432,28 @@ export default function AIReplyEngine() {
                       </button>
                     ))}
                   </div>
+
+                  <p className="text-[11px] font-semibold tracking-wider text-muted-foreground mb-3">REPLY FORMAT</p>
+                  <div className="grid grid-cols-2 gap-2 mb-6">
+                    {REPLY_FORMATS.map((item) => (
+                      <button
+                        key={item.id}
+                        onClick={() => setReplyFormat(item.id)}
+                        className={`text-xs py-2 rounded-full border transition ${replyFormat === item.id ? "border-primary text-primary bg-primary/5" : "border-border text-muted-foreground hover:border-primary/40"}`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={regenerateDraft}
+                    disabled={!backendDraftAvailable || replyMutation.isPending}
+                    className="mb-3 w-full border border-primary text-primary rounded-xl py-3 font-semibold flex items-center justify-center gap-2 hover:bg-primary/5 transition disabled:opacity-60"
+                  >
+                    <RefreshCw className={`size-4 ${replyMutation.isPending ? "animate-spin" : ""}`} />
+                    {replyMutation.isPending ? "Generating..." : "Generate with Tone"}
+                  </button>
 
                   <button onClick={approveSelected} disabled={approveMutation.isPending || skipMutation.isPending || !draftBody} className="w-full bg-primary text-primary-foreground rounded-xl py-3 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition disabled:opacity-60">
                     <Check className="size-4" /> {approveMutation.isPending ? "Sending..." : "Approve & Send"}

@@ -2,7 +2,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Agent4Payload, Agent4Result, ReplySuggestion } from '../types';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? process.env.CLAUDE_API_KEY });
+
+type ReplyFormat = NonNullable<Agent4Payload['reply_format']>;
 
 function handleForReply(handle: string | undefined): string {
   const cleaned = (handle ?? '').trim();
@@ -18,6 +20,18 @@ function clipReply(text: string, max = 260): string {
   const cleaned = text.replace(/\s+/g, ' ').trim();
   if (cleaned.length <= max) return cleaned;
   return `${cleaned.slice(0, max - 1).trimEnd()}…`;
+}
+
+function requestedTone(payload: Agent4Payload): string {
+  return (payload.ruleset?.tone || payload.tone || 'Professional').trim() || 'Professional';
+}
+
+function requestedFormat(payload: Agent4Payload): ReplyFormat {
+  const format = payload.reply_format;
+  if (format === 'short' || format === 'helpful' || format === 'question' || format === 'conversion' || format === 'de_escalation') {
+    return format;
+  }
+  return 'helpful';
 }
 
 function looksLikeSuspicion(text: string): boolean {
@@ -37,10 +51,22 @@ export function contextualFallbackReply(payload: Agent4Payload): ReplySuggestion
   const prefix = handle ? `${handle} ` : '';
   const message = stripQuotedMention(payload.message ?? '');
   const cta = payload.campaign_context?.cta_link ? ` ${payload.campaign_context.cta_link}` : '';
+  const tone = requestedTone(payload);
+  const format = requestedFormat(payload);
 
   let text: string;
-  if (looksLikeSuspicion(message)) {
-    text = `${prefix}That is a serious concern. Please share what looked suspicious so we can review it properly and keep the discussion factual.${cta}`;
+  if (format === 'short') {
+    text = looksLikeQuestion(message)
+      ? `${prefix}Good question. We will check and reply clearly.${cta}`
+      : `${prefix}Noted. We are reviewing this and will respond with useful details.${cta}`;
+  } else if (format === 'question') {
+    text = looksLikeSuspicion(message)
+      ? `${prefix}What specifically looked suspicious to you? Share the detail so we can respond factually.${cta}`
+      : `${prefix}Can you share one more detail so we can point you to the right answer?${cta}`;
+  } else if (format === 'conversion') {
+    text = `${prefix}We can help with this. Send the detail you need and we will point you to the next step.${cta}`;
+  } else if (format === 'de_escalation' || looksLikeSuspicion(message)) {
+    text = `${prefix}That concern is noted. Please share the specific detail so we can address it carefully and factually.${cta}`;
   } else if (looksLikeComplaint(message)) {
     text = `${prefix}Thanks for flagging this. We understand the concern and will review the details carefully before responding further.${cta}`;
   } else if (looksLikeQuestion(message)) {
@@ -51,7 +77,7 @@ export function contextualFallbackReply(payload: Agent4Payload): ReplySuggestion
 
   return {
     text: clipReply(text),
-    tone: 'Professional',
+    tone,
     confidence: 65,
     risk_flags: ['fallback_reply'],
   };
@@ -82,17 +108,28 @@ function normalizeReplies(result: Agent4Result): ReplySuggestion[] {
 
 export async function runAgent4(payload: Agent4Payload): Promise<Agent4Result> {
   try {
+    const tone = requestedTone(payload);
+    const format = requestedFormat(payload);
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514', max_tokens: 2048,
       system: `You are Agent_Reply, an expert social media reply writer.
 Generate exactly 3 reply options for the given message.
-Each reply must feel personal, use the provided author_handle when present, match the brand tone, and stay under 280 characters for X.
+Each reply must feel personal, use the provided author_handle when present, match the requested brand tone exactly, and stay under 280 characters for X.
 Only include a CTA link when campaign_context.cta_link is present.
 Read the actual message and respond to its meaning. Do not use generic customer-support filler.
 Never say "Thanks for reaching out" unless the user clearly asked for help.
 For hostile, accusatory, suspicious, or risky comments, stay calm, ask for specifics, avoid validating unverified claims, and keep the discussion factual.
 For comments accusing someone or a profile of being sketchy/scam/fake, acknowledge the concern without repeating the accusation as fact.
 Do not invent facts, promises, investigations, discounts, or private actions.
+Requested tone: ${tone}.
+Requested reply format: ${format}.
+Format rules:
+- short: one compact sentence.
+- helpful: answer directly and add one useful next step.
+- question: ask one clear follow-up question.
+- conversion: guide toward the CTA or next action without pressure.
+- de_escalation: calm, factual, and non-defensive.
+Use variation_seed only to avoid repeating prior wording; do not mention it.
 
 Return ONLY valid JSON:
 {
@@ -101,7 +138,7 @@ Return ONLY valid JSON:
     ...
   ]
 }`,
-      messages: [{ role: 'user', content: JSON.stringify(payload) }]
+      messages: [{ role: 'user', content: JSON.stringify({ ...payload, tone, reply_format: format }) }]
     });
     const raw = response.content[0].type === 'text' ? response.content[0].text : '{}';
     const parsed = parseAgentJson(raw);
