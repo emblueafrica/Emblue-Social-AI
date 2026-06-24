@@ -1,10 +1,8 @@
 // src/auth/platformSync.ts
 import prisma from '../db/prisma';
 import { runAgent1 } from '../agents/agent1_listening';
-import { contextualFallbackReply, runAgent4 } from '../agents/agent4_reply_assistant';
 import { persistAgent1Result } from '../db/queries';
 import { RawMessage, Platform } from '../types';
-import { enqueueForApproval } from '../stream/eventQueue';
 
 interface SyncResult {
   brand_id:    number;
@@ -85,52 +83,6 @@ async function fetchXMentions(
   }
 }
 
-function replyChannelFor(platform: Platform): 'dm' | 'thread_reply' | 'comment_reply' {
-  if (platform === 'x') return 'thread_reply';
-  if (platform === 'tiktok') return 'comment_reply';
-  return 'comment_reply';
-}
-
-async function queueAiReplyDraft(brandId: number, item: RawMessage): Promise<void> {
-  const author = item.author_handle?.trim() || item.author_id?.trim() || 'customer';
-  const payload = {
-    brand_id: brandId,
-    message: item.text,
-    platform: item.platform,
-    tone: 'Empathetic',
-    reply_format: 'helpful' as const,
-    variation_seed: `${item.platform}:${String(item.raw?.['id'] ?? item.url ?? item.text).slice(0, 80)}`,
-    campaign_context: {
-      name: 'AI Reply Engine',
-      objective: 'draft a helpful reply to a non-campaign social mention or comment',
-    },
-    ruleset: {
-      tone: 'Empathetic',
-      do_not_say: ['internal policy', 'AI generated'],
-    },
-    author_handle: author,
-    reply_channel: replyChannelFor(item.platform),
-  };
-  const generated = await runAgent4(payload);
-  const suggestion = generated.replies?.[0] ?? generated.suggestions?.[0] ?? contextualFallbackReply(payload);
-  const rawId = typeof item.raw?.['id'] === 'string' ? item.raw['id'] : null;
-  const mediaId = typeof item.raw?.['media_id'] === 'string' ? item.raw['media_id'] : null;
-  await enqueueForApproval({
-    brand_id: brandId,
-    platform: item.platform,
-    author,
-    original: item.text,
-    reply: suggestion.text ?? suggestion.reply_text ?? '',
-    delivery_error: generated.error ? `AI provider fallback used: ${generated.error}` : undefined,
-    meta: {
-      author_id: item.author_id ?? (typeof item.raw?.['author_id'] === 'string' ? item.raw['author_id'] : null),
-      comment_id: item.platform === 'x' ? null : rawId,
-      post_id: mediaId,
-      tweet_id: item.platform === 'x' ? rawId : null,
-    },
-  });
-}
-
 export async function syncAllPlatforms(brandId: number): Promise<SyncResult> {
   const allItems: import('../types').ClassifiedMessage[] = [];
   const errors:   string[] = [];
@@ -176,7 +128,6 @@ export async function syncAllPlatforms(brandId: number): Promise<SyncResult> {
             items:        rawItems,
           });
           await persistAgent1Result(brandId, result);
-          await Promise.allSettled(rawItems.map(item => queueAiReplyDraft(brandId, item)));
           allItems.push(...result.classified);
         }
       } catch (err) {

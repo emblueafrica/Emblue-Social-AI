@@ -11,7 +11,7 @@ import {
   fetchTikTokPostEngagers,
   resolveInstagramMediaId,
 } from '../stream/engageEngagers';
-import { broadcastToClients, enqueueForApproval } from '../stream/eventQueue';
+import { broadcastToClients } from '../stream/eventQueue';
 import { CampaignConfig, Credentials, Engager, EngageResult, Platform } from '../types';
 import { syncXRepliesForPost } from './xReplySync';
 import { eligibleForCampaign } from './lifecycle';
@@ -256,8 +256,9 @@ async function persistSocialMessage(brandId: number, post: TrackedPost, engager:
   });
 }
 
-async function queueNonCampaignReplyDraft(
+async function queuePostUrlManualReview(
   brandId: number,
+  campaignId: string,
   post: TrackedPost,
   engager: Engager,
   config: CampaignConfig,
@@ -282,20 +283,15 @@ async function queueNonCampaignReplyDraft(
     name: 'General AI Reply',
     objective: 'draft a helpful response to an inbound comment',
   });
-  await enqueueForApproval({
-    brand_id: brandId,
-    platform: engager.platform as Platform,
-    author: engager.author_handle,
-    original: engager.text,
-    reply: draft.reply,
-    delivery_error: 'Comment did not match campaign keywords, so it was routed to the AI Reply Engine.',
-    meta: {
-      author_id: engager.author_id,
-      comment_id: engager.raw_comment_id ?? engager.raw_tweet_id ?? null,
-      post_id: engager.raw_video_id ?? post.postIdExt,
-      tweet_id: engager.platform === 'x' ? engager.raw_tweet_id ?? engager.raw_comment_id ?? null : null,
-    },
-  });
+  await updateCampaignEngagerStatus(
+    brandId,
+    campaignId,
+    engager,
+    'needs_review',
+    draft.reply,
+    'Comment did not match campaign keywords. Review manually in Approval Queue.',
+    draft.confidence,
+  );
 }
 
 async function syncTrackedPost(
@@ -341,7 +337,7 @@ async function syncTrackedPost(
     await persistSocialMessage(brandId, post, engager);
     if (!eligible) {
       totals.ignored += 1;
-      await queueNonCampaignReplyDraft(brandId, post, engager, config);
+      await queuePostUrlManualReview(brandId, campaignId, post, engager, config);
       continue;
     }
 
