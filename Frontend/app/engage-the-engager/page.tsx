@@ -261,14 +261,15 @@ export default function EngageTheEngager() {
   }, [toast]);
 
   const campaigns = campaignsQuery.data?.campaigns.map(mapCampaignRecord) ?? [];
-  const existingPostAllocationPlatforms = (posts.some((post) => post.platform === "x")
+  const showXAllocation = posts.some((post) => post.platform === "x");
+  const existingPostAllocationPlatforms = (showXAllocation
     ? ["instagram", "facebook", "tiktok", "x"]
     : ["instagram", "facebook", "tiktok"]) as Platform[];
   const existingPostAllocation = {
     instagram: allocation.instagram,
     facebook: allocation.facebook,
     tiktok: allocation.tiktok,
-    x: existingPostAllocationPlatforms.includes("x") ? allocation.x : 0,
+    x: showXAllocation ? allocation.x : 0,
   };
   const canMutate = Boolean(
     authContext?.platform_role === "super_admin" ||
