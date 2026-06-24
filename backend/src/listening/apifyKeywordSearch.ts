@@ -87,6 +87,88 @@ function normalizeApifyItems(item: Record<string, unknown>, platform: Platform, 
   return normalized;
 }
 
+function normalizeXRecentSearchTweet(
+  tweet: Record<string, unknown>,
+  users: Map<string, Record<string, unknown>>,
+  matchedKeyword: string,
+): NormalizedSearchItem | null {
+  const text = asString(tweet['text']);
+  if (!text) return null;
+
+  const authorId = asString(tweet['author_id']);
+  const user = authorId ? users.get(authorId) : undefined;
+  const tweetId = asString(tweet['id']);
+  const username = asString(user?.['username'] ?? user?.['name']);
+  const publicMetrics = typeof tweet['public_metrics'] === 'object' && tweet['public_metrics'] !== null && !Array.isArray(tweet['public_metrics'])
+    ? tweet['public_metrics'] as Record<string, unknown>
+    : {};
+
+  return {
+    platform: 'x',
+    matchedKeyword,
+    text: text.slice(0, 4000),
+    authorHandle: username,
+    authorIdExt: authorId,
+    url: tweetId ? `https://x.com/i/web/status/${tweetId}` : null,
+    postedAt: asDate(tweet['created_at']),
+    likes: asNumber(publicMetrics['like_count']),
+    repliesCount: asNumber(publicMetrics['reply_count']),
+    shares: asNumber(publicMetrics['retweet_count']),
+    views: asNumber(publicMetrics['impression_count']),
+    raw: tweet,
+  };
+}
+
+async function runXRecentSearchForKeyword(input: PlatformKeywordSearchInput): Promise<KeywordSearchResult> {
+  const token = process.env.X_BEARER_TOKEN;
+  if (!token) return runActorForKeyword('x', input);
+
+  const requested = input.maxItems ?? 100;
+  const maxResults = Math.max(10, Math.min(100, requested));
+  const params = new URLSearchParams({
+    query: `${input.keyword} -is:retweet`,
+    max_results: String(maxResults),
+    'tweet.fields': 'author_id,created_at,conversation_id,public_metrics',
+    expansions: 'author_id',
+    'user.fields': 'username,name,verified,public_metrics,created_at',
+  });
+  const startDate = input.dateFrom?.toISOString();
+  const endDate = input.dateTo?.toISOString();
+  if (startDate) params.set('start_time', startDate);
+  if (endDate) params.set('end_time', endDate);
+
+  try {
+    const response = await fetch(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await response.json() as {
+      data?: Record<string, unknown>[];
+      includes?: { users?: Record<string, unknown>[] };
+      errors?: { message?: string; detail?: string }[];
+      title?: string;
+      detail?: string;
+    };
+
+    if (!response.ok || body.errors?.length) {
+      const detail = body.errors?.[0]?.message ?? body.errors?.[0]?.detail ?? body.detail ?? body.title ?? `X recent search ${response.status}`;
+      if (response.status === 401) return { items: [], errors: [`x:${input.keyword}: X bearer token is invalid or expired. ${detail}`] };
+      if (response.status === 403) return { items: [], errors: [`x:${input.keyword}: X Recent Search is not available for this account/API plan. ${detail}`] };
+      if (response.status === 429) return { items: [], errors: [`x:${input.keyword}: X Recent Search rate limit reached. Retry after the X API window resets. ${detail}`] };
+      return { items: [], errors: [`x:${input.keyword}: ${detail}`] };
+    }
+
+    const users = new Map((body.includes?.users ?? []).map(user => [String(user['id']), user]));
+    const items = (body.data ?? [])
+      .map(tweet => normalizeXRecentSearchTweet(tweet, users, input.keyword))
+      .filter((item): item is NormalizedSearchItem => Boolean(item))
+      .slice(0, requested);
+
+    return { items, errors: [] };
+  } catch (err) {
+    return { items: [], errors: [`x:${input.keyword}: ${(err as Error).message}`] };
+  }
+}
+
 async function runActorForKeyword(
   platform: Platform,
   input: PlatformKeywordSearchInput
@@ -129,7 +211,7 @@ export async function searchInstagramKeyword(keyword: string, dateFrom?: Date | 
 }
 
 export async function searchXKeyword(keyword: string, dateFrom?: Date | null, dateTo?: Date | null, maxItems?: number): Promise<KeywordSearchResult> {
-  return runActorForKeyword('x', { keyword, dateFrom, dateTo, maxItems });
+  return runXRecentSearchForKeyword({ keyword, dateFrom, dateTo, maxItems });
 }
 
 export async function searchRedditKeyword(keyword: string, dateFrom?: Date | null, dateTo?: Date | null, maxItems?: number): Promise<KeywordSearchResult> {

@@ -109,7 +109,9 @@ async function campaignCapabilities(brandId: number, platforms: CampaignPlatform
     platform,
     connected: Boolean(accounts[index]),
     scopes: accounts[index]?.scope,
-    discoveryConfigured: Boolean(process.env.APIFY_API_TOKEN),
+    discoveryConfigured: platform === 'x'
+      ? Boolean(process.env.X_BEARER_TOKEN?.trim() || process.env.APIFY_API_TOKEN?.trim())
+      : Boolean(process.env.APIFY_API_TOKEN?.trim()),
   }));
 }
 
