@@ -65,8 +65,10 @@ const TONES = [
 const INTENTS: [string, string][] = [
   ["complaint", "Complaint"],
   ["purchase_intent", "Purchase Intent"],
-  ["opinion", "Opinion"],
-  ["other", "Other"],
+  ["inquiry", "Inquiry"],
+  ["objection", "Objection"],
+  ["praise", "Praise"],
+  ["neutral", "Neutral"],
 ];
 const DEFAULT_EVENTS: CampaignEventSettings = {
   comments: true,
