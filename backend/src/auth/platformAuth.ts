@@ -16,12 +16,49 @@ function frontendBaseUrl(): string {
   return raw.trim().replace(/\/+$/, '') || 'http://localhost:3000';
 }
 
+function renderRedirectPage(res: Response, targetUrl: string): void {
+  const safeUrl = targetUrl.replace(/"/g, '%22');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Social connection complete</title>
+    <style>body{font-family:system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;background:#f8fafc;color:#0f172a;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}main{max-width:32rem;text-align:center;padding:1.5rem;border-radius:1rem;background:#ffffff;box-shadow:0 18px 50px rgba(15,23,42,.08)}a{color:#2563eb;text-decoration:none;font-weight:600}</style>
+  </head>
+  <body>
+    <main>
+      <h1>Connection finished</h1>
+      <p>This page will close automatically and update your previous tab.</p>
+      <p>If nothing happens, <a href="${safeUrl}">click here to continue</a>.</p>
+    </main>
+    <script>
+      const target = ${JSON.stringify(targetUrl)};
+      function finish() {
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.location.href = target;
+            window.close();
+            return;
+          }
+        } catch (error) {
+          console.warn('Unable to redirect opener:', error);
+        }
+        window.location.assign(target);
+      }
+      finish();
+    </script>
+  </body>
+</html>`);
+}
+
 function redirectSuccess(res: Response, platform: string, handle: string): void {
-  res.redirect(`${frontendBaseUrl()}/settings?auth=success&platform=${platform}&handle=${encodeURIComponent(handle)}`);
+  renderRedirectPage(res, `${frontendBaseUrl()}/settings?auth=success&platform=${platform}&handle=${encodeURIComponent(handle)}`);
 }
 
 function redirectError(res: Response, reason: string): void {
-  res.redirect(`${frontendBaseUrl()}/settings?auth=error&reason=${encodeURIComponent(reason)}`);
+  renderRedirectPage(res, `${frontendBaseUrl()}/settings?auth=error&reason=${encodeURIComponent(reason)}`);
 }
 
 // ── META (INSTAGRAM + FACEBOOK) ───────────────────────────────────────────────

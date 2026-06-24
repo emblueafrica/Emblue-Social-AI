@@ -86,11 +86,10 @@ async function redirectToPlatformConnect(platformId: PlatformConnectId, brandId:
       throw new Error(message);
     }
     if (connectWindow) {
-      connectWindow.opener = null;
       connectWindow.location.assign(providerUrl);
       return;
     }
-    window.open(providerUrl, "_blank", "noopener,noreferrer");
+    window.open(providerUrl, "_blank");
   } catch (error) {
     writeConnectWindowStatus(connectWindow, getErrorMessage(error));
     throw error;
@@ -190,6 +189,21 @@ export default function SettingsPage() {
       }));
     }
   }, [connectionsQuery, searchParams]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const auth = searchParams.get("auth");
+    if (!auth) return;
+
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.location.href = window.location.href;
+        window.close();
+      }
+    } catch (error) {
+      console.warn("Unable to redirect opener from settings page.", error);
+    }
+  }, [searchParams]);
 
   async function handleConnect(platformId: string) {
     if (!activeBrandId || !isPlatformConnectId(platformId)) return;
