@@ -292,7 +292,7 @@ export function getXAuthUrl(brandId: number): string {
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
   });
-  return `https://x.com/i/oauth2/authorize?${params.toString()}`;
+  return `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
 }
 
 function xBasicAuthHeader(): string {
