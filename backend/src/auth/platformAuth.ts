@@ -29,10 +29,16 @@ const META_SCOPE = [
   'instagram_basic',
   'instagram_manage_comments',
   'instagram_manage_messages',
+  'instagram_business_basic',
+  'instagram_business_manage_comments',
+  'instagram_business_manage_messages',
+  'instagram_business_manage_insights',
+  'instagram_business_content_publish',
   'pages_show_list',
-  'pages_manage_engagement',
   'pages_read_engagement',
   'pages_messaging',
+  'pages_manage_metadata',
+  'business_management',
 ].join(',');
 
 export function getMetaAuthUrl(brandId: number): string {
@@ -106,12 +112,12 @@ async function persistStrictMetaConnections(brandId: number, userToken: string, 
 
   await upsertConnectedAccount(
     brandId, 'facebook', selected.page.access_token, null, null,
-    selected.page.name, selected.page.id, 'pages_manage_engagement,pages_messaging,pages_read_engagement', platformUserId,
+    selected.page.name, selected.page.id, 'pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata,business_management', platformUserId,
   );
 
   await upsertConnectedAccount(
     brandId, 'instagram', selected.page.access_token, null, null,
-    selected.instagram.username, selected.instagram.id, 'instagram_basic,instagram_manage_comments,instagram_manage_messages', platformUserId,
+    selected.instagram.username, selected.instagram.id, 'instagram_basic,instagram_manage_comments,instagram_manage_messages,instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages,instagram_business_manage_insights,instagram_business_content_publish', platformUserId,
   );
 
   return selected.instagram.username;
