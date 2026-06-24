@@ -6,7 +6,12 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ExternalLink, PlugZap } from "lucide-react";
 import { DashHeader, Sidebar } from "@/components/dashboard/Sidebar";
 import { useAuth } from "@/hooks/use-auth";
-import { disconnectPlatform, getConnections, getPlatformConnectUrl, getToolAccess } from "@/lib/api";
+import {
+  disconnectPlatform,
+  getConnections,
+  getPlatformConnectUrl,
+  getToolAccess,
+} from "@/lib/api";
 import { isB2CClient } from "@/lib/access";
 
 const platforms = [
@@ -17,54 +22,73 @@ const platforms = [
 
 type PlatformConnectId = (typeof platforms)[number]["id"];
 
-const platformErrorMessage = "Could not start the connection flow. Check your account access and try again.";
+const platformErrorMessage =
+  "Could not start the connection flow. Check your account access and try again.";
 
 function isPlatformConnectId(value: string): value is PlatformConnectId {
   return value === "meta" || value === "x" || value === "tiktok";
 }
 
 function getConnectionPlatformIds(platformId: PlatformConnectId): string[] {
-  return platformId === "meta" ? ["meta", "facebook", "instagram"] : [platformId];
+  return platformId === "meta"
+    ? ["meta", "facebook", "instagram"]
+    : [platformId];
 }
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : platformErrorMessage;
+  return error instanceof Error && error.message
+    ? error.message
+    : platformErrorMessage;
 }
 
 function isValidProviderUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && [
-      "facebook.com",
-      "www.facebook.com",
-      "x.com",
-      "twitter.com",
-      "api.twitter.com",
-      "www.twitter.com",
-      "www.tiktok.com",
-      "open-api.tiktok.com",
-    ].includes(url.hostname);
+    return (
+      url.protocol === "https:" &&
+      [
+        "facebook.com",
+        "www.facebook.com",
+        "x.com",
+        "twitter.com",
+        "api.twitter.com",
+        "www.twitter.com",
+        "www.tiktok.com",
+        "open-api.tiktok.com",
+      ].includes(url.hostname)
+    );
   } catch {
     return false;
   }
 }
 
-function normalizeProviderUrl(platformId: PlatformConnectId, value: string): string {
+function normalizeProviderUrl(
+  platformId: PlatformConnectId,
+  value: string,
+): string {
   if (platformId !== "x") return value;
   const url = new URL(value);
-  if (url.hostname === "twitter.com" || url.hostname === "www.twitter.com" || url.hostname === "api.twitter.com") {
+  if (
+    url.hostname === "twitter.com" ||
+    url.hostname === "www.twitter.com" ||
+    url.hostname === "api.twitter.com"
+  ) {
     url.hostname = "x.com";
   }
   return url.toString();
 }
 
-function writeConnectWindowStatus(connectWindow: Window | null, message: string) {
+function writeConnectWindowStatus(
+  connectWindow: Window | null,
+  message: string,
+) {
   if (!connectWindow) return;
   try {
     connectWindow.document.title = "Connecting account";
     const body = connectWindow.document.body;
     body.textContent = message;
-    body.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    body.style.fontFamily =
+      "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
     body.style.padding = "24px";
     body.style.color = "#0F172A";
     body.style.background = "#F8FAFC";
@@ -73,7 +97,10 @@ function writeConnectWindowStatus(connectWindow: Window | null, message: string)
   }
 }
 
-async function redirectToPlatformConnect(platformId: PlatformConnectId, brandId: number) {
+async function redirectToPlatformConnect(
+  platformId: PlatformConnectId,
+  brandId: number,
+) {
   const connectWindow = window.open("about:blank", "_blank");
   writeConnectWindowStatus(connectWindow, "Opening secure connection...");
 
@@ -116,7 +143,8 @@ export default function SettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { activeBrandId, authContext } = useAuth();
-  const [connectState, setConnectState] = useState<ConnectState>(initialConnectState);
+  const [connectState, setConnectState] =
+    useState<ConnectState>(initialConnectState);
   const connectionsQuery = useQuery({
     queryKey: ["connections", activeBrandId],
     queryFn: () => getConnections(activeBrandId!),
@@ -173,7 +201,9 @@ export default function SettingsPage() {
         ...current,
         platformId: null,
         error: null,
-        success: handle ? `${platform} connected as ${handle}.` : `${platform} connected.`,
+        success: handle
+          ? `${platform} connected as ${handle}.`
+          : `${platform} connected.`,
       }));
       void connectionsQuery.refetch();
       return;
@@ -234,10 +264,16 @@ export default function SettingsPage() {
         <DashHeader title="Settings" />
         <main className="flex-1 p-6 md:p-10 space-y-6">
           <section className="rounded-lg bg-card p-6 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Workspace</p>
-            <h2 className="mt-2 text-2xl font-bold">{authContext?.active_brand?.name ?? "Account settings"}</h2>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Workspace
+            </p>
+            <h2 className="mt-2 text-2xl font-bold">
+              {authContext?.active_brand?.name ?? "Account settings"}
+            </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {authContext?.active_brand?.account_type?.replace(/_/g, " ") ?? authContext?.platform_role ?? "Authenticated account"}
+              {authContext?.active_brand?.account_type?.replace(/_/g, " ") ??
+                authContext?.platform_role ??
+                "Authenticated account"}
             </p>
           </section>
 
@@ -245,18 +281,30 @@ export default function SettingsPage() {
             <Panel title="Platform Connections">
               <div className="space-y-3">
                 {platforms.map((platform) => {
-                  const connectionPlatformIds = getConnectionPlatformIds(platform.id);
-                  const connection = connectionsQuery.data?.connections.find((item) => connectionPlatformIds.includes(item.platform));
+                  const connectionPlatformIds = getConnectionPlatformIds(
+                    platform.id,
+                  );
+                  const connection = connectionsQuery.data?.connections.find(
+                    (item) => connectionPlatformIds.includes(item.platform),
+                  );
                   const connected = Boolean(connection?.is_active);
-                  const isPendingAction = connectState.platformId === platform.id;
+                  const isPendingAction =
+                    connectState.platformId === platform.id;
                   return (
-                    <div key={platform.id} className="flex items-center justify-between gap-4 rounded-lg border p-4">
+                    <div
+                      key={platform.id}
+                      className="flex items-center justify-between gap-4 rounded-lg border p-4"
+                    >
                       <div className="flex items-center gap-3">
-                        <div className="rounded-md bg-muted p-2 text-primary"><PlugZap className="size-5" /></div>
+                        <div className="rounded-md bg-muted p-2 text-primary">
+                          <PlugZap className="size-5" />
+                        </div>
                         <div>
                           <p className="font-semibold">{platform.label}</p>
                           <p className="text-xs text-muted-foreground">
-                            {connected ? connection?.account_handle ?? "Connected" : "Not connected"}
+                            {connected
+                              ? (connection?.account_handle ?? "Connected")
+                              : "Not connected"}
                           </p>
                         </div>
                       </div>
@@ -268,7 +316,11 @@ export default function SettingsPage() {
                           className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <ExternalLink className="size-4" />
-                          {isPendingAction && !connected ? "Opening..." : connected ? "Reconnect" : "Connect"}
+                          {isPendingAction && !connected
+                            ? "Opening..."
+                            : connected
+                              ? "Reconnect"
+                              : "Connect"}
                         </button>
                         {connected ? (
                           <button
@@ -277,7 +329,9 @@ export default function SettingsPage() {
                             disabled={isPendingAction}
                             className="inline-flex items-center gap-2 rounded-md border border-destructive/30 px-3 py-2 text-sm font-semibold text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {isPendingAction ? "Disconnecting..." : "Disconnect"}
+                            {isPendingAction
+                              ? "Disconnecting..."
+                              : "Disconnect"}
                           </button>
                         ) : null}
                       </div>
@@ -299,13 +353,20 @@ export default function SettingsPage() {
 
             <Panel title="Subscription Access">
               <p className="text-sm text-muted-foreground">
-                Plan: <span className="font-semibold text-foreground">{accessQuery.data?.plan ?? "Not assigned"}</span>
+                Plan:{" "}
+                <span className="font-semibold text-foreground">
+                  {accessQuery.data?.plan ?? "Not assigned"}
+                </span>
               </p>
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {(accessQuery.data?.tools ?? []).map((tool) => (
                   <div key={tool.id} className="rounded-md border p-3 text-sm">
                     <p className="font-semibold">{tool.name}</p>
-                    <p className={tool.enabled ? "text-success" : "text-muted-foreground"}>
+                    <p
+                      className={
+                        tool.enabled ? "text-success" : "text-muted-foreground"
+                      }
+                    >
                       {tool.enabled ? "Enabled" : "Locked"}
                     </p>
                   </div>
@@ -319,7 +380,13 @@ export default function SettingsPage() {
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function Panel({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <section className="rounded-lg bg-card p-5 shadow-sm">
       <h2 className="mb-4 text-lg font-bold">{title}</h2>

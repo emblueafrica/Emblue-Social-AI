@@ -1,24 +1,25 @@
 // src/auth/platformAuth.ts — Social platform OAuth (connect, callback, token refresh)
-import { Request, Response } from 'express';
-import { createHash, randomBytes } from 'node:crypto';
+import { Request, Response } from "express";
+import { createHash, randomBytes } from "node:crypto";
 import {
   upsertConnectedAccount,
   getConnectedAccountRecord,
   updateConnectedAccountTokens,
-} from '../db/queries';
-import { Platform } from '../types';
-import { createOAuthState, verifyOAuthState } from './oauthState';
+} from "../db/queries";
+import { Platform } from "../types";
+import { createOAuthState, verifyOAuthState } from "./oauthState";
 
 // ── REDIRECT HELPERS ──────────────────────────────────────────────────────────
 // FRONTEND_URL may be a comma-separated list; OAuth redirects use the first entry.
 function frontendBaseUrl(): string {
-  const raw = (process.env.FRONTEND_URL ?? 'http://localhost:3000').split(',')[0] ?? '';
-  return raw.trim().replace(/\/+$/, '') || 'http://localhost:3000';
+  const raw =
+    (process.env.FRONTEND_URL ?? "http://localhost:3000").split(",")[0] ?? "";
+  return raw.trim().replace(/\/+$/, "") || "http://localhost:3000";
 }
 
 function renderRedirectPage(res: Response, targetUrl: string): void {
-  const safeUrl = targetUrl.replace(/"/g, '%22');
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const safeUrl = targetUrl.replace(/"/g, "%22");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
 <html lang="en">
   <head>
@@ -53,46 +54,64 @@ function renderRedirectPage(res: Response, targetUrl: string): void {
 </html>`);
 }
 
-function redirectSuccess(res: Response, platform: string, handle: string): void {
-  renderRedirectPage(res, `${frontendBaseUrl()}/settings?auth=success&platform=${platform}&handle=${encodeURIComponent(handle)}`);
+function redirectSuccess(
+  res: Response,
+  platform: string,
+  handle: string,
+): void {
+  renderRedirectPage(
+    res,
+    `${frontendBaseUrl()}/settings?auth=success&platform=${platform}&handle=${encodeURIComponent(handle)}`,
+  );
 }
 
 function redirectError(res: Response, reason: string): void {
-  renderRedirectPage(res, `${frontendBaseUrl()}/settings?auth=error&reason=${encodeURIComponent(reason)}`);
+  renderRedirectPage(
+    res,
+    `${frontendBaseUrl()}/settings?auth=error&reason=${encodeURIComponent(reason)}`,
+  );
 }
 
 // ── META (INSTAGRAM + FACEBOOK) ───────────────────────────────────────────────
 const META_SCOPE = [
-  'instagram_basic',
-  'instagram_manage_comments',
-  'instagram_manage_messages',
-  'instagram_business_basic',
-  'instagram_business_manage_comments',
-  'instagram_business_manage_messages',
-  'instagram_business_manage_insights',
-  'instagram_business_content_publish',
-  'pages_show_list',
-  'pages_read_engagement',
-  'pages_messaging',
-  'pages_manage_metadata',
-  'business_management',
-].join(',');
+  "instagram_basic",
+  "instagram_manage_comments",
+  "instagram_manage_messages",
+  "instagram_business_basic",
+  "instagram_business_manage_comments",
+  "instagram_business_manage_messages",
+  "instagram_business_manage_insights",
+  "instagram_business_content_publish",
+  "pages_show_list",
+  "pages_read_engagement",
+  "pages_messaging",
+  "pages_manage_metadata",
+  "business_management",
+].join(",");
 
 export function getMetaAuthUrl(brandId: number): string {
   const params = new URLSearchParams({
-    client_id: process.env.META_APP_ID ?? '',
-    redirect_uri: process.env.META_REDIRECT_URI ?? '',
+    client_id: process.env.META_APP_ID ?? "",
+    redirect_uri: process.env.META_REDIRECT_URI ?? "",
     scope: META_SCOPE,
-    response_type: 'code',
+    response_type: "code",
     state: createOAuthState(brandId),
   });
   return `https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`;
 }
 
-type MetaTokenResponse = { access_token?: string; expires_in?: number; error?: { message: string } };
+type MetaTokenResponse = {
+  access_token?: string;
+  expires_in?: number;
+  error?: { message: string };
+};
 type MetaPage = { id: string; name: string; access_token: string };
 type MetaInstagramAccount = { id: string; username: string };
-type MetaUserResponse = { id?: string; name?: string; error?: { message: string } };
+type MetaUserResponse = {
+  id?: string;
+  name?: string;
+  error?: { message: string };
+};
 
 /**
  * Resolve and store the connected accounts behind a Meta login. Comment and
@@ -101,37 +120,54 @@ type MetaUserResponse = { id?: string; name?: string; error?: { message: string 
  * the Instagram business account linked to that Page. Page tokens derived from
  * a long-lived user token do not expire, so they are stored with no expiry.
  */
-async function persistMetaConnections(brandId: number, userToken: string, platformUserId: string | null): Promise<string> {
+async function persistMetaConnections(
+  brandId: number,
+  userToken: string,
+  platformUserId: string | null,
+): Promise<string> {
   return persistStrictMetaConnections(brandId, userToken, platformUserId);
 }
 
-async function persistStrictMetaConnections(brandId: number, userToken: string, platformUserId: string | null): Promise<string> {
+async function persistStrictMetaConnections(
+  brandId: number,
+  userToken: string,
+  platformUserId: string | null,
+): Promise<string> {
   const pagesRes = await fetch(
     `https://graph.facebook.com/v19.0/me/accounts?fields=id,name,access_token&access_token=${userToken}`,
   );
-  const pagesData = (await pagesRes.json()) as { data?: MetaPage[]; error?: { message: string } };
+  const pagesData = (await pagesRes.json()) as {
+    data?: MetaPage[];
+    error?: { message: string };
+  };
   if (!pagesRes.ok || pagesData.error) {
-    throw new Error(pagesData.error?.message ?? 'Meta Page lookup failed');
+    throw new Error(pagesData.error?.message ?? "Meta Page lookup failed");
   }
 
   const pages = pagesData.data ?? [];
   if (pages.length === 0) {
-    throw new Error('No Facebook Page found. Connect with a Facebook user that has full control of the Page linked to the Instagram professional account.');
+    throw new Error(
+      "No Facebook Page found. Connect with a Facebook user that has full control of the Page linked to the Instagram professional account.",
+    );
   }
 
-  let selected: { page: MetaPage; instagram: MetaInstagramAccount } | null = null;
+  let selected: { page: MetaPage; instagram: MetaInstagramAccount } | null =
+    null;
   for (const page of pages) {
     try {
       const igRes = await fetch(
         `https://graph.facebook.com/v19.0/${page.id}` +
-        `?fields=instagram_business_account{id,username}&access_token=${page.access_token}`,
+          `?fields=instagram_business_account{id,username}&access_token=${page.access_token}`,
       );
       const igData = (await igRes.json()) as {
         instagram_business_account?: MetaInstagramAccount;
         error?: { message: string };
       };
       if (igData.error) {
-        console.warn(`[Auth] Meta IG lookup failed for page ${page.id}:`, igData.error.message);
+        console.warn(
+          `[Auth] Meta IG lookup failed for page ${page.id}:`,
+          igData.error.message,
+        );
         continue;
       }
       if (igData.instagram_business_account) {
@@ -139,54 +175,78 @@ async function persistStrictMetaConnections(brandId: number, userToken: string, 
         break;
       }
     } catch (err) {
-      console.warn(`[Auth] Meta IG lookup failed for page ${page.id}:`, (err as Error).message);
+      console.warn(
+        `[Auth] Meta IG lookup failed for page ${page.id}:`,
+        (err as Error).message,
+      );
     }
   }
 
   if (!selected) {
-    throw new Error('No linked Instagram professional account found. Link an Instagram Business or Creator account to a Facebook Page, then reconnect Meta.');
+    throw new Error(
+      "No linked Instagram professional account found. Link an Instagram Business or Creator account to a Facebook Page, then reconnect Meta.",
+    );
   }
 
   await upsertConnectedAccount(
-    brandId, 'facebook', selected.page.access_token, null, null,
-    selected.page.name, selected.page.id, 'pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata,business_management', platformUserId,
+    brandId,
+    "facebook",
+    selected.page.access_token,
+    null,
+    null,
+    selected.page.name,
+    selected.page.id,
+    "pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata,business_management",
+    platformUserId,
   );
 
   await upsertConnectedAccount(
-    brandId, 'instagram', selected.page.access_token, null, null,
-    selected.instagram.username, selected.instagram.id, 'instagram_basic,instagram_manage_comments,instagram_manage_messages,instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages,instagram_business_manage_insights,instagram_business_content_publish', platformUserId,
+    brandId,
+    "instagram",
+    selected.page.access_token,
+    null,
+    null,
+    selected.instagram.username,
+    selected.instagram.id,
+    "instagram_basic,instagram_manage_comments,instagram_manage_messages,instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages,instagram_business_manage_insights,instagram_business_content_publish",
+    platformUserId,
   );
 
   return selected.instagram.username;
 }
 
-export async function handleMetaCallback(req: Request, res: Response): Promise<void> {
+export async function handleMetaCallback(
+  req: Request,
+  res: Response,
+): Promise<void> {
   const { code, state } = req.query as Record<string, string>;
 
   try {
     const { brandId } = verifyOAuthState(state);
-    if (!code) throw new Error('Missing authorization code');
+    if (!code) throw new Error("Missing authorization code");
 
     // Exchange code for a short-lived token.
     const tokenRes = await fetch(
       `https://graph.facebook.com/v19.0/oauth/access_token` +
-      `?client_id=${process.env.META_APP_ID}&client_secret=${process.env.META_APP_SECRET}` +
-      `&redirect_uri=${encodeURIComponent(process.env.META_REDIRECT_URI ?? '')}&code=${encodeURIComponent(code)}`,
+        `?client_id=${process.env.META_APP_ID}&client_secret=${process.env.META_APP_SECRET}` +
+        `&redirect_uri=${encodeURIComponent(process.env.META_REDIRECT_URI ?? "")}&code=${encodeURIComponent(code)}`,
     );
     const tokenData = (await tokenRes.json()) as MetaTokenResponse;
     if (tokenData.error || !tokenData.access_token) {
-      throw new Error(tokenData.error?.message ?? 'Meta token exchange failed');
+      throw new Error(tokenData.error?.message ?? "Meta token exchange failed");
     }
 
     // Exchange for a long-lived token (~60 days).
     const llRes = await fetch(
       `https://graph.facebook.com/v19.0/oauth/access_token` +
-      `?grant_type=fb_exchange_token&client_id=${process.env.META_APP_ID}` +
-      `&client_secret=${process.env.META_APP_SECRET}&fb_exchange_token=${tokenData.access_token}`,
+        `?grant_type=fb_exchange_token&client_id=${process.env.META_APP_ID}` +
+        `&client_secret=${process.env.META_APP_SECRET}&fb_exchange_token=${tokenData.access_token}`,
     );
     const llData = (await llRes.json()) as MetaTokenResponse;
     if (llData.error || !llData.access_token) {
-      throw new Error(llData.error?.message ?? 'Meta long-lived token exchange failed');
+      throw new Error(
+        llData.error?.message ?? "Meta long-lived token exchange failed",
+      );
     }
 
     const meRes = await fetch(
@@ -194,63 +254,75 @@ export async function handleMetaCallback(req: Request, res: Response): Promise<v
     );
     const meData = (await meRes.json()) as MetaUserResponse;
     if (meData.error || !meData.id) {
-      throw new Error(meData.error?.message ?? 'Meta user lookup failed');
+      throw new Error(meData.error?.message ?? "Meta user lookup failed");
     }
 
-    const handle = await persistMetaConnections(brandId, llData.access_token, meData.id);
-    redirectSuccess(res, 'instagram', handle);
+    const handle = await persistMetaConnections(
+      brandId,
+      llData.access_token,
+      meData.id,
+    );
+    redirectSuccess(res, "instagram", handle);
   } catch (err) {
-    console.error('[Auth] Meta callback error:', (err as Error).message);
+    console.error("[Auth] Meta callback error:", (err as Error).message);
     redirectError(res, (err as Error).message);
   }
 }
 
 // ── X (TWITTER) — PKCE FLOW ───────────────────────────────────────────────────
-const X_SCOPE = process.env.X_SCOPES?.trim()
-  || 'tweet.read tweet.write users.read media.write offline.access';
+const X_SCOPE =
+  process.env.X_SCOPES?.trim() ||
+  "tweet.read tweet.write users.read media.write offline.access";
 
 export function getXAuthUrl(brandId: number): string {
   // PKCE with S256. The code verifier is carried in the signed `state`; X is a
   // confidential client, so the token exchange is additionally protected by the
   // client secret (HTTP Basic auth).
-  const codeVerifier = randomBytes(32).toString('base64url');
-  const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
+  const codeVerifier = randomBytes(32).toString("base64url");
+  const codeChallenge = createHash("sha256")
+    .update(codeVerifier)
+    .digest("base64url");
 
   const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: process.env.X_CLIENT_ID ?? '',
-    redirect_uri: process.env.X_REDIRECT_URI ?? '',
+    response_type: "code",
+    client_id: process.env.X_CLIENT_ID ?? "",
+    redirect_uri: process.env.X_REDIRECT_URI ?? "",
     scope: X_SCOPE,
     state: createOAuthState(brandId, { cv: codeVerifier }),
     code_challenge: codeChallenge,
-    code_challenge_method: 'S256',
+    code_challenge_method: "S256",
   });
   return `https://x.com/i/oauth2/authorize?${params.toString()}`;
 }
 
 function xBasicAuthHeader(): string {
-  return Buffer.from(`${process.env.X_CLIENT_ID}:${process.env.X_CLIENT_SECRET}`).toString('base64');
+  return Buffer.from(
+    `${process.env.X_CLIENT_ID}:${process.env.X_CLIENT_SECRET}`,
+  ).toString("base64");
 }
 
-export async function handleXCallback(req: Request, res: Response): Promise<void> {
+export async function handleXCallback(
+  req: Request,
+  res: Response,
+): Promise<void> {
   const { code, state } = req.query as Record<string, string>;
 
   try {
     const { brandId, data } = verifyOAuthState(state);
     const codeVerifier = data.cv;
-    if (!code || !codeVerifier) throw new Error('Invalid OAuth state');
+    if (!code || !codeVerifier) throw new Error("Invalid OAuth state");
 
-    const tokenRes = await fetch('https://api.x.com/2/oauth2/token', {
-      method: 'POST',
+    const tokenRes = await fetch("https://api.x.com/2/oauth2/token", {
+      method: "POST",
       headers: {
         Authorization: `Basic ${xBasicAuthHeader()}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
+        "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
         code,
-        grant_type: 'authorization_code',
-        client_id: process.env.X_CLIENT_ID ?? '',
-        redirect_uri: process.env.X_REDIRECT_URI ?? '',
+        grant_type: "authorization_code",
+        client_id: process.env.X_CLIENT_ID ?? "",
+        redirect_uri: process.env.X_REDIRECT_URI ?? "",
         code_verifier: codeVerifier,
       }).toString(),
     });
@@ -262,27 +334,34 @@ export async function handleXCallback(req: Request, res: Response): Promise<void
       error_description?: string;
     };
     if (tokenData.error || !tokenData.access_token) {
-      throw new Error(tokenData.error_description ?? tokenData.error ?? 'X token exchange failed');
+      throw new Error(
+        tokenData.error_description ??
+          tokenData.error ??
+          "X token exchange failed",
+      );
     }
 
-    const meRes = await fetch('https://api.x.com/2/users/me', {
+    const meRes = await fetch("https://api.x.com/2/users/me", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
-    const meData = (await meRes.json()) as { data?: { id: string; username: string } };
+    const meData = (await meRes.json()) as {
+      data?: { id: string; username: string };
+    };
 
     await upsertConnectedAccount(
-      brandId, 'x',
+      brandId,
+      "x",
       tokenData.access_token,
       tokenData.refresh_token ?? null,
       new Date(Date.now() + (tokenData.expires_in ?? 7200) * 1000),
-      meData.data?.username ?? 'x account',
-      meData.data?.id ?? '',
+      meData.data?.username ?? "x account",
+      meData.data?.id ?? "",
       X_SCOPE,
     );
 
-    redirectSuccess(res, 'x', meData.data?.username ?? 'x account');
+    redirectSuccess(res, "x", meData.data?.username ?? "x account");
   } catch (err) {
-    console.error('[Auth] X callback error:', (err as Error).message);
+    console.error("[Auth] X callback error:", (err as Error).message);
     redirectError(res, (err as Error).message);
   }
 }
@@ -290,14 +369,15 @@ export async function handleXCallback(req: Request, res: Response): Promise<void
 // ── TIKTOK ────────────────────────────────────────────────────────────────────
 // Scopes are deployment-specific (some require TikTok app review), so they are
 // overridable via TIKTOK_SCOPES.
-const TIKTOK_SCOPE = process.env.TIKTOK_SCOPES?.trim() || 'user.info.basic,video.list';
+const TIKTOK_SCOPE =
+  process.env.TIKTOK_SCOPES?.trim() || "user.info.basic,video.list";
 
 export function getTikTokAuthUrl(brandId: number): string {
   const params = new URLSearchParams({
-    client_key: process.env.TIKTOK_CLIENT_KEY ?? '',
-    redirect_uri: process.env.TIKTOK_REDIRECT_URI ?? '',
+    client_key: process.env.TIKTOK_CLIENT_KEY ?? "",
+    redirect_uri: process.env.TIKTOK_REDIRECT_URI ?? "",
     scope: TIKTOK_SCOPE,
-    response_type: 'code',
+    response_type: "code",
     state: createOAuthState(brandId),
   });
   return `https://www.tiktok.com/v2/auth/authorize/?${params.toString()}`;
@@ -313,55 +393,68 @@ type TikTokTokenResponse = {
   error_description?: string;
 };
 
-export async function handleTikTokCallback(req: Request, res: Response): Promise<void> {
+export async function handleTikTokCallback(
+  req: Request,
+  res: Response,
+): Promise<void> {
   const { code, state } = req.query as Record<string, string>;
 
   try {
     const { brandId } = verifyOAuthState(state);
-    if (!code) throw new Error('Missing authorization code');
+    if (!code) throw new Error("Missing authorization code");
 
-    const tokenRes = await fetch('https://open.tiktokapis.com/v2/oauth/token/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_key: process.env.TIKTOK_CLIENT_KEY ?? '',
-        client_secret: process.env.TIKTOK_CLIENT_SECRET ?? '',
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: process.env.TIKTOK_REDIRECT_URI ?? '',
-      }).toString(),
-    });
+    const tokenRes = await fetch(
+      "https://open.tiktokapis.com/v2/oauth/token/",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_key: process.env.TIKTOK_CLIENT_KEY ?? "",
+          client_secret: process.env.TIKTOK_CLIENT_SECRET ?? "",
+          code,
+          grant_type: "authorization_code",
+          redirect_uri: process.env.TIKTOK_REDIRECT_URI ?? "",
+        }).toString(),
+      },
+    );
     const tokenData = (await tokenRes.json()) as TikTokTokenResponse;
     if (tokenData.error || !tokenData.access_token) {
-      throw new Error(tokenData.error_description ?? tokenData.error ?? 'TikTok token exchange failed');
+      throw new Error(
+        tokenData.error_description ??
+          tokenData.error ??
+          "TikTok token exchange failed",
+      );
     }
 
     // Display name is best-effort — it requires the user.info.basic scope.
-    let handle = 'tiktok account';
+    let handle = "tiktok account";
     try {
       const meRes = await fetch(
-        'https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name',
+        "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name",
         { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
       );
-      const meData = (await meRes.json()) as { data?: { user?: { display_name?: string } } };
+      const meData = (await meRes.json()) as {
+        data?: { user?: { display_name?: string } };
+      };
       handle = meData.data?.user?.display_name ?? handle;
     } catch {
       /* user info is best-effort */
     }
 
     await upsertConnectedAccount(
-      brandId, 'tiktok',
+      brandId,
+      "tiktok",
       tokenData.access_token,
       tokenData.refresh_token ?? null,
       new Date(Date.now() + (tokenData.expires_in ?? 86400) * 1000),
       handle,
-      tokenData.open_id ?? '',
+      tokenData.open_id ?? "",
       tokenData.scope ?? TIKTOK_SCOPE,
     );
 
-    redirectSuccess(res, 'tiktok', handle);
+    redirectSuccess(res, "tiktok", handle);
   } catch (err) {
-    console.error('[Auth] TikTok callback error:', (err as Error).message);
+    console.error("[Auth] TikTok callback error:", (err as Error).message);
     redirectError(res, (err as Error).message);
   }
 }
@@ -369,28 +462,36 @@ export async function handleTikTokCallback(req: Request, res: Response): Promise
 // ── TOKEN REFRESH ─────────────────────────────────────────────────────────────
 const REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
 
-type RefreshedToken = { accessToken: string; refreshToken: string | null; expiresAt: Date | null };
+type RefreshedToken = {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: Date | null;
+};
 
 async function refreshPlatformToken(
   platform: Platform,
   refreshToken: string | null,
   currentToken: string,
 ): Promise<RefreshedToken | null> {
-  if (platform === 'x') {
+  if (platform === "x") {
     if (!refreshToken) return null;
-    const res = await fetch('https://api.x.com/2/oauth2/token', {
-      method: 'POST',
+    const res = await fetch("https://api.x.com/2/oauth2/token", {
+      method: "POST",
       headers: {
         Authorization: `Basic ${xBasicAuthHeader()}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
+        "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
-        grant_type: 'refresh_token',
+        grant_type: "refresh_token",
         refresh_token: refreshToken,
-        client_id: process.env.X_CLIENT_ID ?? '',
+        client_id: process.env.X_CLIENT_ID ?? "",
       }).toString(),
     });
-    const data = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
+    const data = (await res.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
     if (!data.access_token) return null;
     return {
       accessToken: data.access_token,
@@ -399,19 +500,23 @@ async function refreshPlatformToken(
     };
   }
 
-  if (platform === 'tiktok') {
+  if (platform === "tiktok") {
     if (!refreshToken) return null;
-    const res = await fetch('https://open.tiktokapis.com/v2/oauth/token/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_key: process.env.TIKTOK_CLIENT_KEY ?? '',
-        client_secret: process.env.TIKTOK_CLIENT_SECRET ?? '',
-        grant_type: 'refresh_token',
+        client_key: process.env.TIKTOK_CLIENT_KEY ?? "",
+        client_secret: process.env.TIKTOK_CLIENT_SECRET ?? "",
+        grant_type: "refresh_token",
         refresh_token: refreshToken,
       }).toString(),
     });
-    const data = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
+    const data = (await res.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
     if (!data.access_token) return null;
     return {
       accessToken: data.access_token,
@@ -420,19 +525,24 @@ async function refreshPlatformToken(
     };
   }
 
-  if (platform === 'instagram' || platform === 'facebook') {
+  if (platform === "instagram" || platform === "facebook") {
     // Meta has no refresh token — re-extend the long-lived token instead.
     const res = await fetch(
       `https://graph.facebook.com/v19.0/oauth/access_token?grant_type=fb_exchange_token` +
-      `&client_id=${process.env.META_APP_ID}&client_secret=${process.env.META_APP_SECRET}` +
-      `&fb_exchange_token=${currentToken}`,
+        `&client_id=${process.env.META_APP_ID}&client_secret=${process.env.META_APP_SECRET}` +
+        `&fb_exchange_token=${currentToken}`,
     );
-    const data = (await res.json()) as { access_token?: string; expires_in?: number };
+    const data = (await res.json()) as {
+      access_token?: string;
+      expires_in?: number;
+    };
     if (!data.access_token) return null;
     return {
       accessToken: data.access_token,
       refreshToken: null,
-      expiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000) : null,
+      expiresAt: data.expires_in
+        ? new Date(Date.now() + data.expires_in * 1000)
+        : null,
     };
   }
 
@@ -446,7 +556,7 @@ async function refreshPlatformToken(
  */
 export async function getValidToken(
   brandId: number,
-  platform: Platform
+  platform: Platform,
 ): Promise<string | null> {
   const account = await getConnectedAccountRecord(brandId, platform);
   if (!account) return null;
@@ -457,16 +567,26 @@ export async function getValidToken(
   }
 
   try {
-    const refreshed = await refreshPlatformToken(platform, account.refreshToken, account.accessToken);
+    const refreshed = await refreshPlatformToken(
+      platform,
+      account.refreshToken,
+      account.accessToken,
+    );
     if (refreshed) {
       await updateConnectedAccountTokens(
-        brandId, platform,
-        refreshed.accessToken, refreshed.refreshToken, refreshed.expiresAt,
+        brandId,
+        platform,
+        refreshed.accessToken,
+        refreshed.refreshToken,
+        refreshed.expiresAt,
       );
       return refreshed.accessToken;
     }
   } catch (err) {
-    console.error(`[Auth] ${platform} token refresh failed for brand ${brandId}:`, (err as Error).message);
+    console.error(
+      `[Auth] ${platform} token refresh failed for brand ${brandId}:`,
+      (err as Error).message,
+    );
   }
 
   // Refresh unavailable or failed — fall back to the stored token.
