@@ -81,20 +81,6 @@ const EMPTY_ALLOCATION: Record<Platform, number> = {
   tiktok: 0,
   x: 0,
 };
-const DEFAULT_CAMPAIGN_KEYWORDS = [
-  "Price",
-  "Link",
-  "How much",
-  "Interested",
-  "Order",
-  "Where",
-  "Available",
-  "DM me",
-  "Want this",
-  "Shop",
-  "How to get",
-  "Love this",
-];
 
 function blankDraft(): CampaignDraft {
   return {
@@ -107,7 +93,7 @@ function blankDraft(): CampaignDraft {
     postCaption: "",
     existingPosts: {},
     media: [],
-    keywords: ["Need this"],
+    keywords: [],
     tone: "Warm and friendly",
     maxPerHour: 10,
     maxPerDay: 50,
@@ -527,14 +513,7 @@ export function NewCampaignModal({
             )}
 
             <div className="flex flex-wrap gap-2">
-              {[
-                ...draft.keywords,
-                ...(draft.sourceMode === "existing"
-                  ? DEFAULT_CAMPAIGN_KEYWORDS.filter(
-                      (keyword) => !draft.keywords.includes(keyword),
-                    )
-                  : []),
-              ].map((keyword) => (
+              {draft.keywords.map((keyword) => (
                 <button
                   type="button"
                   key={keyword}

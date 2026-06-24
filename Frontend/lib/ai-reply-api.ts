@@ -7,6 +7,8 @@ export type AiReplyRequest = {
   message: string;
   platform: AiReplyPlatform;
   tone: string;
+  reply_format?: "short" | "helpful" | "question" | "conversion" | "de_escalation";
+  variation_seed?: string;
   campaign_context: {
     name?: string;
     objective: string;
