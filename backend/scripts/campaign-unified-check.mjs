@@ -52,7 +52,7 @@ assert.equal(selectLiveCampaign([
   },
 ], { platform: 'x', postId: 'post-1', text: 'hello', intent: 'inquiry' }), null);
 
-assert.equal(buildCampaignDeliveryJobId(4, 19, 'public_reply'), 'campaign:4:19:public_reply');
+assert.equal(buildCampaignDeliveryJobId(4, 19, 'public_reply'), 'campaign_4_19_public_reply');
 assert.equal(isPreviewFresh(new Date('2026-06-22T10:00:00.000Z'), new Date('2026-06-22T10:14:59.000Z')), true);
 assert.equal(isPreviewFresh(new Date('2026-06-22T10:00:00.000Z'), new Date('2026-06-22T10:15:01.000Z')), false);
 

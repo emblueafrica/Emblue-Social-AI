@@ -106,6 +106,7 @@ function mapApprovalRow(row: PendingApprovalRow, brandId: number): ApprovalQueue
 }
 
 type CampaignQueueDelivery = Awaited<ReturnType<typeof fetchCampaignQueueDeliveries>>[number];
+type CampaignReviewRow = Awaited<ReturnType<typeof fetchKeywordCampaignReviewRows>>[number];
 
 async function fetchCampaignQueueDeliveries(brandId: number) {
   return prisma.campaignDeliveryAttempt.findMany({
@@ -122,15 +123,19 @@ async function mapCampaignDeliveryRows(brandId: number, deliveries: CampaignQueu
   if (!deliveries.length) return [];
   const [engagers, campaigns] = await Promise.all([
     prisma.campaignPostEngager.findMany({ where: { engagerId: { in: deliveries.map(item => item.engagerId) } } }),
-    prisma.engageCampaign.findMany({ where: { brandId, campaignId: { in: deliveries.map(item => item.campaignId) } }, select: { campaignId: true, name: true } }),
+    prisma.engageCampaign.findMany({
+      where: { brandId, campaignId: { in: deliveries.map(item => item.campaignId) } },
+      select: { campaignId: true, name: true, mode: true, sourceMode: true },
+    }),
   ]);
   const engagerById = new Map(engagers.map(item => [String(item.engagerId), item]));
   const campaignById = new Map(campaigns.map(item => [String(item.campaignId), item]));
-  return deliveries.map(delivery => {
+  return deliveries.flatMap(delivery => {
     const engager = engagerById.get(String(delivery.engagerId));
     const campaign = campaignById.get(String(delivery.campaignId));
+    if (campaign?.mode === 'keyword' || campaign?.sourceMode === 'keyword' || engager?.source === 'keyword') return [];
     const manual = delivery.status === 'manual_action_required';
-    return {
+    return [{
       queue_key: `campaign:${Number(delivery.engagerId)}:${delivery.channel}`,
       brand_id: brandId,
       campaign_id: Number(delivery.campaignId),
@@ -153,8 +158,56 @@ async function mapCampaignDeliveryRows(brandId: number, deliveries: CampaignQueu
         post_id: engager?.postId ?? null,
         tweet_id: engager?.platform === 'x' ? engager?.commentId ?? null : null,
       },
-    } satisfies ApprovalQueueItem;
+    } satisfies ApprovalQueueItem];
   });
+}
+
+async function fetchKeywordCampaignReviewRows(brandId: number) {
+  return prisma.campaignPostEngager.findMany({
+    where: {
+      brandId,
+      source: 'keyword',
+      status: { in: ['needs_review', 'manual_action_required', 'failed', 'rate_limited', 'setup_required'] },
+    },
+    orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+    take: 100,
+  });
+}
+
+async function mapKeywordCampaignRows(brandId: number, rows: CampaignReviewRow[]): Promise<ApprovalQueueItem[]> {
+  if (!rows.length) return [];
+  const campaignIds = rows
+    .map(item => item.campaignId)
+    .filter((value): value is string => /^\d+$/.test(value));
+  const campaigns = campaignIds.length
+    ? await prisma.engageCampaign.findMany({
+        where: { brandId, campaignId: { in: campaignIds.map(value => BigInt(value)) } },
+        select: { campaignId: true, name: true },
+      })
+    : [];
+  const campaignById = new Map(campaigns.map(item => [String(item.campaignId), item.name]));
+  return rows
+    .filter(item => /^\d+$/.test(item.campaignId))
+    .map(item => ({
+      queue_key: `campaign:${Number(item.engagerId)}:public_reply`,
+      brand_id: brandId,
+      campaign_id: Number(item.campaignId),
+      campaign_name: campaignById.get(item.campaignId) ?? 'Keyword Campaign',
+      source: 'campaign' as const,
+      channel: 'public_reply' as const,
+      status: item.status,
+      platform: item.platform as Platform,
+      author: item.authorHandle ?? item.platformAuthorId ?? '',
+      original: item.originalText ?? '',
+      reply: item.replyText ?? '',
+      delivery_error: item.deliveryError,
+      meta: {
+        author_id: item.platformAuthorId ?? item.authorId,
+        comment_id: item.commentId,
+        post_id: item.postId,
+        tweet_id: item.platform === 'x' ? item.commentId : null,
+      },
+    } satisfies ApprovalQueueItem));
 }
 
 async function fetchUnifiedApprovalItems(brandId: number): Promise<ApprovalQueueItem[]> {
@@ -162,7 +215,7 @@ async function fetchUnifiedApprovalItems(brandId: number): Promise<ApprovalQueue
     fetchPendingApprovalRows(brandId),
     fetchCampaignQueueDeliveries(brandId),
     prisma.campaignPostEngager.findMany({
-      where: { brandId, status: { in: ['needs_review', 'queued_for_approval'] } },
+      where: { brandId, source: { not: 'keyword' }, status: { in: ['needs_review', 'queued_for_approval'] } },
       orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
       take: 100,
     }),
@@ -355,12 +408,12 @@ router.get('/reply-queue/:brand_id', requireBrandAccess, requireToolAccess('tool
   const brandId = getRequiredBrandId(req.params['brand_id']);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
   try {
-    const queue = (await fetchPendingApprovalRows(brandId)).map(row => mapApprovalRow(row, brandId));
+    const queue = await mapKeywordCampaignRows(brandId, await fetchKeywordCampaignReviewRows(brandId));
     res.json({
       queue,
       summary: {
         queue: queue.length,
-        manual_review: queue.filter(item => item.delivery_error || item.manual_copy_required).length,
+        manual_review: queue.filter(item => item.status === 'needs_review' || item.delivery_error || item.manual_copy_required).length,
         generated_drafts: queue.filter(item => Boolean(item.reply)).length,
         active_platforms: new Set(queue.map(item => item.platform)).size,
       },

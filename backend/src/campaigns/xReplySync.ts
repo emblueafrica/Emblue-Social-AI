@@ -4,7 +4,6 @@ import { getValidToken } from '../auth/platformAuth';
 import { getConnectedAccountRecord } from '../db/queries';
 import { fetchXPostEngagers } from '../stream/engageEngagers';
 import { fillVariables } from '../stream/engageEngagers';
-import { enqueueForApproval } from '../stream/eventQueue';
 import { publishReply } from '../stream/publisher';
 import { eligibleForCampaign } from './lifecycle';
 import { CampaignConfig } from '../types';
@@ -244,22 +243,16 @@ export async function syncXRepliesForPost(brandId: number, tweetId: string, conf
         });
         await prisma.campaignPostEngager.update({
           where: { engagerId: campaignEngager.engagerId },
-          data: { replyText: draft.text, replyConfidence: draft.confidence, updatedAt: new Date() },
-        });
-        await enqueueForApproval({
-          brand_id: brandId,
-          platform: 'x',
-          author: engager.author_handle,
-          original: engager.text,
-          reply: draft.text,
-          delivery_error: 'Reply did not match campaign keywords, so it was routed to the AI Reply Engine.',
-          meta: {
-            author_id: engager.author_id,
-            tweet_id: replyTweetId,
-            comment_id: replyTweetId,
-            post_id: tweetId,
+          data: {
+            status: 'needs_review',
+            replyText: draft.text,
+            replyConfidence: draft.confidence,
+            deliveryError: 'Reply did not match campaign keywords. Review manually in Approval Queue.',
+            processedAt: new Date(),
+            updatedAt: new Date(),
           },
         });
+        queued += 1;
       }
       skipped += 1;
       continue;

@@ -8,9 +8,6 @@ import { buildCampaignReplyDraft } from '../stream/engageEngagers';
 import { broadcastToClients } from '../stream/eventQueue';
 import { Intent, Platform } from '../types';
 import { evaluateKeywordCampaignEvent } from './lifecycle';
-import { prepareCampaignDelivery, recordCampaignDeliveryUnavailable } from './deliveryWorker';
-import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
-import { deliveryChannelsForReplyMode } from './unified';
 
 export type KeywordCampaignSyncResult = {
   checked: number;
@@ -159,46 +156,13 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           where: { engagerId: engagement.engagerId },
           data: { replyText: draft.reply, replyConfidence: draft.confidence, updatedAt: new Date() },
         });
-        if (initialStatus === 'needs_review' || draft.confidence < (campaign.autoFireThreshold ?? 75)) {
-          await prisma.campaignPostEngager.update({
-            where: { engagerId: engagement.engagerId },
-            data: { status: 'needs_review', processedAt: new Date(), updatedAt: new Date() },
-          });
-          totals.review += 1;
-          platformSummary.review += 1;
-          continue;
-        }
-        if (!isBullEnabled()) {
-          for (const channel of deliveryChannelsForReplyMode(campaign.replyMode)) {
-            await recordCampaignDeliveryUnavailable({
-              brand_id: brandId,
-              campaign_id: campaignId,
-              engager_id: Number(engagement.engagerId),
-              channel,
-            }, 'Campaign delivery queue unavailable.');
-          }
-          await prisma.campaignPostEngager.update({
-            where: { engagerId: engagement.engagerId },
-            data: { status: 'setup_required', deliveryError: 'Campaign delivery queue unavailable.', updatedAt: new Date() },
-          });
-          totals.manual += 1;
-          platformSummary.manual += 1;
-          continue;
-        }
-
-        const delay = Math.max(0, platformSummary.new - 1) * campaign.spacingMinutes * 60_000;
-        for (const channel of deliveryChannelsForReplyMode(campaign.replyMode)) {
-          const data = { brand_id: brandId, campaign_id: campaignId, engager_id: Number(engagement.engagerId), channel } as const;
-          const scheduledAt = new Date(Date.now() + delay);
-          await prepareCampaignDelivery(data, scheduledAt);
-          await enqueueCampaignDelivery(data, delay);
-        }
+        // Keyword campaign matches are reviewed in AI Reply Engine before any platform action is sent.
         await prisma.campaignPostEngager.update({
           where: { engagerId: engagement.engagerId },
-          data: { status: 'queued', updatedAt: new Date() },
+          data: { status: 'needs_review', processedAt: new Date(), updatedAt: new Date() },
         });
-        totals.queued += 1;
-        platformSummary.queued += 1;
+        totals.review += 1;
+        platformSummary.review += 1;
       }
       totals.platforms.push(platformSummary);
     }
