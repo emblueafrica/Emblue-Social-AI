@@ -5,7 +5,7 @@ import { KeywordSearchResult, NormalizedSearchItem } from './types';
 const ACTOR_IDS: Record<Platform, string | null> = {
   instagram: 'apify/instagram-search-scraper',
   facebook: 'apify/facebook-posts-scraper',
-  x: 'quacker/twitter-scraper',
+  x: process.env.APIFY_X_ACTOR_ID?.trim() || 'apidojo/tweet-scraper',
   tiktok: 'clockworks/tiktok-scraper',
   youtube: 'streamers/youtube-scraper',
   reddit: 'trudax/reddit-scraper',
@@ -54,7 +54,18 @@ function nestedOwnerId(item: Record<string, unknown>): unknown {
     : null;
 }
 
+function nestedRecord(item: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = item[key];
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 function normalizeApifyItem(item: Record<string, unknown>, platform: Platform, matchedKeyword: string, parent?: Record<string, unknown>): NormalizedSearchItem | null {
+  const author = nestedRecord(item, 'author');
+  const user = nestedRecord(item, 'user');
+  const publicMetrics = nestedRecord(item, 'public_metrics');
+  const authorFromParent = parent ? nestedRecord(parent, 'author') : {};
   const text = asString(item['text'] ?? item['content'] ?? item['body'] ?? item['caption'] ?? item['message'] ?? item['commentText'] ?? item['title']);
   if (!text) return null;
 
@@ -62,14 +73,39 @@ function normalizeApifyItem(item: Record<string, unknown>, platform: Platform, m
     platform,
     matchedKeyword,
     text: text.slice(0, 4000),
-    authorHandle: asString(item['username'] ?? item['ownerUsername'] ?? item['author'] ?? item['authorUsername'] ?? item['authorName'] ?? item['displayName'] ?? item['channelName'] ?? parent?.['ownerUsername']),
-    authorIdExt: asString(item['authorId'] ?? item['userId'] ?? item['ownerId'] ?? nestedOwnerId(item) ?? item['channelId'] ?? item['id']),
+    authorHandle: asString(
+      item['username'] ??
+      item['ownerUsername'] ??
+      item['authorUsername'] ??
+      item['authorName'] ??
+      item['displayName'] ??
+      item['channelName'] ??
+      author['userName'] ??
+      author['username'] ??
+      author['name'] ??
+      user['username'] ??
+      user['userName'] ??
+      parent?.['ownerUsername'] ??
+      authorFromParent['userName'] ??
+      authorFromParent['username'],
+    ),
+    authorIdExt: asString(
+      item['authorId'] ??
+      item['userId'] ??
+      item['ownerId'] ??
+      nestedOwnerId(item) ??
+      item['channelId'] ??
+      author['id'] ??
+      author['rest_id'] ??
+      user['id'] ??
+      item['id'],
+    ),
     url: asString(item['url'] ?? item['postUrl'] ?? item['tweetUrl'] ?? item['videoUrl'] ?? item['permalink'] ?? parent?.['url']),
     postedAt: asDate(item['timestamp'] ?? item['createdAt'] ?? item['created_at'] ?? item['date'] ?? item['publishedAt'] ?? item['created_time']),
-    likes: asNumber(item['likes'] ?? item['likeCount'] ?? item['likesCount'] ?? item['upVotes']),
-    repliesCount: asNumber(item['replies'] ?? item['replyCount'] ?? item['repliesCount'] ?? item['commentsCount'] ?? item['numComments']),
-    shares: asNumber(item['shares'] ?? item['shareCount'] ?? item['retweets'] ?? item['retweetCount']),
-    views: asNumber(item['views'] ?? item['viewCount'] ?? item['viewsCount'] ?? item['playCount'] ?? item['videoViewCount']),
+    likes: asNumber(item['likes'] ?? item['likeCount'] ?? item['likesCount'] ?? publicMetrics['like_count'] ?? item['upVotes']),
+    repliesCount: asNumber(item['replies'] ?? item['replyCount'] ?? item['repliesCount'] ?? publicMetrics['reply_count'] ?? item['commentsCount'] ?? item['numComments']),
+    shares: asNumber(item['shares'] ?? item['shareCount'] ?? item['retweets'] ?? item['retweetCount'] ?? publicMetrics['retweet_count']),
+    views: asNumber(item['views'] ?? item['viewCount'] ?? item['viewsCount'] ?? publicMetrics['impression_count'] ?? item['playCount'] ?? item['videoViewCount']),
     raw: parent ? { ...item, parentPost: parent } : item,
   };
 }
@@ -183,7 +219,16 @@ async function runActorForKeyword(
   const maxItems = input.maxItems ?? 100;
 
   try {
-    const run = await client.actor(actorId).call({
+    const actorInput = platform === 'x'
+      ? {
+          searchTerms: [input.keyword],
+          maxItems,
+          sort: 'Latest',
+          includeSearchTerms: false,
+          start: dateOnly(input.dateFrom),
+          end: dateOnly(input.dateTo),
+        }
+      : {
       query: input.keyword,
       keyword: input.keyword,
       search: input.keyword,
@@ -195,10 +240,15 @@ async function runActorForKeyword(
       until: dateOnly(input.dateTo),
       startDate: dateOnly(input.dateFrom),
       endDate: dateOnly(input.dateTo),
-    });
+        };
+    const run = await client.actor(actorId).call(actorInput);
 
     const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: maxItems });
     const normalized = items.flatMap(item => normalizeApifyItems(item as Record<string, unknown>, platform, input.keyword));
+    const statusMessage = asString((run as { statusMessage?: unknown }).statusMessage);
+    if (platform === 'x' && !normalized.length && statusMessage?.toLowerCase().includes('subscribe to a paid plan')) {
+      return { items: [], errors: [`x:${input.keyword}: ${statusMessage.replace(/\s+/g, ' ')}`] };
+    }
 
     return { items: normalized, errors: [] };
   } catch (err) {
