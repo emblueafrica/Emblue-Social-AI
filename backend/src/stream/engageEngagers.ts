@@ -627,46 +627,53 @@ export async function fetchTikTokPostEngagers(videoId: string, token: string | n
 }
 
 export async function fetchXPostEngagers(tweetId: string, token: string | null | undefined): Promise<Engager[]> {
-  if (!token) return [];
+  const bearerToken = token?.trim();
+  if (!bearerToken) return [];
 
-  const params = new URLSearchParams({
-    query: `conversation_id:${tweetId}`,
-    'tweet.fields': 'author_id,created_at,conversation_id',
-    expansions: 'author_id',
-    'user.fields': 'username,name',
-    max_results: '100',
-  });
+  const engagers: Engager[] = [];
+  const users = new Map<string, { id: string; username?: string; name?: string }>();
+  let nextToken: string | undefined;
 
-  const r = await fetch(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const d = await r.json() as {
-    data?: { id: string; text: string; author_id: string; created_at?: string }[];
-    includes?: { users?: { id: string; username?: string; name?: string }[] };
-    errors?: { message?: string; detail?: string }[];
-    title?: string;
-    detail?: string;
-  };
-  if (!r.ok || d.errors) {
-    const message = d.errors?.[0]?.message ?? d.errors?.[0]?.detail ?? d.detail ?? d.title ?? `X search ${r.status}`;
-    if (r.status === 401) {
-      throw new Error(`X authorization failed. Reconnect X and confirm the app has tweet.read, tweet.write, users.read and offline.access scopes. ${message}`);
-    }
-    if (r.status === 403) {
-      throw new Error(`X recent search is not available for this token or API plan. Enable the required X API access for post URL campaigns, or use manual campaign input. ${message}`);
-    }
-    if (r.status === 429) {
-      throw new Error(`X recent search rate limit reached. Retry after the X API window resets. ${message}`);
-    }
-    throw new Error(message);
-  }
+  do {
+    const params = new URLSearchParams({
+      query: `conversation_id:${tweetId}`,
+      'tweet.fields': 'author_id,created_at,conversation_id',
+      expansions: 'author_id',
+      'user.fields': 'username,name',
+      max_results: '100',
+    });
+    if (nextToken) params.set('next_token', nextToken);
 
-  const users = new Map((d.includes?.users ?? []).map(user => [user.id, user]));
-  return (d.data ?? [])
-    .filter(tweet => tweet.id !== tweetId)
-    .map(tweet => {
+    const r = await fetch(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${bearerToken}` },
+    });
+    const d = await r.json() as {
+      data?: { id: string; text: string; author_id: string; created_at?: string }[];
+      includes?: { users?: { id: string; username?: string; name?: string }[] };
+      errors?: { message?: string; detail?: string }[];
+      meta?: { next_token?: string };
+      title?: string;
+      detail?: string;
+    };
+    if (!r.ok || d.errors) {
+      const message = d.errors?.[0]?.message ?? d.errors?.[0]?.detail ?? d.detail ?? d.title ?? `X search ${r.status}`;
+      if (r.status === 401) {
+        throw new Error(`X authorization failed. Reconnect X and confirm the app has tweet.read, tweet.write, users.read and offline.access scopes. ${message}`);
+      }
+      if (r.status === 403) {
+        throw new Error(`X recent search is not available for this token or API plan. Enable the required X API access for post URL campaigns, or use manual campaign input. ${message}`);
+      }
+      if (r.status === 429) {
+        throw new Error(`X recent search rate limit reached. Retry after the X API window resets. ${message}`);
+      }
+      throw new Error(message);
+    }
+
+    for (const user of d.includes?.users ?? []) users.set(user.id, user);
+    for (const tweet of d.data ?? []) {
+      if (tweet.id === tweetId) continue;
       const user = users.get(tweet.author_id);
-      return {
+      engagers.push({
         platform: 'x' as Platform,
         action: 'commented' as const,
         author_id: tweet.author_id,
@@ -675,8 +682,12 @@ export async function fetchXPostEngagers(tweetId: string, token: string | null |
         timestamp: tweet.created_at,
         raw_comment_id: tweet.id,
         raw_tweet_id: tweet.id,
-      };
-    });
+      });
+    }
+    nextToken = d.meta?.next_token;
+  } while (nextToken && engagers.length < 1000);
+
+  return engagers;
 }
 
 export function extractPostId(platform: Platform, url: string): string | null {
