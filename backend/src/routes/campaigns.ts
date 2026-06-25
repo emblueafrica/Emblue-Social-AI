@@ -103,12 +103,19 @@ function keywordAllocation(platforms: CampaignPlatform[]): Record<CampaignPlatfo
   return allocation;
 }
 
-async function campaignCapabilities(brandId: number, platforms: CampaignPlatform[]) {
+type CampaignCapabilityOptions = {
+  publicReplyEnabled?: boolean;
+  directMessageEnabled?: boolean;
+};
+
+async function campaignCapabilities(brandId: number, platforms: CampaignPlatform[], options: CampaignCapabilityOptions = {}) {
   const accounts = await Promise.all(platforms.map(platform => getConnectedAccountRecord(brandId, platform)));
   return platforms.map((platform, index) => resolveCampaignCapability({
     platform,
     connected: Boolean(accounts[index]),
     scopes: accounts[index]?.scope,
+    publicReplyEnabled: options.publicReplyEnabled,
+    directMessageEnabled: options.directMessageEnabled,
     discoveryConfigured: platform === 'x'
       ? Boolean(process.env.X_BEARER_TOKEN?.trim() || process.env.APIFY_API_TOKEN?.trim())
       : Boolean(process.env.APIFY_API_TOKEN?.trim()),
@@ -314,7 +321,15 @@ router.post('/keyword/preflight', requireBrandRole('client_owner'), requireBrand
     ? Array.from(new Set(req.body.platforms)).filter((value): value is CampaignPlatform => CAMPAIGN_PLATFORMS.includes(value as CampaignPlatform))
     : [];
   if (!brandId || !platforms.length) { sendValidationError(res, 'brand_id and at least one supported platform are required'); return; }
-  try { res.json({ ok: true, capabilities: await campaignCapabilities(brandId, platforms) }); }
+  try {
+    res.json({
+      ok: true,
+      capabilities: await campaignCapabilities(brandId, platforms, {
+        publicReplyEnabled: req.body?.public_reply_enabled !== false,
+        directMessageEnabled: req.body?.direct_message_enabled !== false,
+      }),
+    });
+  }
   catch (err) { sendServerError(res, 'Keyword campaign preflight failed', err); }
 });
 
@@ -408,7 +423,14 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
       });
       return saved;
     });
-    res.status(campaignId ? 200 : 201).json({ ok: true, campaign: mapEngageCampaign(campaign), capabilities: await campaignCapabilities(brandId, platforms) });
+    res.status(campaignId ? 200 : 201).json({
+      ok: true,
+      campaign: mapEngageCampaign(campaign),
+      capabilities: await campaignCapabilities(brandId, platforms, {
+        publicReplyEnabled,
+        directMessageEnabled,
+      }),
+    });
   } catch (err) { sendServerError(res, 'Keyword campaign save failed', err); }
 });
 

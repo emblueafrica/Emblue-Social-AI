@@ -366,7 +366,12 @@ export default function EngageTheEngager() {
         }
       }
       if (campaign.sourceMode === "keyword") {
-        const preflight = status === "active" ? await preflightKeywordCampaign(activeBrandId, campaign.platforms) : null;
+        const preflight = status === "active"
+          ? await preflightKeywordCampaign(activeBrandId, campaign.platforms, {
+              public_reply_enabled: campaign.publicReplyEnabled,
+              direct_message_enabled: campaign.directMessageEnabled,
+            })
+          : null;
         const saved = await saveKeywordCampaignMutation.mutateAsync({
           brand_id: activeBrandId,
           ...(editingId && editingId > 0 ? { campaign_id: editingId } : {}),
