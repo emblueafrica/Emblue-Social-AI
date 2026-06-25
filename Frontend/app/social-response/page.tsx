@@ -197,7 +197,7 @@ export default function SocialResponse() {
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={scoreTrend}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="oklch(0.92 0.01 265)" />
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e4e6ee" />
                       <XAxis dataKey="d" axisLine={false} tickLine={false} fontSize={12} />
                       <YAxis axisLine={false} tickLine={false} fontSize={12} domain={[0, 100]} />
                       <Tooltip />
@@ -217,7 +217,7 @@ export default function SocialResponse() {
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={messageVolume} barCategoryGap="20%">
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="oklch(0.92 0.01 265)" />
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e4e6ee" />
                       <XAxis dataKey="d" axisLine={false} tickLine={false} fontSize={12} />
                       <YAxis axisLine={false} tickLine={false} fontSize={12} tickFormatter={(value) => `${value / 1000}k`} />
                       <Tooltip />
@@ -261,7 +261,7 @@ export default function SocialResponse() {
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={sentimentData} barCategoryGap="20%">
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="oklch(0.92 0.01 265)" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e4e6ee" />
                     <XAxis dataKey="d" axisLine={false} tickLine={false} fontSize={12} />
                     <YAxis axisLine={false} tickLine={false} fontSize={12} />
                     <Tooltip />

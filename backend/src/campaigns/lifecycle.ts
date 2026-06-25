@@ -1,4 +1,5 @@
 import { Intent, Platform } from '../types';
+import { evaluateStrictKeywordMatch, validateKeywordGuardrails } from './keywordGuardrails';
 
 export const CAMPAIGN_PLATFORMS = ['instagram', 'facebook', 'tiktok', 'x'] as const;
 export type CampaignPlatform = typeof CAMPAIGN_PLATFORMS[number];
@@ -99,6 +100,8 @@ export function validateKeywordCampaignInput(input: KeywordCampaignInput): { ok:
   const keywords = Array.from(new Set(input.keywords.map(keyword => keyword.trim()).filter(Boolean)));
   if (!keywords.length || keywords.length > 20) return { ok: false, message: 'Provide between 1 and 20 keywords.' };
   if (keywords.some(keyword => keyword.length > 100)) return { ok: false, message: 'Each keyword must be 100 characters or fewer.' };
+  const guardrails = validateKeywordGuardrails(keywords);
+  if (!guardrails.ok) return { ok: false, message: guardrails.message };
   const platforms = Array.from(new Set(input.platforms));
   if (!platforms.length || platforms.some(platform => !CAMPAIGN_PLATFORMS.includes(platform as CampaignPlatform))) {
     return { ok: false, message: 'Select at least one supported campaign platform.' };
@@ -198,8 +201,5 @@ function textMatchesIntentFallback(text: string, intents: Intent[]): boolean {
 
 export function eligibleForCampaign(event: { kind: CampaignEventKind; text?: string | null }, keywords: string[]): boolean {
   if (event.kind === 'like' || event.kind === 'repost') return true;
-  const normalizedKeywords = keywords.map(keyword => keyword.trim().toLowerCase()).filter(Boolean);
-  if (!normalizedKeywords.length) return true;
-  const text = (event.text ?? '').toLowerCase();
-  return normalizedKeywords.some(keyword => text.includes(keyword));
+  return evaluateStrictKeywordMatch(event.text ?? '', keywords).ok;
 }

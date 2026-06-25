@@ -271,7 +271,7 @@ export async function runListeningSearch(runId: number): Promise<void> {
       platforms,
       dateFrom: run.dateFrom,
       dateTo: run.dateTo,
-      maxItemsPerPlatform: run.mode === 'historical' ? 300 : 75,
+      maxItemsPerPlatform: campaignOwned ? 10 : run.mode === 'historical' ? 300 : 75,
     });
 
     const rawItems = dedupeItems(keywordResult.items);
@@ -305,7 +305,12 @@ export async function runListeningSearch(runId: number): Promise<void> {
         peakCount: volume.peakCount,
         insightsSummary,
         completedAt: new Date(),
-        errorMsg: keywordResult.errors.length ? keywordResult.errors.join('; ') : null,
+        errorMsg: [
+          ...keywordResult.errors,
+          ...(keywordResult.rejected?.length
+            ? [`Keyword guardrails rejected ${keywordResult.rejected.length} result(s): ${keywordResult.rejected.slice(0, 5).map(item => `${item.platform}:${item.keyword}:${item.reason}`).join(', ')}`]
+            : []),
+        ].join('; ') || null,
       },
     });
 

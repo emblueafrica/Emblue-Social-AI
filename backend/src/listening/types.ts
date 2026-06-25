@@ -42,6 +42,13 @@ export interface ClassifiedSearchItem extends NormalizedSearchItem {
 export interface KeywordSearchResult {
   items: NormalizedSearchItem[];
   errors: string[];
+  rejected?: Array<{
+    platform: Platform;
+    keyword: string;
+    reason: string;
+    text: string;
+    url: string | null;
+  }>;
 }
 
 export interface VolumeBucket {

@@ -974,7 +974,7 @@ export function saveKeywordCampaign(payload: KeywordCampaignPayload) {
 export function preflightKeywordCampaign(
   brandId: number,
   platforms: Platform[],
-  options: { public_reply_enabled?: boolean; direct_message_enabled?: boolean } = {},
+  options: { keywords?: string[]; public_reply_enabled?: boolean; direct_message_enabled?: boolean } = {},
 ) {
   return apiRequest<{ ok: true; capabilities: CampaignCapability[] }>("/api/v1/campaigns/keyword/preflight", {
     method: "POST",

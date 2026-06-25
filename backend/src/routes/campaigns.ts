@@ -16,6 +16,7 @@ import { fetchPostUrlCampaignPreview, runPostUrlCampaignPreview } from '../campa
 import { prepareCampaignDelivery } from '../campaigns/deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 import { withSchedulerLease } from '../automation/schedulerLease';
+import { normalizeCampaignKeyword, validateKeywordGuardrails } from '../campaigns/keywordGuardrails';
 import { CampaignConfig, PostUrlItem, Credentials, Intent, Platform } from '../types';
 import {
   CAMPAIGN_PLATFORMS,
@@ -317,10 +318,17 @@ router.post('/activity/:engager_id/dismiss', requireBrandRole('client_owner'), r
 // ── CREATE / UPDATE CAMPAIGN ──────────────────────────────────────────────────
 router.post('/keyword/preflight', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.body?.brand_id);
+  const keywords: string[] = Array.isArray(req.body?.keywords)
+    ? Array.from(new Set<string>(req.body.keywords.map((value: unknown) => normalizeCampaignKeyword(String(value))).filter(Boolean)))
+    : [];
   const platforms = Array.isArray(req.body?.platforms)
     ? Array.from(new Set(req.body.platforms)).filter((value): value is CampaignPlatform => CAMPAIGN_PLATFORMS.includes(value as CampaignPlatform))
     : [];
   if (!brandId || !platforms.length) { sendValidationError(res, 'brand_id and at least one supported platform are required'); return; }
+  if (keywords.length) {
+    const guardrails = validateKeywordGuardrails(keywords);
+    if (!guardrails.ok) { sendValidationError(res, guardrails.message ?? 'Keyword campaign is too broad'); return; }
+  }
   try {
     res.json({
       ok: true,
@@ -344,7 +352,7 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
   const brandId = getRequiredBrandId(body.brand_id);
   const campaignId = body.campaign_id === undefined ? null : getRequiredBrandId(body.campaign_id);
   const name = typeof body.name === 'string' ? body.name.trim() : '';
-  const keywords = Array.isArray(body.keywords) ? Array.from(new Set(body.keywords.map(value => String(value).trim()).filter(Boolean))) : [];
+  const keywords = Array.isArray(body.keywords) ? Array.from(new Set(body.keywords.map(value => normalizeCampaignKeyword(String(value))).filter(Boolean))) : [];
   const platforms = Array.isArray(body.platforms)
     ? Array.from(new Set(body.platforms)).filter((value): value is CampaignPlatform => CAMPAIGN_PLATFORMS.includes(value as CampaignPlatform))
     : [];
