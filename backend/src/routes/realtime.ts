@@ -9,8 +9,7 @@ import { getRequiredBrandId, isHttpUrl, requireNonEmptyString, sendServerError, 
 import { ApprovalQueueItem, Platform } from '../types';
 import { CampaignDeliveryChannel, verifyMetaWebhookSignature } from '../campaigns/unified';
 import { processLiveEngagementEvent, resolveBrandForPlatformAccount } from '../campaigns/liveEngagement';
-import { prepareCampaignDelivery, recordCampaignDeliveryUnavailable } from '../campaigns/deliveryWorker';
-import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
+import { prepareCampaignDelivery, processCampaignDeliveryJob } from '../campaigns/deliveryWorker';
 import { validateMediaSet } from '../campaigns/lifecycle';
 import { uploadCampaignMediaBuffer } from '../utils/cloudinary';
 
@@ -427,8 +426,18 @@ async function handleCampaignQueueAction(
     await prisma.campaignPostEngager.update({ where: { engagerId: engager.engagerId }, data: { replyText, deliveryError: null, updatedAt: new Date() } });
   }
   const existingDelivery = await prisma.campaignDeliveryAttempt.findFirst({ where: { brandId, engagerId: engager.engagerId, channel } });
-  if (existingDelivery && ['sent', 'queued', 'processing'].includes(existingDelivery.status)) {
+  if (existingDelivery?.status === 'sent') {
     return { item: null, publish: { success: true, platform: engager.platform, message_id: existingDelivery.externalMessageId ?? undefined } };
+  }
+  if (existingDelivery && ['queued', 'processing'].includes(existingDelivery.status)) {
+    return {
+      item: await getCampaignQueueItem(brandId, engagerId, channel),
+      publish: {
+        success: false,
+        platform: engager.platform,
+        error: 'This reply is already queued for delivery. Wait for the delivery result or retry after it fails.',
+      },
+    };
   }
 
   if (action === 'mark-sent') {
@@ -468,23 +477,27 @@ async function handleCampaignQueueAction(
     image_url: mediaPayload.imageUrl,
     media: mediaPayload.media,
   };
-  if (!isBullEnabled()) {
-    await recordCampaignDeliveryUnavailable(data, 'Campaign delivery queue unavailable. Configure REDIS_URL before sending campaign activity.');
-    await updateCampaignEngagerFromDeliveries(brandId, engager.engagerId, campaignId);
-    throw new Error('Campaign delivery queue unavailable. Configure REDIS_URL before sending campaign activity.');
-  }
   try {
     await prepareCampaignDelivery(data, new Date());
-    const queued = await enqueueCampaignDelivery(data, 0);
-    if (!queued) throw new Error('Campaign delivery queue did not accept the job.');
+    const result = await processCampaignDeliveryJob(data);
+    const current = await getCampaignQueueItem(brandId, engagerId, channel);
+    const success = result.status === 'sent' || result.status === 'partial';
+    return {
+      item: current,
+      publish: {
+        success,
+        platform: engager.platform,
+        error: success ? undefined : result.error ?? `Campaign delivery finished with status ${result.status}.`,
+      },
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Campaign delivery queue failed.';
-    await recordCampaignDeliveryUnavailable(data, message);
     await updateCampaignEngagerFromDeliveries(brandId, engager.engagerId, campaignId);
-    throw new Error(`Campaign delivery queue unavailable. ${message}`);
+    return {
+      item: await getCampaignQueueItem(brandId, engagerId, channel),
+      publish: { success: false, platform: engager.platform, error: message },
+    };
   }
-  await prisma.campaignPostEngager.update({ where: { engagerId: engager.engagerId }, data: { status: 'queued', deliveryError: null, updatedAt: new Date() } });
-  return { item: await getCampaignQueueItem(brandId, engagerId, channel), publish: { success: true, platform: engager.platform } };
 }
 
 router.get('/queue/:brand_id', requireBrandAccess, requireToolAccess('tool_5'), async (req: Request, res: Response) => {
