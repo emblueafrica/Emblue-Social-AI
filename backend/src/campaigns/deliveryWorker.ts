@@ -9,6 +9,8 @@ export type CampaignDeliveryJobData = {
   campaign_id: number;
   engager_id: number;
   channel: CampaignDeliveryChannel;
+  image_url?: string;
+  media?: { url: string; mime_type: string; media_type: 'image' | 'video' }[];
 };
 
 export type CampaignDeliveryJobResult = {
@@ -92,6 +94,7 @@ export async function processCampaignDeliveryJob(
   });
 
   const config = mapEngageCampaign(campaign);
+  if (data.image_url) config.image_url = data.image_url;
   if (engager.replyText) {
     config.reply_template = engager.replyText;
     config.public_reply_template = engager.replyText;

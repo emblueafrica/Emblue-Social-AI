@@ -11,12 +11,14 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  Paperclip,
   RefreshCw,
+  X,
 } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { PlatformLogo } from "@/components/PlatformLogo";
 import { useAuth } from "@/hooks/use-auth";
-import { ApiError, getToolAccess, type ApprovalQueueItem } from "@/lib/api";
+import { ApiError, getToolAccess, uploadQueueMedia, type ApprovalQueueItem, type CampaignMedia } from "@/lib/api";
 import {
   approveAiReplyQueueItem,
   generateAiReplies,
@@ -131,6 +133,7 @@ export default function AIReplyEngine() {
   const [replyFormat, setReplyFormat] = useState<ReplyFormat>("helpful");
   const [toast, setToast] = useState<null | { kind: "approved" | "skipped" }>(null);
   const [generatedDrafts, setGeneratedDrafts] = useState<Record<number, AiReplySuggestion>>({});
+  const [attachments, setAttachments] = useState<Record<number, CampaignMedia[]>>({});
   const [apiNotice, setApiNotice] = useState<string | null>(null);
 
   const accessQuery = useQuery({
@@ -149,6 +152,11 @@ export default function AIReplyEngine() {
     refetchInterval: 15000,
   });
 
+  const queueMessages = useMemo(() => queueQuery.data?.queue.map(mapQueueItem) ?? [], [queueQuery.data?.queue]);
+  const visible = useMemo(() => queueMessages.filter((message) => platforms[message.platform]), [platforms, queueMessages]);
+  const selected = visible.find((message) => message.id === selectedId) ?? null;
+  const selectedAttachments = selected ? attachments[selected.id] ?? [] : [];
+
   const replyMutation = useMutation({
     mutationFn: generateAiReplies,
     onSuccess: (result) => {
@@ -164,9 +172,25 @@ export default function AIReplyEngine() {
     onError: (error) => setApiNotice(apiErrorMessage(error)),
   });
 
+  const mediaMutation = useMutation({
+    mutationFn: ({ brandId, files }: { brandId: number; files: File[] }) => uploadQueueMedia(brandId, files),
+    onSuccess: (result) => {
+      if (!selected) return;
+      setAttachments((current) => ({
+        ...current,
+        [selected.id]: [...(current[selected.id] ?? []), ...result.media].slice(0, 4),
+      }));
+      setApiNotice("Media attached to this reply.");
+    },
+    onError: (error) => setApiNotice(apiErrorMessage(error)),
+  });
+
   const approveMutation = useMutation({
-    mutationFn: ({ queueId, replyText }: { queueId: number | string; replyText: string }) =>
-      approveAiReplyQueueItem(activeBrandId!, queueId, replyText),
+    mutationFn: ({ queueId, replyText, media }: { queueId: number | string; replyText: string; media?: CampaignMedia[] }) =>
+      approveAiReplyQueueItem(activeBrandId!, queueId, replyText, {
+        media,
+        image_url: media?.find((item) => item.media_type === "image")?.url,
+      }),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
       if (result.publish?.success === false) {
@@ -191,9 +215,6 @@ export default function AIReplyEngine() {
     onError: (error) => setApiNotice(apiErrorMessage(error)),
   });
 
-  const queueMessages = useMemo(() => queueQuery.data?.queue.map(mapQueueItem) ?? [], [queueQuery.data?.queue]);
-  const visible = useMemo(() => queueMessages.filter((message) => platforms[message.platform]), [platforms, queueMessages]);
-  const selected = visible.find((message) => message.id === selectedId) ?? null;
   const generatedDraft = selected ? generatedDrafts[selected.id] : undefined;
   const draftBody = generatedDraft?.text ?? generatedDraft?.reply_text ?? selected?.reply ?? "";
   const draftTone = generatedDraft?.tone ?? tone;
@@ -258,7 +279,7 @@ export default function AIReplyEngine() {
       setApiNotice("This queue item is not linked to the backend approval flow.");
       return;
     }
-    approveMutation.mutate({ queueId: selected.queueId, replyText: draftBody });
+    approveMutation.mutate({ queueId: selected.queueId, replyText: draftBody, media: selectedAttachments });
   };
 
   const skipSelected = () => {
@@ -267,6 +288,19 @@ export default function AIReplyEngine() {
       return;
     }
     skipMutation.mutate(selected.queueId);
+  };
+
+  const attachFiles = (files: FileList | null) => {
+    if (!files?.length || !activeBrandId || !selected) return;
+    setApiNotice(null);
+    mediaMutation.mutate({ brandId: activeBrandId, files: Array.from(files).slice(0, 4) });
+  };
+
+  const removeAttachment = (messageId: number, publicId: string) => {
+    setAttachments((current) => ({
+      ...current,
+      [messageId]: (current[messageId] ?? []).filter((item) => item.public_id !== publicId),
+    }));
   };
 
   return (
@@ -454,6 +488,41 @@ export default function AIReplyEngine() {
                     <RefreshCw className={`size-4 ${replyMutation.isPending ? "animate-spin" : ""}`} />
                     {replyMutation.isPending ? "Generating..." : "Generate with Tone"}
                   </button>
+
+                  <div className="mb-4 rounded-xl border border-dashed p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold">Optional media</p>
+                        <p className="text-xs text-muted-foreground">Attach images or one video where the platform supports it.</p>
+                      </div>
+                      <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold text-primary hover:bg-primary/5">
+                        <Paperclip className="size-4" />
+                        {mediaMutation.isPending ? "Uploading..." : "Upload"}
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
+                          multiple
+                          className="sr-only"
+                          onChange={(event) => {
+                            attachFiles(event.target.files);
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {selectedAttachments.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedAttachments.map((item) => (
+                          <span key={item.public_id} className="inline-flex max-w-full items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs">
+                            <span className="truncate">{item.media_type} - {item.mime_type}</span>
+                            <button type="button" onClick={() => removeAttachment(selected.id, item.public_id)} className="rounded-full p-0.5 hover:bg-background" title="Remove attachment">
+                              <X className="size-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
                   <button onClick={approveSelected} disabled={approveMutation.isPending || skipMutation.isPending || !draftBody} className="w-full bg-primary text-primary-foreground rounded-xl py-3 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition disabled:opacity-60">
                     <Check className="size-4" /> {approveMutation.isPending ? "Sending..." : "Approve & Send"}

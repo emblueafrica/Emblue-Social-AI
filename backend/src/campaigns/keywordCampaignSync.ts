@@ -103,7 +103,7 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           : profile.classification === 'bot' || profile.risk_level === 'high' ? 'bot_blocked'
             : null;
         const initialStatus = profileStatus ?? preStatus ?? 'pending';
-        const engagement = await prisma.campaignPostEngager.create({
+        const createdEngagement = await prisma.campaignPostEngager.create({
           data: {
             brandId,
             campaignId: String(campaignId),
@@ -128,15 +128,39 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return null;
           throw error;
         });
+        const engagement = createdEngagement ?? await prisma.campaignPostEngager.findFirst({
+          where: { brandId, campaignId: String(campaignId), platform, externalEventId: externalId },
+        });
         if (!engagement) continue;
-        totals.captured += 1;
-        platformSummary.new += 1;
+        const canReprocessExisting = !createdEngagement && ['ignored_keyword', 'ignored_intent', 'ignored_urgency', 'needs_review'].includes(engagement.status ?? '');
+        if (!createdEngagement && !canReprocessExisting) continue;
+        if (createdEngagement) {
+          totals.captured += 1;
+          platformSummary.new += 1;
+        }
         if (initialStatus.startsWith('ignored_')) {
+          if (!createdEngagement && engagement.status !== initialStatus) {
+            await prisma.campaignPostEngager.update({
+              where: { engagerId: engagement.engagerId },
+              data: {
+                status: initialStatus,
+                intent: item.intent,
+                urgencyScore: item.urgencyScore,
+                updatedAt: new Date(),
+              },
+            });
+          }
           totals.ignored += 1;
           platformSummary.ignored += 1;
           continue;
         }
         if (initialStatus === 'bot_blocked') {
+          if (!createdEngagement && engagement.status !== 'bot_blocked') {
+            await prisma.campaignPostEngager.update({
+              where: { engagerId: engagement.engagerId },
+              data: { status: 'bot_blocked', updatedAt: new Date() },
+            });
+          }
           totals.review += 1;
           platformSummary.review += 1;
           continue;

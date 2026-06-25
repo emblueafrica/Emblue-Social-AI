@@ -15,6 +15,7 @@ export interface PublishPayload {
   tracked_link?: string;
   approval_id?:  number;
   media_ids?:    string[];
+  media?:        { url: string; mime_type: string; media_type: 'image' | 'video' }[];
 }
 
 export interface PublishResult {
@@ -40,20 +41,49 @@ export async function publishReply(payload: PublishPayload): Promise<PublishResu
         });
         const d = await r.json() as { message_id?: string; error?: { message: string } };
         if (d.error) result.error = d.error.message;
-        else { result.success = true; result.message_id = d.message_id; }
+        else {
+          result.success = true;
+          result.message_id = d.message_id;
+          if (payload.image_url) {
+            const attachment = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                recipient: { id: payload.author_id },
+                message: { attachment: { type: "image", payload: { url: payload.image_url, is_reusable: true } } },
+                messaging_type: "RESPONSE",
+              }),
+            });
+            const attachmentBody = await attachment.json() as { error?: { message: string } };
+            if (attachmentBody.error) {
+              result.error = `Text sent, but image failed: ${attachmentBody.error.message}`;
+            }
+          }
+        }
       } catch (err) { result.error = (err as Error).message; }
     }
   } else if (platform === "x") {
     const xToken = token;
     if (!xToken) { result.error = "No X token"; } else {
       try {
+        const mediaIds = [...(payload.media_ids ?? [])];
+        if (payload.media?.length) {
+          for (const [index, media] of payload.media.entries()) {
+            const upload = await uploadXMediaFromUrl(brand_id, media, index);
+            if (!upload.success || !upload.media_id) {
+              result.error = upload.error ?? "X media upload failed";
+              return result;
+            }
+            mediaIds.push(upload.media_id);
+          }
+        }
         const r = await fetch("https://api.x.com/2/tweets", {
           method: "POST",
           headers: { "Authorization": `Bearer ${xToken}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             text: reply_text,
             ...(payload.tweet_id && { reply: { in_reply_to_tweet_id: payload.tweet_id } }),
-            ...(payload.media_ids?.length && { media: { media_ids: payload.media_ids } }),
+            ...(mediaIds.length && { media: { media_ids: mediaIds } }),
           })
         });
         const d = await r.json() as {

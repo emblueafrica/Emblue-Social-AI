@@ -410,6 +410,11 @@ export type CampaignMedia = {
   size_bytes: number;
 };
 
+export type QueueAttachmentPayload = {
+  image_url?: string;
+  media?: CampaignMedia[];
+};
+
 export type CampaignActivationPayload = {
   brand_id: number;
   source_mode: "publish_new" | "existing";
@@ -980,6 +985,13 @@ export function uploadCampaignMedia(brandId: number, files: File[]) {
   return apiUploadRequest<{ ok: true; media: CampaignMedia[] }>("/api/v1/campaigns/media/upload", body);
 }
 
+export function uploadQueueMedia(brandId: number, files: File[]) {
+  const body = new FormData();
+  body.append("brand_id", String(brandId));
+  files.forEach((file) => body.append("files", file));
+  return apiUploadRequest<{ ok: true; media: CampaignMedia[] }>("/api/v1/rt/media/upload", body);
+}
+
 export function preflightCampaign(campaignId: number, payload: CampaignActivationPayload) {
   return apiRequest<{ ok: boolean; platforms: { platform: Platform; ready: boolean; issues: string[] }[] }>(`/api/v1/campaigns/${campaignId}/preflight`, {
     method: "POST",
@@ -1069,21 +1081,21 @@ export function getApprovalQueue(brandId: number) {
   return apiRequest<{ queue: ApprovalQueueItem[] }>(`/api/v1/rt/queue/${brandId}`);
 }
 
-export function approveQueueItem(brandId: number, queueKey: string, replyText?: string) {
+export function approveQueueItem(brandId: number, queueKey: string, replyText?: string, attachments: QueueAttachmentPayload = {}) {
   return apiRequest<{
     ok: true;
     item: ApprovalQueueItem;
     publish?: { success: boolean; platform: Platform; message_id?: string; error?: string };
   }>(`/api/v1/rt/queue/${encodeURIComponent(queueKey)}/approve`, {
     method: "POST",
-    body: JSON.stringify({ brand_id: brandId, reply_text: replyText }),
+    body: JSON.stringify({ brand_id: brandId, reply_text: replyText, ...attachments }),
   });
 }
 
-export function editAndSendQueueItem(brandId: number, queueKey: string, replyText: string) {
+export function editAndSendQueueItem(brandId: number, queueKey: string, replyText: string, attachments: QueueAttachmentPayload = {}) {
   return apiRequest<{ ok: true; item: ApprovalQueueItem }>(`/api/v1/rt/queue/${encodeURIComponent(queueKey)}/edit-and-send`, {
     method: "POST",
-    body: JSON.stringify({ brand_id: brandId, reply_text: replyText }),
+    body: JSON.stringify({ brand_id: brandId, reply_text: replyText, ...attachments }),
   });
 }
 
@@ -1094,10 +1106,10 @@ export function markQueueItemSent(brandId: number, queueKey: string) {
   });
 }
 
-export function retryQueueItem(brandId: number, queueKey: string) {
+export function retryQueueItem(brandId: number, queueKey: string, attachments: QueueAttachmentPayload = {}) {
   return apiRequest<{ ok: true; item: ApprovalQueueItem }>(`/api/v1/rt/queue/${encodeURIComponent(queueKey)}/retry`, {
     method: "POST",
-    body: JSON.stringify({ brand_id: brandId }),
+    body: JSON.stringify({ brand_id: brandId, ...attachments }),
   });
 }
 

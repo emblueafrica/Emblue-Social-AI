@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, MoreVertical, Plus, RefreshCw, X as XClose } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
@@ -172,6 +172,19 @@ function apiErrorMessage(error: unknown) {
   return "Request failed.";
 }
 
+function activitySortRank(status: string) {
+  const normalized = status.toLowerCase();
+  if (
+    normalized === "sent" ||
+    normalized === "dismissed" ||
+    normalized === "already_sent" ||
+    normalized.startsWith("ignored")
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
 export default function EngageTheEngager() {
   const queryClient = useQueryClient();
   const { activeBrandId, authContext } = useAuth();
@@ -261,15 +274,12 @@ export default function EngageTheEngager() {
   }, [toast]);
 
   const campaigns = campaignsQuery.data?.campaigns.map(mapCampaignRecord) ?? [];
-  const showXAllocation = posts.some((post) => post.platform === "x");
-  const existingPostAllocationPlatforms = (showXAllocation
-    ? ["instagram", "facebook", "tiktok", "x"]
-    : ["instagram", "facebook", "tiktok"]) as Platform[];
+  const existingPostAllocationPlatforms = ["instagram", "facebook", "tiktok", "x"] as Platform[];
   const existingPostAllocation = {
     instagram: allocation.instagram,
     facebook: allocation.facebook,
     tiktok: allocation.tiktok,
-    x: showXAllocation ? allocation.x : 0,
+    x: allocation.x,
   };
   const canMutate = Boolean(
     authContext?.platform_role === "super_admin" ||
@@ -1021,6 +1031,24 @@ function UnifiedActivityFeed({ data, loading, error, canMutate, selectedCampaign
   onDismiss: (id: number) => void;
   onExport: () => void | Promise<void>;
 }) {
+  const pageSize = 5;
+  const [page, setPage] = useState(0);
+  const sortedItems = useMemo(() => {
+    return [...(data?.items ?? [])].sort((a, b) => {
+      const rank = activitySortRank(a.status) - activitySortRank(b.status);
+      if (rank !== 0) return rank;
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+  }, [data?.items]);
+  const totalItems = sortedItems.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const currentPage = Math.min(page, totalPages - 1);
+  const pagedItems = sortedItems.slice(currentPage * pageSize, currentPage * pageSize + pageSize);
+
+  useEffect(() => {
+    setPage(0);
+  }, [data?.items.length, selectedCampaignId]);
+
   return <Surface>
     <div className="flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-center sm:justify-between">
       <div><h2 className="text-lg font-bold">Live Activity Feed</h2></div>
@@ -1033,7 +1061,7 @@ function UnifiedActivityFeed({ data, loading, error, canMutate, selectedCampaign
     {loading && <p className="py-6 text-sm text-muted-foreground">Loading activity...</p>}
     {Boolean(error) && <p className="py-4 text-sm text-destructive">{apiErrorMessage(error)}</p>}
     {data && <div className="divide-y">
-      {data.items.length ? data.items.map(item => {
+      {pagedItems.length ? pagedItems.map(item => {
         const actionable = ["needs_review", "partial", "failed", "error", "generation_failed", "rate_limited", "manual_action_required", "bot_blocked"].includes(item.status);
         const draft = drafts[String(item.id)] ?? item.reply_text ?? "";
         return <div key={item.id} className="grid min-w-0 gap-3 py-4 lg:grid-cols-[180px_120px_minmax(0,1fr)_170px]">
@@ -1043,6 +1071,31 @@ function UnifiedActivityFeed({ data, loading, error, canMutate, selectedCampaign
           {canMutate && actionable ? <div className="flex flex-wrap items-start gap-2"><button disabled={mutating} onClick={() => onRetry(item.id, draft || undefined)} className="whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">{draft ? "Edit & send" : "Retry"}</button><button disabled={mutating} onClick={() => onDismiss(item.id)} className="whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-50">Dismiss</button></div> : <span className="text-xs text-muted-foreground">{new Date(item.created_at).toLocaleString()}</span>}
         </div>;
       }) : <p className="my-5 rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No campaign activity has been captured for this view.</p>}
+      {totalItems > pageSize && (
+        <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            Showing {currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, totalItems)} of {totalItems}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setPage(value => Math.max(0, value - 1))}
+              disabled={currentPage === 0}
+              className="rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage(value => Math.min(totalPages - 1, value + 1))}
+              disabled={currentPage >= totalPages - 1}
+              className="rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>}
   </Surface>;
 }
