@@ -1,4 +1,4 @@
-import { apiRequest, type ApprovalQueueItem } from "@/lib/api";
+import { apiRequest, type ApprovalQueueItem, type QueueAttachmentPayload } from "@/lib/api";
 
 export type AiReplyPlatform = "instagram" | "facebook" | "x" | "tiktok" | "youtube" | "reddit" | "whatsapp";
 
@@ -49,14 +49,19 @@ export function getAiReplyQueue(brandId: number) {
   return apiRequest<{ queue: ApprovalQueueItem[] }>(`/api/v1/rt/reply-queue/${brandId}`);
 }
 
-export function approveAiReplyQueueItem(brandId: number, queueId: number | string, replyText?: string) {
+export function approveAiReplyQueueItem(
+  brandId: number,
+  queueId: number | string,
+  replyText?: string,
+  attachments: QueueAttachmentPayload = {},
+) {
   return apiRequest<{
     ok: true;
     item: ApprovalQueueItem;
     publish?: { success: boolean; platform: AiReplyPlatform; message_id?: string; error?: string };
   }>(`/api/v1/rt/queue/${encodeURIComponent(String(queueId))}/approve`, {
     method: "POST",
-    body: JSON.stringify({ brand_id: brandId, reply_text: replyText }),
+    body: JSON.stringify({ brand_id: brandId, reply_text: replyText, ...attachments }),
   });
 }
 

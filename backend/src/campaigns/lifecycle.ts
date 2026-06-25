@@ -117,10 +117,83 @@ export function evaluateKeywordCampaignEvent(
   rules: { keywords: string[]; intents: Intent[]; urgencyThreshold: number; confidenceThreshold: number },
 ): 'ignored_keyword' | 'ignored_intent' | 'ignored_urgency' | 'needs_review' | null {
   if (!eligibleForCampaign({ kind: 'comment', text: event.text }, rules.keywords)) return 'ignored_keyword';
-  if (rules.intents.length && !rules.intents.includes(event.intent)) return 'ignored_intent';
+  if (rules.intents.length && !rules.intents.includes(event.intent) && !textMatchesIntentFallback(event.text, rules.intents)) return 'ignored_intent';
   if (event.urgency < rules.urgencyThreshold) return 'ignored_urgency';
   if (event.confidence < rules.confidenceThreshold) return 'needs_review';
   return null;
+}
+
+function textMatchesIntentFallback(text: string, intents: Intent[]): boolean {
+  const normalized = text.toLowerCase();
+  const hasAny = (terms: string[]) => terms.some(term => normalized.includes(term));
+
+  if (intents.includes('complaint') && hasAny([
+    'failed',
+    'failure',
+    'problem',
+    'issue',
+    'trouble',
+    'not received',
+    'did not receive',
+    "didn't receive",
+    'money missing',
+    'missing money',
+    'reversed',
+    'declined',
+    'blocked',
+    'error',
+    'complain',
+    'complaint',
+  ])) return true;
+
+  if (intents.includes('purchase_intent') && hasAny([
+    'price',
+    'buy',
+    'order',
+    'available',
+    'interested',
+    'need this',
+    'want this',
+    'how much',
+    'where can i get',
+    'link',
+    'shop',
+  ])) return true;
+
+  if (intents.includes('inquiry') && hasAny([
+    '?',
+    'how',
+    'what',
+    'where',
+    'when',
+    'can you',
+    'please help',
+    'i need help',
+    'support',
+  ])) return true;
+
+  if (intents.includes('praise') && hasAny([
+    'great',
+    'good',
+    'love',
+    'amazing',
+    'excellent',
+    'thanks',
+    'thank you',
+  ])) return true;
+
+  if (intents.includes('objection') && hasAny([
+    'too expensive',
+    'costly',
+    'not sure',
+    'doubt',
+    'scam',
+    'sketchy',
+    'fake',
+    'concern',
+  ])) return true;
+
+  return false;
 }
 
 export function eligibleForCampaign(event: { kind: CampaignEventKind; text?: string | null }, keywords: string[]): boolean {

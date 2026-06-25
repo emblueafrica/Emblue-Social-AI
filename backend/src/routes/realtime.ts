@@ -1,17 +1,61 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { addSseClient, broadcastToClients } from '../stream/eventQueue';
 import prisma from '../db/prisma';
 import { requireBrandAccess } from '../middleware/auth';
 import { requireToolAccess } from '../middleware/toolAccess';
 import { publishReply } from '../stream/publisher';
-import { getRequiredBrandId, requireNonEmptyString, sendServerError, sendValidationError } from '../utils/validation';
+import { getRequiredBrandId, isHttpUrl, requireNonEmptyString, sendServerError, sendValidationError } from '../utils/validation';
 import { ApprovalQueueItem, Platform } from '../types';
 import { CampaignDeliveryChannel, verifyMetaWebhookSignature } from '../campaigns/unified';
 import { processLiveEngagementEvent, resolveBrandForPlatformAccount } from '../campaigns/liveEngagement';
 import { prepareCampaignDelivery, recordCampaignDeliveryUnavailable } from '../campaigns/deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
+import { validateMediaSet } from '../campaigns/lifecycle';
+import { uploadCampaignMediaBuffer } from '../utils/cloudinary';
 
 const router = Router();
+const replyUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 4, fileSize: 100 * 1024 * 1024 },
+});
+
+type QueueMediaItem = {
+  url: string;
+  public_id?: string;
+  media_type: 'image' | 'video';
+  mime_type: string;
+  size_bytes?: number;
+};
+
+type QueueMediaPayload = {
+  imageUrl?: string;
+  media: QueueMediaItem[];
+};
+
+function parseQueueMedia(body: Record<string, unknown> | undefined): QueueMediaPayload {
+  const rawMedia = Array.isArray(body?.media) ? body.media : [];
+  const media: QueueMediaItem[] = rawMedia.slice(0, 4).flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const data = item as Record<string, unknown>;
+    const url = typeof data.url === 'string' && isHttpUrl(data.url) ? data.url : null;
+    const mediaType = data.media_type === 'image' || data.media_type === 'video' ? data.media_type : null;
+    const mimeType = typeof data.mime_type === 'string' && data.mime_type.length <= 100 ? data.mime_type : null;
+    if (!url || !mediaType || !mimeType) return [];
+    return [{
+      url,
+      media_type: mediaType,
+      mime_type: mimeType,
+      public_id: typeof data.public_id === 'string' && data.public_id.length <= 255 ? data.public_id : undefined,
+      size_bytes: Number.isFinite(Number(data.size_bytes)) ? Number(data.size_bytes) : undefined,
+    }];
+  });
+  const firstImage = media.find(item => item.media_type === 'image');
+  const imageUrl = typeof body?.image_url === 'string' && isHttpUrl(body.image_url)
+    ? body.image_url
+    : firstImage?.url;
+  return { imageUrl, media };
+}
 
 router.get('/stream/:brand_id', requireBrandAccess, (req: Request, res: Response) => {
   const brandId = getRequiredBrandId(req.params['brand_id']);
@@ -71,6 +115,37 @@ router.post('/webhook/meta', async (req: Request, res: Response) => {
   }
   await Promise.allSettled(accepted);
   res.json({ ok: true, accepted: accepted.length });
+});
+
+router.post('/media/upload', requireBrandAccess, requireToolAccess('tool_3'), replyUpload.array('files', 4), async (req: Request, res: Response) => {
+  const brandId = getRequiredBrandId(req.body?.brand_id);
+  if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  if (!files.length) { sendValidationError(res, 'Select at least one image or video file'); return; }
+
+  const mediaValidation = validateMediaSet(files.map(file => ({ mime_type: file.mimetype, size_bytes: file.size })));
+  if (!mediaValidation.ok) { sendValidationError(res, mediaValidation.message ?? 'Invalid reply media'); return; }
+
+  try {
+    const media: QueueMediaItem[] = [];
+    for (const file of files) {
+      const uploaded = await uploadCampaignMediaBuffer(file.buffer, file.originalname, file.mimetype, `social-emblue-ai/replies/${brandId}`);
+      if (uploaded.error || !uploaded.secure_url || !uploaded.public_id || !uploaded.media_type || !uploaded.mime_type || !uploaded.size_bytes) {
+        res.status(422).json({ error: 'Reply media upload failed', message: uploaded.error ?? 'Cloudinary did not return complete media metadata' });
+        return;
+      }
+      media.push({
+        url: uploaded.secure_url,
+        public_id: uploaded.public_id,
+        media_type: uploaded.media_type,
+        mime_type: uploaded.mime_type,
+        size_bytes: uploaded.size_bytes,
+      });
+    }
+    res.status(201).json({ ok: true, media });
+  } catch (err) {
+    sendServerError(res, 'Reply media upload failed', err);
+  }
 });
 
 async function fetchPendingApprovalRows(brandId: number) {
@@ -255,7 +330,7 @@ async function fetchUnifiedApprovalItems(brandId: number): Promise<ApprovalQueue
   ];
 }
 
-async function approveQueueRow(brandId: number, row: PendingApprovalRow, replyTextInput?: string) {
+async function approveQueueRow(brandId: number, row: PendingApprovalRow, replyTextInput?: string, mediaPayload: QueueMediaPayload = { media: [] }) {
   const item = mapApprovalRow(row, brandId);
   const replyText = requireNonEmptyString(replyTextInput) ? replyTextInput.trim() : item.reply;
   const publish = await publishReply({
@@ -265,6 +340,8 @@ async function approveQueueRow(brandId: number, row: PendingApprovalRow, replyTe
     author_id: item.meta?.author_id ?? undefined,
     comment_id: item.meta?.comment_id ?? item.meta?.post_id ?? undefined,
     tweet_id: item.meta?.tweet_id ?? undefined,
+    image_url: mediaPayload.imageUrl,
+    media: mediaPayload.media,
   });
   await prisma.approvalQueue.update({
     where: { queueId: row.queueId },
@@ -335,6 +412,7 @@ async function handleCampaignQueueAction(
   channel: CampaignDeliveryChannel,
   action: 'approve' | 'edit-and-send' | 'mark-sent' | 'retry' | 'skip',
   replyTextInput?: string,
+  mediaPayload: QueueMediaPayload = { media: [] },
 ) {
   const engager = await prisma.campaignPostEngager.findFirst({ where: { brandId, engagerId: BigInt(engagerId) } });
   if (!engager || !/^\d+$/.test(engager.campaignId)) return null;
@@ -377,7 +455,14 @@ async function handleCampaignQueueAction(
   }
 
   const numericCampaignId = Number(campaignId);
-  const data = { brand_id: brandId, campaign_id: numericCampaignId, engager_id: engagerId, channel };
+  const data = {
+    brand_id: brandId,
+    campaign_id: numericCampaignId,
+    engager_id: engagerId,
+    channel,
+    image_url: mediaPayload.imageUrl,
+    media: mediaPayload.media,
+  };
   if (!isBullEnabled()) {
     await recordCampaignDeliveryUnavailable(data, 'Campaign delivery queue unavailable. Configure REDIS_URL before sending campaign activity.');
     await updateCampaignEngagerFromDeliveries(brandId, engager.engagerId, campaignId);
@@ -426,17 +511,18 @@ router.post('/queue/:queue_key/approve', requireBrandAccess, requireToolAccess('
   const key = parseQueueKey(req.params['queue_key']);
   const { brand_id, reply_text } = req.body as { brand_id: number; reply_text?: string };
   const brandId = getRequiredBrandId(brand_id);
+  const mediaPayload = parseQueueMedia(req.body as Record<string, unknown>);
   if (!brandId || !key) { sendValidationError(res, 'brand_id and queue_key are required'); return; }
   try {
     if (key.source === 'campaign') {
-      const result = await handleCampaignQueueAction(brandId, key.engagerId, key.channel, 'approve', reply_text);
+      const result = await handleCampaignQueueAction(brandId, key.engagerId, key.channel, 'approve', reply_text, mediaPayload);
       if (!result) { res.status(404).json({ error: 'Queue item not found' }); return; }
       res.json({ ok: true, ...result });
       return;
     }
     const row = await prisma.approvalQueue.findFirst({ where: { queueId: BigInt(key.queueId), brandId, status: 'pending', campaignId: null } });
     if (!row) { res.status(404).json({ error: 'Queue item not found' }); return; }
-    res.json({ ok: true, ...(await approveQueueRow(brandId, row, reply_text)) });
+    res.json({ ok: true, ...(await approveQueueRow(brandId, row, reply_text, mediaPayload)) });
   } catch (err) {
     if (err instanceof Error && err.message.includes('Campaign delivery queue unavailable')) {
       res.status(503).json({ error: 'Campaign delivery queue unavailable', message: err.message });
@@ -450,15 +536,16 @@ router.post('/queue/:queue_key/edit-and-send', requireBrandAccess, requireToolAc
   const key = parseQueueKey(req.params['queue_key']);
   const brandId = getRequiredBrandId(req.body?.brand_id);
   const replyText = typeof req.body?.reply_text === 'string' ? req.body.reply_text : undefined;
+  const mediaPayload = parseQueueMedia(req.body as Record<string, unknown>);
   if (!brandId || !key) { sendValidationError(res, 'brand_id and queue_key are required'); return; }
   try {
     if (key.source === 'approval') {
       const row = await prisma.approvalQueue.findFirst({ where: { queueId: BigInt(key.queueId), brandId, status: 'pending', campaignId: null } });
       if (!row) { res.status(404).json({ error: 'Queue item not found' }); return; }
-      res.json({ ok: true, ...(await approveQueueRow(brandId, row, replyText)) });
+      res.json({ ok: true, ...(await approveQueueRow(brandId, row, replyText, mediaPayload)) });
       return;
     }
-    const result = await handleCampaignQueueAction(brandId, key.engagerId, key.channel, 'edit-and-send', replyText);
+    const result = await handleCampaignQueueAction(brandId, key.engagerId, key.channel, 'edit-and-send', replyText, mediaPayload);
     if (!result) { res.status(404).json({ error: 'Queue item not found' }); return; }
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -484,9 +571,10 @@ router.post('/queue/:queue_key/mark-sent', requireBrandAccess, requireToolAccess
 router.post('/queue/:queue_key/retry', requireBrandAccess, requireToolAccess('tool_3'), async (req: Request, res: Response) => {
   const key = parseQueueKey(req.params['queue_key']);
   const brandId = getRequiredBrandId(req.body?.brand_id);
+  const mediaPayload = parseQueueMedia(req.body as Record<string, unknown>);
   if (!brandId || !key || key.source !== 'campaign') { sendValidationError(res, 'brand_id and a campaign queue_key are required'); return; }
   try {
-    const result = await handleCampaignQueueAction(brandId, key.engagerId, key.channel, 'retry');
+    const result = await handleCampaignQueueAction(brandId, key.engagerId, key.channel, 'retry', undefined, mediaPayload);
     if (!result) { res.status(404).json({ error: 'Queue item not found' }); return; }
     res.json({ ok: true, ...result });
   } catch (err) {
