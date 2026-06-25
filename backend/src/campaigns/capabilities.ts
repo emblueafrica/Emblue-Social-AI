@@ -18,6 +18,8 @@ type CapabilityInput = {
   connected: boolean;
   scopes: string | null | undefined;
   discoveryConfigured: boolean;
+  publicReplyEnabled?: boolean;
+  directMessageEnabled?: boolean;
 };
 
 function scopeSet(scopes: string | null | undefined): Set<string> {
@@ -37,6 +39,8 @@ export function resolveCampaignCapability(input: CapabilityInput): CampaignCapab
   const scopes = scopeSet(input.scopes);
   const disconnected: CampaignChannelStatus = input.connected ? 'setup_required' : 'connection_required';
   const issues: string[] = [];
+  const publicReplyEnabled = input.publicReplyEnabled !== false;
+  const directMessageEnabled = input.directMessageEnabled !== false;
 
   let publicReply: CampaignChannelStatus = disconnected;
   let directMessage: CampaignChannelStatus = disconnected;
@@ -49,10 +53,10 @@ export function resolveCampaignCapability(input: CapabilityInput): CampaignCapab
       directMessage = hasEvery(scopes, ['dm.read', 'dm.write'])
         ? 'automatic'
         : 'setup_required';
-      if (publicReply !== 'automatic') {
+      if (publicReplyEnabled && publicReply !== 'automatic') {
         issues.push('Reconnect X with tweet.read, tweet.write and users.read.');
       }
-      if (directMessage !== 'automatic') {
+      if (directMessageEnabled && directMessage !== 'automatic') {
         issues.push('Reconnect X with dm.read and dm.write after X grants Direct Message API access.');
       }
     } else if (input.platform === 'tiktok') {
@@ -60,28 +64,28 @@ export function resolveCampaignCapability(input: CapabilityInput): CampaignCapab
       directMessage = scopes.has('direct_message') || scopes.has('message.send')
         ? 'automatic'
         : 'setup_required';
-      if (publicReply !== 'automatic') {
+      if (publicReplyEnabled && publicReply !== 'automatic') {
         issues.push('TikTok comment replies require approved video.comment access.');
       }
-      if (directMessage !== 'automatic') {
+      if (directMessageEnabled && directMessage !== 'automatic') {
         issues.push('TikTok direct messages require an approved messaging product and scope.');
       }
     } else if (input.platform === 'instagram') {
       publicReply = scopes.has('instagram_manage_comments') ? 'automatic' : 'setup_required';
       directMessage = scopes.has('instagram_manage_messages') ? 'automatic' : 'setup_required';
-      if (publicReply !== 'automatic') {
+      if (publicReplyEnabled && publicReply !== 'automatic') {
         issues.push('Instagram comment replies require instagram_manage_comments.');
       }
-      if (directMessage !== 'automatic') {
+      if (directMessageEnabled && directMessage !== 'automatic') {
         issues.push('Instagram private replies require instagram_manage_messages and an eligible comment conversation.');
       }
     } else {
       publicReply = scopes.has('pages_manage_engagement') ? 'automatic' : 'setup_required';
       directMessage = scopes.has('pages_messaging') ? 'automatic' : 'setup_required';
-      if (publicReply !== 'automatic') {
+      if (publicReplyEnabled && publicReply !== 'automatic') {
         issues.push('Facebook comment replies require pages_manage_engagement.');
       }
-      if (directMessage !== 'automatic') {
+      if (directMessageEnabled && directMessage !== 'automatic') {
         issues.push('Facebook direct messages require pages_messaging and an eligible conversation.');
       }
     }

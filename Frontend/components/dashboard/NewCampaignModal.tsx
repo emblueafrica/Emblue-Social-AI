@@ -214,6 +214,15 @@ export function NewCampaignModal({
     value: CampaignDraft[K],
   ) => setDraft((current) => ({ ...current, [key]: value }));
 
+  const updateReplyMode = (replyMode: CampaignDraft["replyMode"]) => {
+    setDraft((current) => ({
+      ...current,
+      replyMode,
+      publicReplyEnabled: replyMode !== "dm_only",
+      directMessageEnabled: replyMode !== "public",
+    }));
+  };
+
   const togglePlatform = (platform: Platform) => {
     setDraft((current) => {
       const selected = current.platforms.includes(platform)
@@ -729,10 +738,7 @@ export function NewCampaignModal({
               <select
                 value={draft.replyMode}
                 onChange={(event) =>
-                  update(
-                    "replyMode",
-                    event.target.value as CampaignDraft["replyMode"],
-                  )
+                  updateReplyMode(event.target.value as CampaignDraft["replyMode"])
                 }
                 className="input mb-3"
               >
