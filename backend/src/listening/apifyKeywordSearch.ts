@@ -156,50 +156,64 @@ function normalizeXRecentSearchTweet(
 }
 
 async function runXRecentSearchForKeyword(input: PlatformKeywordSearchInput): Promise<KeywordSearchResult> {
-  const token = process.env.X_BEARER_TOKEN;
+  const token = process.env.X_BEARER_TOKEN?.trim();
   if (!token) return runActorForKeyword('x', input);
 
-  const requested = input.maxItems ?? 100;
-  const maxResults = Math.max(10, Math.min(100, requested));
-  const params = new URLSearchParams({
-    query: `${input.keyword} -is:retweet`,
-    max_results: String(maxResults),
-    'tweet.fields': 'author_id,created_at,conversation_id,public_metrics',
-    expansions: 'author_id',
-    'user.fields': 'username,name,verified,public_metrics,created_at',
-  });
-  const startDate = input.dateFrom?.toISOString();
-  const endDate = input.dateTo?.toISOString();
-  if (startDate) params.set('start_time', startDate);
-  if (endDate) params.set('end_time', endDate);
-
   try {
-    const response = await fetch(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const body = await response.json() as {
-      data?: Record<string, unknown>[];
-      includes?: { users?: Record<string, unknown>[] };
-      errors?: { message?: string; detail?: string }[];
-      title?: string;
-      detail?: string;
-    };
+    const requested = Math.max(1, input.maxItems ?? 100);
+    const users = new Map<string, Record<string, unknown>>();
+    const items: NormalizedSearchItem[] = [];
+    let nextToken: string | undefined;
 
-    if (!response.ok || body.errors?.length) {
-      const detail = body.errors?.[0]?.message ?? body.errors?.[0]?.detail ?? body.detail ?? body.title ?? `X recent search ${response.status}`;
-      if (response.status === 401) return { items: [], errors: [`x:${input.keyword}: X bearer token is invalid or expired. ${detail}`] };
-      if (response.status === 403) return { items: [], errors: [`x:${input.keyword}: X Recent Search is not available for this account/API plan. ${detail}`] };
-      if (response.status === 429) return { items: [], errors: [`x:${input.keyword}: X Recent Search rate limit reached. Retry after the X API window resets. ${detail}`] };
-      return { items: [], errors: [`x:${input.keyword}: ${detail}`] };
-    }
+    do {
+      const remaining = requested - items.length;
+      const maxResults = Math.max(10, Math.min(100, remaining));
+      const params = new URLSearchParams({
+        query: `${input.keyword} -is:retweet`,
+        max_results: String(maxResults),
+        'tweet.fields': 'author_id,created_at,conversation_id,public_metrics',
+        expansions: 'author_id',
+        'user.fields': 'username,name,verified,public_metrics,created_at',
+      });
+      const startDate = input.dateFrom?.toISOString();
+      const endDate = input.dateTo?.toISOString();
+      if (startDate) params.set('start_time', startDate);
+      if (endDate) params.set('end_time', endDate);
+      if (nextToken) params.set('next_token', nextToken);
 
-    const users = new Map((body.includes?.users ?? []).map(user => [String(user['id']), user]));
-    const items = (body.data ?? [])
-      .map(tweet => normalizeXRecentSearchTweet(tweet, users, input.keyword))
-      .filter((item): item is NormalizedSearchItem => Boolean(item))
-      .slice(0, requested);
+      const response = await fetch(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await response.json() as {
+        data?: Record<string, unknown>[];
+        includes?: { users?: Record<string, unknown>[] };
+        errors?: { message?: string; detail?: string }[];
+        meta?: { next_token?: string };
+        title?: string;
+        detail?: string;
+      };
 
-    return { items, errors: [] };
+      if (!response.ok || body.errors?.length) {
+        const detail = body.errors?.[0]?.message ?? body.errors?.[0]?.detail ?? body.detail ?? body.title ?? `X recent search ${response.status}`;
+        if (response.status === 401) return { items: [], errors: [`x:${input.keyword}: X bearer token is invalid or expired. ${detail}`] };
+        if (response.status === 403) return { items: [], errors: [`x:${input.keyword}: X Recent Search is not available for this account/API plan. ${detail}`] };
+        if (response.status === 429) return { items: [], errors: [`x:${input.keyword}: X Recent Search rate limit reached. Retry after the X API window resets. ${detail}`] };
+        return { items: [], errors: [`x:${input.keyword}: ${detail}`] };
+      }
+
+      for (const user of body.includes?.users ?? []) {
+        const id = asString(user['id']);
+        if (id) users.set(id, user);
+      }
+
+      const pageItems = (body.data ?? [])
+        .map(tweet => normalizeXRecentSearchTweet(tweet, users, input.keyword))
+        .filter((item): item is NormalizedSearchItem => Boolean(item));
+      items.push(...pageItems);
+      nextToken = body.meta?.next_token;
+    } while (nextToken && items.length < requested);
+
+    return { items: items.slice(0, requested), errors: [] };
   } catch (err) {
     return { items: [], errors: [`x:${input.keyword}: ${(err as Error).message}`] };
   }
