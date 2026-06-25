@@ -190,7 +190,7 @@ export default function Dashboard() {
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="oklch(0.92 0.01 265)" />
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e4e6ee" />
                       <XAxis dataKey="name" axisLine={false} tickLine={false} />
                       <YAxis axisLine={false} tickLine={false} />
                       <Bar dataKey="total" fill="#cbd5e1" radius={[8, 8, 0, 0]} />

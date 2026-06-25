@@ -1,7 +1,7 @@
 type Props = { variant?: "light" | "dark"; className?: string };
 
 export function EmblueLogo({ variant = "dark", className = "" }: Props) {
-  const color = variant === "light" ? "#ffffff" : "oklch(0.46 0.27 265)";
+  const color = variant === "light" ? "#ffffff" : "#2442ee";
   return (
     <div className={`flex flex-col leading-none ${className}`}>
       <span

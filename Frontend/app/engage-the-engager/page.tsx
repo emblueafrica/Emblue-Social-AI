@@ -368,6 +368,7 @@ export default function EngageTheEngager() {
       if (campaign.sourceMode === "keyword") {
         const preflight = status === "active"
           ? await preflightKeywordCampaign(activeBrandId, campaign.platforms, {
+              keywords: campaign.keywords,
               public_reply_enabled: campaign.publicReplyEnabled,
               direct_message_enabled: campaign.directMessageEnabled,
             })

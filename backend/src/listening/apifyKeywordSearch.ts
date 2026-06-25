@@ -1,6 +1,7 @@
 import { ApifyClient } from 'apify-client';
 import { Platform } from '../types';
 import { KeywordSearchResult, NormalizedSearchItem } from './types';
+import { buildXRecentSearchKeywordQuery, evaluateStrictKeywordMatch, validateKeywordGuardrails } from '../campaigns/keywordGuardrails';
 
 const ACTOR_IDS: Record<Platform, string | null> = {
   instagram: 'apify/instagram-search-scraper',
@@ -169,7 +170,7 @@ async function runXRecentSearchForKeyword(input: PlatformKeywordSearchInput): Pr
       const remaining = requested - items.length;
       const maxResults = Math.max(10, Math.min(100, remaining));
       const params = new URLSearchParams({
-        query: `${input.keyword} -is:retweet`,
+        query: buildXRecentSearchKeywordQuery(input.keyword),
         max_results: String(maxResults),
         'tweet.fields': 'author_id,created_at,conversation_id,public_metrics',
         expansions: 'author_id',
@@ -303,8 +304,15 @@ export async function runKeywordSearch(params: {
 }): Promise<KeywordSearchResult> {
   const items: NormalizedSearchItem[] = [];
   const errors: string[] = [];
+  const rejected: NonNullable<KeywordSearchResult['rejected']> = [];
 
   for (const keyword of params.keywords) {
+    const guardrail = validateKeywordGuardrails([keyword]);
+    if (!guardrail.ok) {
+      errors.push(`keyword:${keyword}: ${guardrail.message ?? 'Keyword is too broad for campaign search.'}`);
+      continue;
+    }
+
     for (const platform of params.platforms) {
       const result =
         platform === 'instagram' ? await searchInstagramKeyword(keyword, params.dateFrom, params.dateTo, params.maxItemsPerPlatform) :
@@ -315,10 +323,24 @@ export async function runKeywordSearch(params: {
         platform === 'facebook' ? await searchFacebookKeyword(keyword, params.dateFrom, params.dateTo, params.maxItemsPerPlatform) :
         { items: [], errors: [`No keyword-search support for ${platform}`] };
 
-      items.push(...result.items);
+      for (const item of result.items) {
+        const decision = evaluateStrictKeywordMatch(item.text, [keyword]);
+        if (decision.ok) {
+          items.push({ ...item, matchedKeyword: decision.matchedKeyword ?? item.matchedKeyword });
+        } else {
+          rejected.push({
+            platform,
+            keyword,
+            reason: decision.reason ?? 'keyword_guardrail_rejected',
+            text: item.text.slice(0, 240),
+            url: item.url,
+          });
+        }
+      }
       errors.push(...result.errors);
+      rejected.push(...(result.rejected ?? []));
     }
   }
 
-  return { items, errors };
+  return { items, errors, rejected };
 }
