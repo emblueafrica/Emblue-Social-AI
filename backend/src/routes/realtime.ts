@@ -242,7 +242,7 @@ async function fetchKeywordCampaignReviewRows(brandId: number) {
     where: {
       brandId,
       source: 'keyword',
-      status: { in: ['needs_review', 'manual_action_required', 'failed', 'rate_limited', 'setup_required'] },
+      status: { in: ['needs_review', 'manual_action_required', 'failed', 'rate_limited', 'setup_required', 'ignored_keyword', 'ignored_intent', 'ignored_urgency'] },
     },
     orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
     take: 100,
@@ -275,7 +275,12 @@ async function mapKeywordCampaignRows(brandId: number, rows: CampaignReviewRow[]
       author: item.authorHandle ?? item.platformAuthorId ?? '',
       original: item.originalText ?? '',
       reply: item.replyText ?? '',
-      delivery_error: item.deliveryError,
+      delivery_error: item.deliveryError ?? (
+        item.status === 'ignored_intent' ? `Ignored by campaign intent filter. Classified as ${item.intent ?? 'unknown'}; adjust intent filter or approve manually.`
+          : item.status === 'ignored_urgency' ? `Ignored by urgency threshold. Score ${item.urgencyScore ?? 0}; approve manually if this should be handled.`
+            : item.status === 'ignored_keyword' ? 'Ignored by keyword guardrails. Approve manually only if this is relevant.'
+              : null
+      ),
       meta: {
         author_id: item.platformAuthorId ?? item.authorId,
         comment_id: item.commentId,
