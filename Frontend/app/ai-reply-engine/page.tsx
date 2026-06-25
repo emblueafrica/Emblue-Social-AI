@@ -71,6 +71,7 @@ const REPLY_FORMATS = [
   { id: "de_escalation", label: "De-escalate" },
 ] as const;
 type ReplyFormat = (typeof REPLY_FORMATS)[number]["id"];
+const PAGE_SIZE = 10;
 
 function PlatformIcon({ p, className = "size-4" }: { p: Platform; className?: string }) {
   return <PlatformLogo platform={p} size={16} className={className} />;
@@ -135,6 +136,7 @@ export default function AIReplyEngine() {
   const [generatedDrafts, setGeneratedDrafts] = useState<Record<number, AiReplySuggestion>>({});
   const [attachments, setAttachments] = useState<Record<number, CampaignMedia[]>>({});
   const [apiNotice, setApiNotice] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const accessQuery = useQuery({
     queryKey: ["tool-access", activeBrandId],
@@ -154,6 +156,11 @@ export default function AIReplyEngine() {
 
   const queueMessages = useMemo(() => queueQuery.data?.queue.map(mapQueueItem) ?? [], [queueQuery.data?.queue]);
   const visible = useMemo(() => queueMessages.filter((message) => platforms[message.platform]), [platforms, queueMessages]);
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pageStart = (safePage - 1) * PAGE_SIZE;
+  const pageEnd = Math.min(pageStart + PAGE_SIZE, visible.length);
+  const pageMessages = useMemo(() => visible.slice(pageStart, pageStart + PAGE_SIZE), [pageStart, visible]);
   const selected = visible.find((message) => message.id === selectedId) ?? null;
   const selectedAttachments = selected ? attachments[selected.id] ?? [] : [];
 
@@ -230,14 +237,24 @@ export default function AIReplyEngine() {
   const backendDraftAvailable = Boolean(activeBrandId && hasReplyTool && selected && isBackendPlatform(selected.platform));
 
   useEffect(() => {
-    if (!visible.length) {
+    if (!pageMessages.length) {
       setSelectedId(null);
       return;
     }
-    if (!selectedId || !visible.some((message) => message.id === selectedId)) {
-      setSelectedId(visible[0].id);
+    if (!selectedId || !pageMessages.some((message) => message.id === selectedId)) {
+      setSelectedId(pageMessages[0].id);
     }
-  }, [visible, selectedId]);
+  }, [pageMessages, selectedId]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [platforms.instagram, platforms.facebook, platforms.x, platforms.tiktok]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const togglePlatform = (platform: Platform) => {
     setPlatforms((state) => ({ ...state, [platform]: !state[platform] }));
@@ -363,12 +380,14 @@ export default function AIReplyEngine() {
                   <input type="checkbox" className="size-4 rounded" />
                   Select all
                 </label>
-                <span className="text-sm font-semibold">{visible.length} messages</span>
+                <span className="text-sm font-semibold">
+                  {visible.length ? `${pageStart + 1}-${pageEnd} of ${visible.length} messages` : "0 messages"}
+                </span>
               </div>
 
               {visible.length ? (
                 <ul className="divide-y">
-                  {visible.map((message) => {
+                  {pageMessages.map((message) => {
                     const isSelected = selectedId === message.id;
                     return (
                       <li
@@ -409,10 +428,26 @@ export default function AIReplyEngine() {
                     <button onClick={() => setToast(null)} className="text-primary font-semibold">Dismiss</button>
                   </div>
                 )}
-                <button className="flex items-center gap-1 text-muted-foreground hover:text-foreground"><ChevronLeft className="size-4" /> Prev</button>
-                <span className="flex items-center gap-1 px-3 py-1.5 rounded-md border">1 <ChevronDown className="size-3" /></span>
-                <span className="text-muted-foreground">of {Math.max(visible.length, 1)}</span>
-                <button className="flex items-center gap-1 hover:text-primary">Next <ChevronRight className="size-4" /></button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  disabled={safePage <= 1}
+                  className="flex items-center gap-1 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <ChevronLeft className="size-4" /> Prev
+                </button>
+                <span className="flex items-center gap-1 px-3 py-1.5 rounded-md border">
+                  {safePage} <ChevronDown className="size-3" />
+                </span>
+                <span className="text-muted-foreground">of {totalPages}</span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  disabled={safePage >= totalPages || !visible.length}
+                  className="flex items-center gap-1 hover:text-primary disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Next <ChevronRight className="size-4" />
+                </button>
               </div>
             </section>
 
