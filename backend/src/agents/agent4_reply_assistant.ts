@@ -46,6 +46,30 @@ function looksLikeQuestion(text: string): boolean {
   return /\?|\b(how|what|why|when|where|can you|could you|do you|is this|are you)\b/i.test(text);
 }
 
+function topicFromMessage(text: string): string {
+  const cleaned = text
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/@\w+/g, ' ')
+    .replace(/[#_]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const stopwords = new Set(['the', 'and', 'for', 'that', 'this', 'with', 'you', 'your', 'are', 'was', 'were', 'have', 'has', 'had', 'just', 'really', 'very', 'please', 'need', 'help', 'comment', 'post', 'reply', 'hello', 'hey', 'i', 'me', 'my', 'we', 'our', 'us', 'they', 'them', 'their', 'to', 'of', 'in', 'on', 'it', 'is', 'a', 'an']);
+  const words = cleaned.split(' ').map(word => word.trim()).filter(word => word.length > 2 && !stopwords.has(word.toLowerCase()));
+  return words.slice(0, 6).join(' ') || 'this';
+}
+
+function toneLead(tone: string, prefix: string, topic: string): string {
+  const normalized = tone.toLowerCase();
+  if (normalized.includes('empathetic')) return `${prefix}I understand the concern around ${topic}.`;
+  if (normalized.includes('warm')) return `${prefix}I hear you on ${topic}.`;
+  if (normalized.includes('playful')) return `${prefix}Fair point on ${topic}.`;
+  if (normalized.includes('direct')) return `${prefix}On ${topic}:`;
+  if (normalized.includes('conversion')) return `${prefix}For ${topic}, the next step is simple:`;
+  if (normalized.includes('professional') || normalized.includes('authoritative')) return `${prefix}We can address ${topic} clearly.`;
+  return `${prefix}On ${topic},`;
+}
+
 export function contextualFallbackReply(payload: Agent4Payload): ReplySuggestion {
   const handle = handleForReply(payload.author_handle);
   const prefix = handle ? `${handle} ` : '';
@@ -53,26 +77,28 @@ export function contextualFallbackReply(payload: Agent4Payload): ReplySuggestion
   const cta = payload.campaign_context?.cta_link ? ` ${payload.campaign_context.cta_link}` : '';
   const tone = requestedTone(payload);
   const format = requestedFormat(payload);
+  const topic = topicFromMessage(message);
+  const lead = toneLead(tone, prefix, topic);
 
   let text: string;
   if (format === 'short') {
     text = looksLikeQuestion(message)
-      ? `${prefix}Good question. We will check and reply clearly.${cta}`
-      : `${prefix}Noted. We are reviewing this and will respond with useful details.${cta}`;
+      ? `${lead} Share the exact detail you want answered and we will keep it specific.${cta}`
+      : `${lead} Share the exact detail and we will respond directly.${cta}`;
   } else if (format === 'question') {
     text = looksLikeSuspicion(message)
-      ? `${prefix}What specifically looked suspicious to you? Share the detail so we can respond factually.${cta}`
-      : `${prefix}Can you share one more detail so we can point you to the right answer?${cta}`;
+      ? `${lead} What specifically looked off so we can respond factually?${cta}`
+      : `${lead} What detail should we check first?${cta}`;
   } else if (format === 'conversion') {
-    text = `${prefix}We can help with this. Send the detail you need and we will point you to the next step.${cta}`;
+    text = `${lead} use the support link and include the key detail so the right team can review it.${cta}`;
   } else if (format === 'de_escalation' || looksLikeSuspicion(message)) {
-    text = `${prefix}That concern is noted. Please share the specific detail so we can address it carefully and factually.${cta}`;
+    text = `${lead} Please share the specific detail so we can address it carefully without guessing.${cta}`;
   } else if (looksLikeComplaint(message)) {
-    text = `${prefix}Thanks for flagging this. We understand the concern and will review the details carefully before responding further.${cta}`;
+    text = `${lead} send the exact detail so we can point you to the right next step.${cta}`;
   } else if (looksLikeQuestion(message)) {
-    text = `${prefix}Good question. We are checking the details and will respond with the clearest answer we can.${cta}`;
+    text = `${lead} ask the specific part you want clarified and we will answer it directly.${cta}`;
   } else {
-    text = `${prefix}Thanks for the comment. We are reviewing this and will follow up with a useful response.${cta}`;
+    text = `${lead} share the detail you want handled and we will keep the reply useful.${cta}`;
   }
 
   return {

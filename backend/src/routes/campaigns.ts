@@ -165,6 +165,16 @@ function extractXStatusId(url: unknown): string | null {
   return extractPostId('x', url.trim());
 }
 
+function sourceUrlForActivity(platform: Platform | string | null | undefined, ids: {
+  commentId?: string | null;
+  postId?: string | null;
+  externalEventId?: string | null;
+}): string | null {
+  if (platform !== 'x') return null;
+  const id = ids.commentId ?? ids.externalEventId ?? ids.postId ?? null;
+  return id && /^\d+$/.test(id) ? `https://x.com/i/web/status/${id}` : null;
+}
+
 async function deleteCampaignPlatformPost(brandId: number, platform: CampaignPlatform, postId: string): Promise<{ deleted: boolean; status: string }> {
   const token = await getValidToken(brandId, platform);
   if (!token) return { deleted: false, status: 'manual_required:no_active_token' };
@@ -264,6 +274,7 @@ router.get('/activity', requireBrandAccess, requireToolAccess('tool_10'), async 
       id: Number(item.engagerId), campaign_id: Number(item.campaignId), campaign_name: campaign?.name ?? 'Campaign',
       mode: campaign?.mode ?? 'post_url', platform: item.platform, action: item.action,
       author_handle: item.authorHandle, original_text: item.originalText, reply_text: item.replyText, status: item.status,
+      source_url: sourceUrlForActivity(item.platform, { commentId: item.commentId, postId: item.postId, externalEventId: item.externalEventId }),
       confidence: item.replyConfidence, error: item.deliveryError, created_at: item.createdAt,
       deliveries: itemDeliveries.map(delivery => ({ channel: delivery.channel, status: delivery.status, error: delivery.error, delivered_at: delivery.deliveredAt })),
     };
@@ -1457,6 +1468,8 @@ router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('t
           replyText: true,
           deliveryError: true,
           externalEventId: true,
+          commentId: true,
+          postId: true,
           source: true,
           intent: true,
           urgencyScore: true,
@@ -1512,6 +1525,7 @@ router.get('/:campaign_id/engagements', requireBrandAccess, requireToolAccess('t
         author_handle: item.authorHandle,
         original_text: item.originalText,
         reply_text: item.replyText,
+        source_url: sourceUrlForActivity(item.platform, { commentId: item.commentId, postId: item.postId, externalEventId: item.externalEventId }),
         delivery_error: item.deliveryError,
         external_event_id: item.externalEventId,
         source: item.source,

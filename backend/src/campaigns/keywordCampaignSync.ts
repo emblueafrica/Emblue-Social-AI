@@ -138,6 +138,24 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           totals.captured += 1;
           platformSummary.new += 1;
         }
+        const shouldGenerateDraft = Boolean(createdEngagement || !engagement.replyText?.trim() || canReprocessExisting);
+        if (shouldGenerateDraft) {
+          const draft = await buildCampaignReplyDraft(brandId, {
+            platform,
+            author_handle: item.authorHandle ?? item.authorIdExt ?? 'customer',
+            author_id: item.authorIdExt,
+            comment_id: ids.commentId,
+            post_id: ids.postId,
+            tweet_id: ids.tweetId,
+            text: item.text,
+            action: 'commented',
+            matched_keyword: item.matchedKeyword ?? undefined,
+          }, config);
+          await prisma.campaignPostEngager.update({
+            where: { engagerId: engagement.engagerId },
+            data: { replyText: draft.reply, replyConfidence: draft.confidence, updatedAt: new Date() },
+          });
+        }
         if (initialStatus.startsWith('ignored_')) {
           if (!createdEngagement && engagement.status !== initialStatus) {
             await prisma.campaignPostEngager.update({
@@ -165,21 +183,6 @@ export async function syncKeywordCampaigns(brandId: number, selectedCampaignId?:
           platformSummary.review += 1;
           continue;
         }
-        const draft = await buildCampaignReplyDraft(brandId, {
-          platform,
-          author_handle: item.authorHandle ?? item.authorIdExt ?? 'customer',
-          author_id: item.authorIdExt,
-          comment_id: ids.commentId,
-          post_id: ids.postId,
-          tweet_id: ids.tweetId,
-          text: item.text,
-          action: 'commented',
-          matched_keyword: item.matchedKeyword ?? undefined,
-        }, config);
-        await prisma.campaignPostEngager.update({
-          where: { engagerId: engagement.engagerId },
-          data: { replyText: draft.reply, replyConfidence: draft.confidence, updatedAt: new Date() },
-        });
         // Keyword campaign matches are reviewed in AI Reply Engine before any platform action is sent.
         await prisma.campaignPostEngager.update({
           where: { engagerId: engagement.engagerId },

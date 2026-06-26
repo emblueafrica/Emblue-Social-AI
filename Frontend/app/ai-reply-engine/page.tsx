@@ -10,6 +10,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  ExternalLink,
   FileText,
   Paperclip,
   RefreshCw,
@@ -46,6 +48,7 @@ type Message = {
   urgency: Urgency;
   original?: string;
   reply?: string;
+  sourceUrl?: string | null;
   confidence?: number;
   queueId?: number | string;
 };
@@ -97,6 +100,12 @@ function firstSuggestion(result: { replies?: AiReplySuggestion[]; suggestions?: 
   return result.replies?.[0] ?? result.suggestions?.[0] ?? null;
 }
 
+function sourceUrlFromQueueItem(item: ApprovalQueueItem): string | null {
+  if (item.source_url) return item.source_url;
+  const tweetId = item.meta?.tweet_id ?? (item.platform === "x" ? item.meta?.comment_id : null);
+  return tweetId && /^\d+$/.test(tweetId) ? `https://x.com/i/web/status/${tweetId}` : null;
+}
+
 function mapQueueItem(item: ApprovalQueueItem, index: number): Message {
   const author = item.author.startsWith("@") ? item.author : `@${item.author}`;
   const platform = isBackendPlatform(item.platform as Platform) ? (item.platform as BackendPagePlatform) : "x";
@@ -114,6 +123,7 @@ function mapQueueItem(item: ApprovalQueueItem, index: number): Message {
     urgency: item.manual_copy_required ? "yellow" : "red",
     original: item.delivery_error ? `${item.original}\n\nLast delivery error: ${item.delivery_error}` : item.original,
     reply: item.reply,
+    sourceUrl: sourceUrlFromQueueItem(item),
     confidence,
     queueId: item.queue_key ?? item.queue_id,
   };
@@ -320,6 +330,16 @@ export default function AIReplyEngine() {
     }));
   };
 
+  const copyDraft = async () => {
+    if (!draftBody.trim()) return;
+    try {
+      await navigator.clipboard.writeText(draftBody);
+      setApiNotice("Reply copied. Open the source post and paste it manually when X blocks API replies.");
+    } catch {
+      setApiNotice("Could not copy automatically. Select the draft text and copy it manually.");
+    }
+  };
+
   return (
     <div className="min-h-screen flex bg-muted/30">
       <Sidebar activeLabel="AI Reply Engine" />
@@ -404,6 +424,17 @@ export default function AIReplyEngine() {
                         <PlatformIcon p={message.platform} className="size-4 shrink-0" />
                         <span className="font-medium shrink-0 w-[110px] truncate">{message.user}</span>
                         <span className="text-muted-foreground truncate flex-1 min-w-0">{message.preview}</span>
+                        {message.sourceUrl && (
+                          <a
+                            href={message.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] font-semibold text-primary hover:underline"
+                          >
+                            <ExternalLink className="size-3" /> Open post
+                          </a>
+                        )}
                         <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full shrink-0 whitespace-nowrap ${sentimentClass[message.sentiment]}`}>
                           {message.confidence ? `${message.confidence}%` : message.sentiment}
                         </span>
@@ -470,6 +501,28 @@ export default function AIReplyEngine() {
                   </div>
 
                   <div className="bg-muted/40 rounded-xl p-4 text-sm leading-relaxed mb-3 text-safe">{selected.original || selected.preview}</div>
+
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    {selected.sourceUrl && (
+                      <a
+                        href={selected.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/5"
+                      >
+                        <ExternalLink className="size-3.5" /> Open source post
+                      </a>
+                    )}
+                    {draftBody && (
+                      <button
+                        type="button"
+                        onClick={() => void copyDraft()}
+                        className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold hover:bg-muted"
+                      >
+                        <Copy className="size-3.5" /> Copy reply
+                      </button>
+                    )}
+                  </div>
 
                   <div className="flex gap-2 mb-5">
                     <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${sentimentClass[selected.sentiment]}`}>{selected.sentiment}</span>

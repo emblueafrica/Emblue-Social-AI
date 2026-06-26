@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, MoreVertical, Plus, RefreshCw, X as XClose } from "lucide-react";
+import { CheckCircle2, Copy, ExternalLink, MoreVertical, Plus, RefreshCw, X as XClose } from "lucide-react";
 import { Sidebar, DashHeader } from "@/components/dashboard/Sidebar";
 import { NewCampaignModal, type CampaignDraft } from "@/components/dashboard/NewCampaignModal";
 import { PlatformLogo } from "@/components/PlatformLogo";
@@ -487,20 +487,32 @@ export default function EngageTheEngager() {
   };
 
   const handleRetryEngagement = async (engagerId: number, replyText?: string) => {
-    if (!activityCampaignId) return;
+    if (!activeBrandId) return;
     try {
       const result = await campaignRetryMutation.mutateAsync({ engagerId, replyText });
       await activityQuery.refetch();
+      await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+      setActivityDrafts(current => {
+        const next = { ...current };
+        delete next[String(engagerId)];
+        return next;
+      });
       setToast(result.status === "sent" ? "Campaign reply sent." : `Campaign reply status: ${result.status.replaceAll("_", " ")}.`);
       if (result.error) setApiNotice(result.error);
     } catch (error) { setApiNotice(apiErrorMessage(error)); }
   };
 
   const handleDismissEngagement = async (engagerId: number) => {
-    if (!activityCampaignId) return;
+    if (!activeBrandId) return;
     try {
       await campaignDismissMutation.mutateAsync({ engagerId });
       await activityQuery.refetch();
+      await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
+      setActivityDrafts(current => {
+        const next = { ...current };
+        delete next[String(engagerId)];
+        return next;
+      });
       setToast("Campaign engagement dismissed.");
     } catch (error) { setApiNotice(apiErrorMessage(error)); }
   };
@@ -984,6 +996,33 @@ function Surface({ children }: { children: React.ReactNode }) {
   return <section className="bg-card rounded-2xl shadow-sm p-6">{children}</section>;
 }
 
+function SourcePostLink({ url }: { url?: string | null }) {
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5"
+    >
+      <ExternalLink className="size-3.5" /> Open post
+    </a>
+  );
+}
+
+function CopyReplyButton({ text }: { text?: string | null }) {
+  if (!text?.trim()) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void navigator.clipboard.writeText(text)}
+      className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted"
+    >
+      <Copy className="size-3.5" /> Copy reply
+    </button>
+  );
+}
+
 function CampaignActivityPanel({ data, loading, error, syncing, mutating, drafts, onDraftChange, onSync, onRetry, onDismiss }: {
   data?: CampaignEngagementResponse;
   loading: boolean;
@@ -1013,7 +1052,7 @@ function CampaignActivityPanel({ data, loading, error, syncing, mutating, drafts
           return <div key={item.id} className="grid min-w-0 gap-3 border-t pt-3 lg:grid-cols-[140px_110px_minmax(0,1fr)_150px]">
             <div className="min-w-0"><p className="truncate text-sm font-medium">{item.author_handle || "Unknown"}</p><p className="text-xs capitalize text-muted-foreground">{item.platform} - {item.action}</p>{item.intent && <p className="mt-1 text-xs text-muted-foreground">{item.intent.replaceAll("_", " ")} - urgency {item.urgency_score ?? "-"} - confidence {item.reply_confidence ?? "-"}%</p>}</div>
             <span className="h-fit w-fit whitespace-nowrap rounded-full bg-muted px-2.5 py-1 text-xs font-semibold capitalize">{(item.status || "pending").replaceAll("_", " ")}</span>
-            <div className="min-w-0"><p className="break-words text-sm">{item.original_text || "No message text"}</p>{item.delivery_error && <p className="mt-1 break-words text-xs text-destructive">{item.delivery_error}</p>}{item.deliveries.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{item.deliveries.map(delivery => <span key={delivery.channel} title={delivery.error ?? undefined} className="whitespace-nowrap rounded-full border px-2 py-1 text-xs capitalize">{delivery.channel.replaceAll("_", " ")}: {delivery.status.replaceAll("_", " ")}</span>)}</div>}{actionable && <textarea value={draft} onChange={event => onDraftChange(item.id, event.target.value)} className="mt-2 min-h-20 w-full rounded-lg border bg-background p-2 text-sm" placeholder="Edit the reply before retrying" />}</div>
+            <div className="min-w-0"><p className="break-words text-sm">{item.original_text || "No message text"}</p><div className="mt-2 flex flex-wrap gap-2"><SourcePostLink url={item.source_url} /><CopyReplyButton text={draft} /></div>{item.delivery_error && <p className="mt-1 break-words text-xs text-destructive">{item.delivery_error}</p>}{item.deliveries.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{item.deliveries.map(delivery => <span key={delivery.channel} title={delivery.error ?? undefined} className="whitespace-nowrap rounded-full border px-2 py-1 text-xs capitalize">{delivery.channel.replaceAll("_", " ")}: {delivery.status.replaceAll("_", " ")}</span>)}</div>}{actionable && <textarea value={draft} onChange={event => onDraftChange(item.id, event.target.value)} className="mt-2 min-h-20 w-full rounded-lg border bg-background p-2 text-sm" placeholder="Edit the reply before retrying" />}</div>
             {actionable && <div className="flex flex-wrap items-start gap-2"><button disabled={mutating} onClick={() => onRetry(Number(item.id), draft || undefined)} className="shrink-0 whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">Retry reply</button><button disabled={mutating} onClick={() => onDismiss(Number(item.id))} className="shrink-0 whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-50">Dismiss</button></div>}
           </div>;
         })}</div> : <p className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No engagement has been captured yet. Use Sync now after someone replies to the tracked post.</p>}
@@ -1068,12 +1107,12 @@ function UnifiedActivityFeed({ data, loading, error, canMutate, selectedCampaign
     {Boolean(error) && <p className="py-4 text-sm text-destructive">{apiErrorMessage(error)}</p>}
     {data && <div className="divide-y">
       {pagedItems.length ? pagedItems.map(item => {
-        const actionable = ["needs_review", "partial", "failed", "error", "generation_failed", "rate_limited", "manual_action_required", "bot_blocked"].includes(item.status);
+        const actionable = ["needs_review", "partial", "failed", "error", "generation_failed", "rate_limited", "manual_action_required", "manual_copy", "bot_blocked"].includes(item.status);
         const draft = drafts[String(item.id)] ?? item.reply_text ?? "";
         return <div key={item.id} className="grid min-w-0 gap-3 py-4 lg:grid-cols-[180px_120px_minmax(0,1fr)_170px]">
           <div className="min-w-0"><p className="truncate text-sm font-semibold">{item.campaign_name}</p><p className="truncate text-xs text-muted-foreground">{item.author_handle || "Unknown"}</p><p className="text-xs capitalize text-muted-foreground">{item.platform} - {item.action}</p></div>
           <span className="h-fit w-fit whitespace-nowrap rounded-full bg-muted px-2.5 py-1 text-xs font-semibold capitalize">{item.status.replaceAll("_", " ")}</span>
-          <div className="min-w-0"><p className="break-words text-sm">{item.original_text || "No message text"}</p>{item.error && <p className="mt-1 break-words text-xs text-destructive">{item.error}</p>}<div className="mt-2 flex flex-wrap gap-2">{item.deliveries.map(delivery => <span key={`${item.id}-${delivery.channel}`} className="whitespace-nowrap rounded-full border px-2 py-1 text-xs capitalize">{delivery.channel.replaceAll("_", " ")}: {delivery.status.replaceAll("_", " ")}</span>)}</div>{canMutate && actionable && <textarea value={draft} onChange={event => onDraftChange(String(item.id), event.target.value)} className="mt-2 min-h-20 w-full rounded-lg border bg-background p-2 text-sm" placeholder="Edit the reply before sending" />}</div>
+          <div className="min-w-0"><p className="break-words text-sm">{item.original_text || "No message text"}</p><div className="mt-2 flex flex-wrap gap-2"><SourcePostLink url={item.source_url} /><CopyReplyButton text={draft} /></div>{item.error && <p className="mt-1 break-words text-xs text-destructive">{item.error}</p>}<div className="mt-2 flex flex-wrap gap-2">{item.deliveries.map(delivery => <span key={`${item.id}-${delivery.channel}`} className="whitespace-nowrap rounded-full border px-2 py-1 text-xs capitalize">{delivery.channel.replaceAll("_", " ")}: {delivery.status.replaceAll("_", " ")}</span>)}</div>{canMutate && actionable && <textarea value={draft} onChange={event => onDraftChange(String(item.id), event.target.value)} className="mt-2 min-h-20 w-full rounded-lg border bg-background p-2 text-sm" placeholder="Edit the reply before sending" />}</div>
           {canMutate && actionable ? <div className="flex flex-wrap items-start gap-2"><button disabled={mutating} onClick={() => onRetry(item.id, draft || undefined)} className="whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">{draft ? "Edit & send" : "Retry"}</button><button disabled={mutating} onClick={() => onDismiss(item.id)} className="whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-50">Dismiss</button></div> : <span className="text-xs text-muted-foreground">{new Date(item.created_at).toLocaleString()}</span>}
         </div>;
       }) : <p className="my-5 rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No campaign activity has been captured for this view.</p>}

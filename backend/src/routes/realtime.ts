@@ -12,6 +12,8 @@ import { processLiveEngagementEvent, resolveBrandForPlatformAccount } from '../c
 import { prepareCampaignDelivery, processCampaignDeliveryJob } from '../campaigns/deliveryWorker';
 import { validateMediaSet } from '../campaigns/lifecycle';
 import { uploadCampaignMediaBuffer } from '../utils/cloudinary';
+import { mapEngageCampaign } from '../db/mappers';
+import { buildCampaignReplyDraft } from '../stream/engageEngagers';
 
 const router = Router();
 const replyUpload = multer({
@@ -54,6 +56,17 @@ function parseQueueMedia(body: Record<string, unknown> | undefined): QueueMediaP
     ? body.image_url
     : firstImage?.url;
   return { imageUrl, media };
+}
+
+function sourceUrlForSocialEvent(platform: Platform | string | null | undefined, ids: {
+  tweetId?: string | null;
+  commentId?: string | null;
+  postId?: string | null;
+  externalEventId?: string | null;
+}): string | null {
+  if (platform !== 'x') return null;
+  const id = ids.tweetId ?? ids.commentId ?? ids.externalEventId ?? ids.postId ?? null;
+  return id && /^\d+$/.test(id) ? `https://x.com/i/web/status/${id}` : null;
 }
 
 router.get('/stream/:brand_id', requireBrandAccess, (req: Request, res: Response) => {
@@ -169,6 +182,7 @@ function mapApprovalRow(row: PendingApprovalRow, brandId: number): ApprovalQueue
     author: row.authorHandle ?? '',
     original: row.originalText ?? '',
     reply: row.replyText ?? '',
+    source_url: sourceUrlForSocialEvent(row.platform, { tweetId: row.tweetId, commentId: row.commentId, postId: row.postId }),
     delivery_error: row.deliveryError,
     meta: {
       author_id: row.authorId,
@@ -221,6 +235,12 @@ async function mapCampaignDeliveryRows(brandId: number, deliveries: CampaignQueu
       author: engager?.authorHandle ?? engager?.platformAuthorId ?? '',
       original: engager?.originalText ?? '',
       reply: engager?.replyText ?? '',
+      source_url: sourceUrlForSocialEvent(engager?.platform, {
+        tweetId: engager?.platform === 'x' ? engager?.commentId : null,
+        commentId: engager?.commentId,
+        postId: engager?.postId,
+        externalEventId: engager?.externalEventId,
+      }),
       delivery_error: delivery.error ?? engager?.deliveryError ?? null,
       manual_copy_required: manual,
       manual_copy_instructions: manual
@@ -256,17 +276,39 @@ async function mapKeywordCampaignRows(brandId: number, rows: CampaignReviewRow[]
   const campaigns = campaignIds.length
     ? await prisma.engageCampaign.findMany({
         where: { brandId, campaignId: { in: campaignIds.map(value => BigInt(value)) } },
-        select: { campaignId: true, name: true },
       })
     : [];
-  const campaignById = new Map(campaigns.map(item => [String(item.campaignId), item.name]));
-  return rows
+  const campaignById = new Map(campaigns.map(item => [String(item.campaignId), item]));
+  const hydratedRows = await Promise.all(rows.map(async (item) => {
+    if (item.replyText?.trim() || !/^\d+$/.test(item.campaignId)) return item;
+    const campaign = campaignById.get(item.campaignId);
+    if (!campaign) return item;
+    try {
+      const draft = await buildCampaignReplyDraft(brandId, {
+        platform: item.platform as Platform,
+        author_handle: item.authorHandle ?? item.platformAuthorId ?? 'customer',
+        author_id: item.platformAuthorId ?? item.authorId,
+        comment_id: item.commentId ?? undefined,
+        post_id: item.postId ?? undefined,
+        tweet_id: item.platform === 'x' ? item.commentId ?? item.externalEventId : null,
+        text: item.originalText ?? '',
+        action: item.action === 'liked' ? 'liked' : 'commented',
+      }, mapEngageCampaign(campaign));
+      return await prisma.campaignPostEngager.update({
+        where: { engagerId: item.engagerId },
+        data: { replyText: draft.reply, replyConfidence: draft.confidence, updatedAt: new Date() },
+      });
+    } catch {
+      return item;
+    }
+  }));
+  return hydratedRows
     .filter(item => /^\d+$/.test(item.campaignId))
     .map(item => ({
       queue_key: `campaign:${Number(item.engagerId)}:public_reply`,
       brand_id: brandId,
       campaign_id: Number(item.campaignId),
-      campaign_name: campaignById.get(item.campaignId) ?? 'Keyword Campaign',
+      campaign_name: campaignById.get(item.campaignId)?.name ?? 'Keyword Campaign',
       source: 'campaign' as const,
       channel: 'public_reply' as const,
       status: item.status,
@@ -274,6 +316,12 @@ async function mapKeywordCampaignRows(brandId: number, rows: CampaignReviewRow[]
       author: item.authorHandle ?? item.platformAuthorId ?? '',
       original: item.originalText ?? '',
       reply: item.replyText ?? '',
+      source_url: sourceUrlForSocialEvent(item.platform, {
+        tweetId: item.platform === 'x' ? item.commentId : null,
+        commentId: item.commentId,
+        postId: item.postId,
+        externalEventId: item.externalEventId,
+      }),
       delivery_error: item.deliveryError ?? (
         item.status === 'ignored_intent' ? `Ignored by campaign intent filter. Classified as ${item.intent ?? 'unknown'}; adjust intent filter or approve manually.`
           : item.status === 'ignored_urgency' ? `Ignored by urgency threshold. Score ${item.urgencyScore ?? 0}; approve manually if this should be handled.`
@@ -323,6 +371,12 @@ async function fetchUnifiedApprovalItems(brandId: number): Promise<ApprovalQueue
       author: item.authorHandle ?? item.platformAuthorId ?? '',
       original: item.originalText ?? '',
       reply: item.replyText ?? '',
+      source_url: sourceUrlForSocialEvent(item.platform, {
+        tweetId: item.platform === 'x' ? item.commentId : null,
+        commentId: item.commentId,
+        postId: item.postId,
+        externalEventId: item.externalEventId,
+      }),
       delivery_error: item.deliveryError,
       meta: {
         author_id: item.platformAuthorId ?? item.authorId,
