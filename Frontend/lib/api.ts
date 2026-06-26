@@ -443,7 +443,7 @@ export type CampaignEngagementResponse = {
   summary: { captured: number; comments: number; likes: number; reposts: number; sent: number; queued: number; manual: number; failed: number; ignored: number };
   platform_capabilities: Record<Platform, string>;
   bindings: { platform: Platform; url: string; status?: string | null; total_fetched: number; error?: string | null; last_synced_at?: string | null }[];
-  engagers: { id: string; platform: Platform; action: string; author_handle?: string | null; original_text?: string | null; reply_text?: string | null; delivery_error?: string | null; external_event_id: string; source: string; intent?: string | null; urgency_score?: number | null; reply_confidence?: number | null; status?: string | null; created_at: string; processed_at?: string | null; deliveries: { channel: string; status: string; external_message_id?: string | null; error?: string | null; attempt_count: number; delivered_at?: string | null }[] }[];
+  engagers: { id: string; platform: Platform; action: string; author_handle?: string | null; original_text?: string | null; reply_text?: string | null; source_url?: string | null; delivery_error?: string | null; external_event_id: string; source: string; intent?: string | null; urgency_score?: number | null; reply_confidence?: number | null; status?: string | null; created_at: string; processed_at?: string | null; deliveries: { channel: string; status: string; external_message_id?: string | null; error?: string | null; attempt_count: number; delivered_at?: string | null }[] }[];
 };
 
 export type CampaignActivityItem = {
@@ -456,6 +456,7 @@ export type CampaignActivityItem = {
   author_handle?: string | null;
   original_text?: string | null;
   reply_text?: string | null;
+  source_url?: string | null;
   status: string;
   confidence?: number | null;
   error?: string | null;
@@ -600,6 +601,7 @@ export type ApprovalQueueItem = {
   author: string;
   original: string;
   reply: string;
+  source_url?: string | null;
   image_url?: string | null;
   tracked_link?: string | null;
   delivery_error?: string | null;

@@ -493,6 +493,7 @@ export interface ApprovalQueueItem {
   author:        string;
   original:      string;
   reply:         string;
+  source_url?:   string | null;
   image_url?:    string | null;
   tracked_link?: string | null;
   delivery_error?: string | null;
