@@ -29,6 +29,7 @@ import {
   type AiReplyPlatform,
   type AiReplySuggestion,
 } from "@/lib/ai-reply-api";
+import { resolveEditableReplyDraft } from "@/lib/reply-drafts";
 
 type Platform = "instagram" | "facebook" | "x" | "tiktok" | "linkedin";
 type BackendPagePlatform = Extract<Platform, AiReplyPlatform>;
@@ -144,6 +145,7 @@ export default function AIReplyEngine() {
   const [replyFormat, setReplyFormat] = useState<ReplyFormat>("helpful");
   const [toast, setToast] = useState<null | { kind: "approved" | "skipped" }>(null);
   const [generatedDrafts, setGeneratedDrafts] = useState<Record<number, AiReplySuggestion>>({});
+  const [editedDrafts, setEditedDrafts] = useState<Record<number, string>>({});
   const [attachments, setAttachments] = useState<Record<number, CampaignMedia[]>>({});
   const [apiNotice, setApiNotice] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -183,6 +185,10 @@ export default function AIReplyEngine() {
         return;
       }
       setGeneratedDrafts((current) => ({ ...current, [selectedId]: suggestion }));
+      setEditedDrafts((current) => ({
+        ...current,
+        [selectedId]: suggestion.text ?? suggestion.reply_text ?? "",
+      }));
       setTone(suggestion.tone || tone);
       setApiNotice("Draft regenerated from the backend AI Reply Engine.");
     },
@@ -203,16 +209,21 @@ export default function AIReplyEngine() {
   });
 
   const approveMutation = useMutation({
-    mutationFn: ({ queueId, replyText, media }: { queueId: number | string; replyText: string; media?: CampaignMedia[] }) =>
+    mutationFn: ({ queueId, replyText, media }: { queueId: number | string; messageId: number; replyText: string; media?: CampaignMedia[] }) =>
       approveAiReplyQueueItem(activeBrandId!, queueId, replyText, {
         media,
         image_url: media?.find((item) => item.media_type === "image")?.url,
       }),
-    onSuccess: async (result) => {
+    onSuccess: async (result, variables) => {
       await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
       if (result.publish?.success === false) {
         setApiNotice(`Publishing failed; this item remains pending: ${result.publish.error ?? "platform publish failed"}`);
       } else {
+        setEditedDrafts((current) => {
+          const next = { ...current };
+          delete next[variables.messageId];
+          return next;
+        });
         setToast({ kind: "approved" });
         setApiNotice("Reply approved and sent.");
         setTimeout(() => setToast(null), 2500);
@@ -222,8 +233,13 @@ export default function AIReplyEngine() {
   });
 
   const skipMutation = useMutation({
-    mutationFn: (queueId: number | string) => skipAiReplyQueueItem(activeBrandId!, queueId),
-    onSuccess: async () => {
+    mutationFn: ({ queueId }: { queueId: number | string; messageId: number }) => skipAiReplyQueueItem(activeBrandId!, queueId),
+    onSuccess: async (_, variables) => {
+      setEditedDrafts((current) => {
+        const next = { ...current };
+        delete next[variables.messageId];
+        return next;
+      });
       await queryClient.invalidateQueries({ queryKey: ["ai-reply-queue", activeBrandId] });
       setToast({ kind: "skipped" });
       setApiNotice("Message skipped.");
@@ -233,7 +249,11 @@ export default function AIReplyEngine() {
   });
 
   const generatedDraft = selected ? generatedDrafts[selected.id] : undefined;
-  const draftBody = generatedDraft?.text ?? generatedDraft?.reply_text ?? selected?.reply ?? "";
+  const draftBody = resolveEditableReplyDraft(
+    selected ? editedDrafts[selected.id] : undefined,
+    generatedDraft?.text ?? generatedDraft?.reply_text,
+    selected?.reply,
+  );
   const draftTone = generatedDraft?.tone ?? tone;
   const campaignTags = Array.from(new Set(queueMessages.map((message) => message.tag))).sort();
   const manualReviewCount = queueMessages.filter((message) => message.tag === "Manual Review").length;
@@ -306,7 +326,7 @@ export default function AIReplyEngine() {
       setApiNotice("This queue item is not linked to the backend approval flow.");
       return;
     }
-    approveMutation.mutate({ queueId: selected.queueId, replyText: draftBody, media: selectedAttachments });
+    approveMutation.mutate({ queueId: selected.queueId, messageId: selected.id, replyText: draftBody, media: selectedAttachments });
   };
 
   const skipSelected = () => {
@@ -314,7 +334,7 @@ export default function AIReplyEngine() {
       setApiNotice("This queue item is not linked to the backend skip flow.");
       return;
     }
-    skipMutation.mutate(selected.queueId);
+    skipMutation.mutate({ queueId: selected.queueId, messageId: selected.id });
   };
 
   const attachFiles = (files: FileList | null) => {
@@ -537,7 +557,16 @@ export default function AIReplyEngine() {
                     </div>
                   </div>
 
-                  <div className="border rounded-xl p-4 text-sm leading-relaxed mb-2 max-h-44 overflow-auto text-safe">{draftBody || "No backend draft returned yet."}</div>
+                  <textarea
+                    value={draftBody}
+                    onChange={(event) => {
+                      if (!selected) return;
+                      setEditedDrafts((current) => ({ ...current, [selected.id]: event.target.value }));
+                    }}
+                    className="mb-2 min-h-32 max-h-56 w-full resize-y rounded-xl border bg-background p-4 text-sm leading-relaxed text-safe"
+                    placeholder="No backend draft returned yet. Write a reply here."
+                    aria-label="Editable AI reply draft"
+                  />
                   <div className="flex items-center justify-between text-xs mb-5">
                     <button onClick={regenerateDraft} disabled={!backendDraftAvailable || replyMutation.isPending} className="flex items-center gap-1 text-primary font-semibold disabled:text-muted-foreground disabled:cursor-not-allowed">
                       <RefreshCw className={`size-3 ${replyMutation.isPending ? "animate-spin" : ""}`} />

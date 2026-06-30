@@ -6,6 +6,10 @@ import {
   type CampaignEventSettings,
   type CampaignMedia,
 } from "@/lib/api";
+import {
+  CAMPAIGN_REPLY_TEMPLATE_LIMIT,
+  clampCampaignReplyTemplate,
+} from "@/lib/campaign-limits";
 
 export type Platform = "instagram" | "facebook" | "tiktok" | "x";
 export type CampaignDraft = {
@@ -167,6 +171,8 @@ export function NewCampaignModal({
     setDraft({
       ...value,
       sourceMode: value.sourceMode === "keyword" ? "keyword" : "existing",
+      template: clampCampaignReplyTemplate(value.template),
+      privateTemplate: clampCampaignReplyTemplate(value.privateTemplate),
     });
     setKeywordInput("");
     setError(null);
@@ -629,19 +635,23 @@ export function NewCampaignModal({
           <div className="space-y-8">
             <Field label="Reply Template">
               <VariableButtons
-                onInsert={(value) =>
-                  update("template", `${draft.template}${value}`)
-                }
+                onInsert={(value) => {
+                  const template = clampCampaignReplyTemplate(`${draft.template}${value}`);
+                  update("template", template);
+                  update("privateTemplate", template);
+                }}
               />
               <textarea
                 value={draft.template}
                 onChange={(event) => {
-                  update("template", event.target.value);
-                  update("privateTemplate", event.target.value);
+                  const template = clampCampaignReplyTemplate(event.target.value);
+                  update("template", template);
+                  update("privateTemplate", template);
                 }}
+                maxLength={CAMPAIGN_REPLY_TEMPLATE_LIMIT}
                 className="textarea mt-3 min-h-32"
               />
-              <p className="counter">{draft.template.length} / 100</p>
+              <p className="counter">{draft.template.length} / {CAMPAIGN_REPLY_TEMPLATE_LIMIT}</p>
             </Field>
 
             <Field label="Tracked CTA Link">
