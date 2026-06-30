@@ -17,6 +17,7 @@ import { prepareCampaignDelivery } from '../campaigns/deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 import { withSchedulerLease } from '../automation/schedulerLease';
 import { normalizeCampaignKeyword, validateKeywordGuardrails } from '../campaigns/keywordGuardrails';
+import { validateCampaignReplyTemplates } from '../campaigns/templateValidation';
 import { CampaignConfig, PostUrlItem, Credentials, Intent, Platform } from '../types';
 import {
   CAMPAIGN_PLATFORMS,
@@ -382,10 +383,12 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
   const privateFollowupTemplate = typeof body.private_followup_template === 'string' ? body.private_followup_template.trim().slice(0, 2000) : '';
   const ctaLink = typeof body.cta_link === 'string' ? body.cta_link.trim().slice(0, 2048) : '';
   const imageUrl = typeof body.image_url === 'string' ? body.image_url.trim().slice(0, 2048) : '';
+  const templateValidation = validateCampaignReplyTemplates(body);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
   if (maxDmPerDay === null || spacingMinutes === null || priority === null) { sendValidationError(res, 'Keyword campaign limits are outside the supported range'); return; }
   if (body.campaign_id !== undefined && !campaignId) { sendValidationError(res, 'campaign_id must be a positive integer'); return; }
   if (!name || name.length > 120) { sendValidationError(res, 'name is required and must be 120 characters or fewer'); return; }
+  if (!templateValidation.ok) { sendValidationError(res, templateValidation.message); return; }
   const validation = validateKeywordCampaignInput({ keywords, platforms, intent_filter: intents, confidence_threshold: confidenceThreshold, urgency_threshold: urgencyThreshold, max_per_day: maxPerDay, public_reply_enabled: publicReplyEnabled, direct_message_enabled: directMessageEnabled });
   if (!validation.ok) { sendValidationError(res, validation.message ?? 'Invalid keyword campaign'); return; }
   const replyTemplateId = body.reply_template_id === null || body.reply_template_id === undefined ? null : getRequiredBrandId(body.reply_template_id);
@@ -487,7 +490,9 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
   };
 
   const brandId = getRequiredBrandId(body.brand_id);
+  const templateValidation = validateCampaignReplyTemplates(body);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
+  if (!templateValidation.ok) { sendValidationError(res, templateValidation.message); return; }
   if (!body.name?.trim()) { sendValidationError(res, 'name is required'); return; }
   const platforms = cleanPlatforms(body.platforms?.length ? body.platforms : [body.platform]);
   if (!platforms.length) { sendValidationError(res, 'Select at least one supported platform'); return; }
@@ -629,7 +634,9 @@ router.post('/', requireBrandRole('client_owner'), requireBrandAccess, requireTo
 router.patch('/:campaign_id', requireBrandRole('client_owner'), requireBrandAccess, requireToolAccess('tool_10'), async (req: Request, res: Response) => {
   const campaignId = getRequiredBrandId(req.params['campaign_id']);
   const brandId = getRequiredBrandId(req.body?.brand_id);
+  const templateValidation = validateCampaignReplyTemplates(req.body ?? {});
   if (!campaignId || !brandId) { sendValidationError(res, 'campaign_id and brand_id must be positive integers'); return; }
+  if (!templateValidation.ok) { sendValidationError(res, templateValidation.message); return; }
   try {
     const existing = await prisma.engageCampaign.findFirst({ where: { campaignId: BigInt(campaignId), brandId } });
     if (!existing) { res.status(404).json({ error: 'Campaign not found' }); return; }

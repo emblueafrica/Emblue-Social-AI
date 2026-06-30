@@ -227,6 +227,7 @@ export default function EngageTheEngager() {
     retry: false,
     refetchInterval: 15000,
   });
+  const activityRefreshing = activityQuery.isFetching && !activityQuery.isLoading;
 
   const saveCampaignMutation = useMutation({
     mutationFn: saveCampaign,
@@ -481,6 +482,19 @@ export default function EngageTheEngager() {
       await activityQuery.refetch();
       await queryClient.invalidateQueries({ queryKey: ["campaigns", activeBrandId] });
       setToast(`Sync complete: ${result.captured} new, ${result.sent} sent, ${result.ignored} ignored, ${result.failed} failed.${result.errors.length ? ` ${result.errors.join(" ")}` : ""}`);
+    } catch (error) {
+      setApiNotice(apiErrorMessage(error));
+    }
+  };
+
+  const handleRefreshActivityFeed = async () => {
+    try {
+      if (activityCampaignId) {
+        await handleSyncCampaign(activityCampaignId);
+        return;
+      }
+      await activityQuery.refetch();
+      setToast("Live activity feed refreshed.");
     } catch (error) {
       setApiNotice(apiErrorMessage(error));
     }
@@ -934,11 +948,11 @@ export default function EngageTheEngager() {
             error={activityQuery.error}
             canMutate={canMutate}
             selectedCampaignId={activityCampaignId}
-            syncing={campaignSyncMutation.isPending}
+            syncing={campaignSyncMutation.isPending || activityRefreshing}
             mutating={campaignRetryMutation.isPending || campaignDismissMutation.isPending}
             drafts={activityDrafts}
             onDraftChange={(id, value) => setActivityDrafts(current => ({ ...current, [id]: value }))}
-            onSync={() => activityCampaignId && void handleSyncCampaign(activityCampaignId)}
+            onSync={() => void handleRefreshActivityFeed()}
             onRetry={(id, reply) => void handleRetryEngagement(id, reply)}
             onDismiss={(id) => void handleDismissEngagement(id)}
             onExport={async () => {
@@ -1100,7 +1114,7 @@ function UnifiedActivityFeed({ data, loading, error, canMutate, selectedCampaign
       <div className="flex flex-wrap gap-2">
         <span className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-emerald-600"><span className="size-2 rounded-full bg-emerald-500" />Updating Live</span>
         <button onClick={() => void onExport()} className="shrink-0 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">Export CSV</button>
-        {canMutate && selectedCampaignId && <button onClick={onSync} disabled={syncing} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50"><RefreshCw className={`size-4 ${syncing ? "animate-spin" : ""}`} />{syncing ? "Syncing..." : "Sync now"}</button>}
+        {canMutate && <button onClick={onSync} disabled={syncing} className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50"><RefreshCw className={`size-4 ${syncing ? "animate-spin" : ""}`} />{syncing ? "Syncing..." : selectedCampaignId ? "Sync now" : "Refresh feed"}</button>}
       </div>
     </div>
     {loading && <p className="py-6 text-sm text-muted-foreground">Loading activity...</p>}
