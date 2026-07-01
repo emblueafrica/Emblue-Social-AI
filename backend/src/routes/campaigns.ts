@@ -92,11 +92,12 @@ function cleanModeConfig(value: unknown): Prisma.InputJsonObject {
   }
   const location = validateXLocationFilter({
     country: typeof input['location_country'] === 'string' ? input['location_country'] : undefined,
+    places: Array.isArray(input['location_places']) ? input['location_places'].filter((place): place is string => typeof place === 'string') : undefined,
     place: typeof input['location_place'] === 'string' ? input['location_place'] : undefined,
   });
   if (location.ok) {
     if (location.location.country) output['location_country'] = location.location.country;
-    if (location.location.place) output['location_place'] = location.location.place;
+    if (location.location.places?.length) output['location_places'] = location.location.places;
   }
   return output as Prisma.InputJsonObject;
 }
@@ -105,6 +106,7 @@ function validateCampaignLocationModeConfig(value: unknown) {
   const config = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
   return validateXLocationFilter({
     country: typeof config['location_country'] === 'string' ? config['location_country'] : undefined,
+    places: Array.isArray(config['location_places']) ? config['location_places'].filter((place): place is string => typeof place === 'string') : undefined,
     place: typeof config['location_place'] === 'string' ? config['location_place'] : undefined,
   });
 }

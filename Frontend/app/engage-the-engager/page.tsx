@@ -89,7 +89,7 @@ const seedDraft = (over: Partial<CampaignDraft>): CampaignDraft => ({
   skipReposts: true,
   skipNewAccountsDays: 0,
   locationCountry: "",
-  locationPlace: "",
+  locationPlaces: [],
   ...over,
 });
 
@@ -144,7 +144,11 @@ function mapCampaignRecord(record: CampaignRecord): Campaign {
     skipReposts: record.mode_config?.skip_reposts !== false,
     skipNewAccountsDays: Number(record.mode_config?.skip_accounts_newer_than_days ?? 0),
     locationCountry: String(record.mode_config?.location_country ?? ""),
-    locationPlace: String(record.mode_config?.location_place ?? ""),
+    locationPlaces: Array.isArray(record.mode_config?.location_places)
+      ? record.mode_config.location_places.map(String).filter(Boolean).slice(0, 10)
+      : record.mode_config?.location_place
+        ? [String(record.mode_config.location_place)]
+        : [],
   });
 
   return {
@@ -341,7 +345,7 @@ export default function EngageTheEngager() {
       skip_reposts: campaign.skipReposts,
       skip_accounts_newer_than_days: campaign.skipNewAccountsDays,
       location_country: campaign.locationCountry,
-      location_place: campaign.locationPlace,
+      location_places: campaign.locationPlaces,
     },
     selected_posts:
       campaign.sourceMode === "existing" ||
@@ -402,7 +406,7 @@ export default function EngageTheEngager() {
             skip_reposts: campaign.skipReposts,
             skip_accounts_newer_than_days: campaign.skipNewAccountsDays,
             location_country: campaign.locationCountry,
-            location_place: campaign.locationPlace,
+            location_places: campaign.locationPlaces,
           },
           public_reply_enabled: campaign.publicReplyEnabled,
           direct_message_enabled: campaign.directMessageEnabled,

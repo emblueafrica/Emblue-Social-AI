@@ -1,5 +1,15 @@
 export type IsoCountry = { code: string; name: string };
 
+export const PLACE_SUGGESTIONS_BY_COUNTRY: Record<string, string[]> = {
+  NG: ["Lagos", "Ibadan", "Abuja", "Port Harcourt", "Kano", "Benin City", "Abeokuta", "Ilorin", "Enugu", "Jos", "Kaduna", "Owerri"],
+  GH: ["Accra", "Kumasi", "Tamale", "Takoradi", "Cape Coast"],
+  KE: ["Nairobi", "Mombasa", "Kisumu", "Nakuru", "Eldoret"],
+  ZA: ["Johannesburg", "Cape Town", "Durban", "Pretoria", "Port Elizabeth"],
+  GB: ["London", "Birmingham", "Manchester", "Leeds", "Glasgow", "Liverpool"],
+  US: ["New York City", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia"],
+  CA: ["Toronto", "Vancouver", "Montreal", "Calgary", "Ottawa"],
+};
+
 export const ISO_COUNTRIES: IsoCountry[] = [
   { code: "AF", name: "Afghanistan" },
   { code: "AL", name: "Albania" },
