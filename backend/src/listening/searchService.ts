@@ -266,6 +266,7 @@ export async function runListeningSearch(runId: number): Promise<void> {
     : {};
   const xLocation = {
     country: typeof modeConfig['location_country'] === 'string' ? modeConfig['location_country'] : undefined,
+    places: Array.isArray(modeConfig['location_places']) ? modeConfig['location_places'].filter((place): place is string => typeof place === 'string') : undefined,
     place: typeof modeConfig['location_place'] === 'string' ? modeConfig['location_place'] : undefined,
   };
 

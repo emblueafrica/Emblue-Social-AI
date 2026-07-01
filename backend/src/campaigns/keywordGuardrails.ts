@@ -30,11 +30,12 @@ export type KeywordMatchDecision = {
 export type XLocationFilter = {
   country?: string | null;
   place?: string | null;
+  places?: string[] | null;
 };
 
 export type ValidatedXLocationFilter = {
   country?: string;
-  place?: string;
+  places?: string[];
 };
 
 function normalizeForMatch(value: string): string {
@@ -87,18 +88,26 @@ export function validateXLocationFilter(location: XLocationFilter):
   | { ok: true; location: ValidatedXLocationFilter }
   | { ok: false; message: string } {
   const country = location.country?.trim().toUpperCase() ?? '';
-  const place = location.place?.trim().replace(/\s+/g, ' ') ?? '';
+  const rawPlaces = Array.isArray(location.places)
+    ? location.places
+    : location.place
+      ? [location.place]
+      : [];
+  const places = Array.from(new Set(rawPlaces.map(place => place.trim().replace(/\s+/g, ' ')).filter(Boolean)));
   if (country && !/^[A-Z]{2}$/.test(country)) {
     return { ok: false, message: 'Country must be a two-letter ISO country code, for example NG.' };
   }
-  if (place.length > 80) {
+  if (places.length > 10) {
+    return { ok: false, message: 'Select no more than 10 cities or places.' };
+  }
+  if (places.some(place => place.length > 80)) {
     return { ok: false, message: 'City or place must be 80 characters or fewer.' };
   }
   return {
     ok: true,
     location: {
       ...(country ? { country } : {}),
-      ...(place ? { place } : {}),
+      ...(places.length ? { places } : {}),
     },
   };
 }
@@ -111,7 +120,11 @@ export function buildXRecentSearchKeywordQuery(keyword: string, location: XLocat
   const filters = validated.ok
     ? [
         validated.location.country ? `place_country:${validated.location.country}` : '',
-        validated.location.place ? `place:"${validated.location.place.replace(/["\\]/g, '\\$&')}"` : '',
+        validated.location.places?.length === 1
+          ? `place:"${validated.location.places[0]!.replace(/["\\]/g, '\\$&')}"`
+          : validated.location.places?.length
+            ? `(${validated.location.places.map(place => `place:"${place.replace(/["\\]/g, '\\$&')}"`).join(' OR ')})`
+            : '',
       ].filter(Boolean)
     : [];
   return [searchTerm, ...filters, '-is:retweet'].join(' ');

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, FileUp, Pause, Trash2, X } from "lucide-react";
+import { Check, ChevronsUpDown, Eye, FileUp, Pause, Trash2, X } from "lucide-react";
 import { PlatformLogo } from "@/components/PlatformLogo";
 import {
   Select,
@@ -8,6 +8,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import {
   uploadCampaignMedia,
   type CampaignEventSettings,
@@ -17,7 +19,7 @@ import {
   CAMPAIGN_REPLY_TEMPLATE_LIMIT,
   clampCampaignReplyTemplate,
 } from "@/lib/campaign-limits";
-import { ISO_COUNTRIES } from "@/lib/countries";
+import { ISO_COUNTRIES, PLACE_SUGGESTIONS_BY_COUNTRY } from "@/lib/countries";
 
 export type Platform = "instagram" | "facebook" | "tiktok" | "x";
 export type CampaignDraft = {
@@ -54,7 +56,7 @@ export type CampaignDraft = {
   skipReposts: boolean;
   skipNewAccountsDays: number;
   locationCountry: string;
-  locationPlace: string;
+  locationPlaces: string[];
 };
 
 const PLATFORM_OPTIONS: { id: Platform; label: string }[] = [
@@ -135,7 +137,7 @@ function blankDraft(): CampaignDraft {
     skipReposts: true,
     skipNewAccountsDays: 0,
     locationCountry: "",
-    locationPlace: "",
+    locationPlaces: [],
   };
 }
 
@@ -856,14 +858,11 @@ export function NewCampaignModal({
                         </Select>
                       </div>
                       <div>
-                        <label className="mb-1 block text-xs font-medium text-muted-foreground">City or place</label>
-                        <input
-                          value={draft.locationPlace}
-                          onChange={(event) => update("locationPlace", event.target.value.slice(0, 80))}
-                          className="input"
-                          maxLength={80}
-                          placeholder="Lagos"
-                          aria-label="X city or place"
+                        <label className="mb-1 block text-xs font-medium text-muted-foreground">Cities or places</label>
+                        <PlaceMultiSelect
+                          country={draft.locationCountry}
+                          values={draft.locationPlaces}
+                          onChange={(values) => update("locationPlaces", values)}
                         />
                       </div>
                     </div>
@@ -989,6 +988,94 @@ function Field({
       <span className="mb-2 block text-sm font-semibold">{label}</span>
       {children}
     </label>
+  );
+}
+
+function PlaceMultiSelect({
+  country,
+  values,
+  onChange,
+}: {
+  country: string;
+  values: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const suggestions = (PLACE_SUGGESTIONS_BY_COUNTRY[country] ?? [])
+    .filter((place) => !values.some((value) => value.toLowerCase() === place.toLowerCase()))
+    .filter((place) => place.toLowerCase().includes(search.trim().toLowerCase()));
+
+  const addPlace = (candidate: string) => {
+    const place = candidate.trim().replace(/\s+/g, " ").slice(0, 80);
+    if (!place || values.length >= 10 || values.some((value) => value.toLowerCase() === place.toLowerCase())) return;
+    onChange([...values, place]);
+    setSearch("");
+  };
+
+  return (
+    <div>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="flex h-11 w-full items-center justify-between rounded-lg border border-border bg-background px-3 text-sm shadow-none outline-none focus:ring-2 focus:ring-primary/20"
+            aria-label="Select X cities or places"
+          >
+            <span className={values.length ? "text-foreground" : "text-muted-foreground"}>
+              {values.length ? `${values.length} ${values.length === 1 ? "place" : "places"} selected` : "Select or add places"}
+            </span>
+            <ChevronsUpDown className="size-4 text-muted-foreground" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] rounded-lg p-0 shadow-xl">
+          <Command shouldFilter={false}>
+            <CommandInput
+              value={search}
+              onValueChange={setSearch}
+              placeholder="Search or type a place..."
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && search.trim()) {
+                  event.preventDefault();
+                  addPlace(search);
+                }
+              }}
+            />
+            <CommandList>
+              <CommandEmpty>
+                {search.trim() ? `Press Enter to add "${search.trim()}"` : "Type a city or place"}
+              </CommandEmpty>
+              <CommandGroup heading={country ? "Suggested places" : "Places"}>
+                {suggestions.map((place) => (
+                  <CommandItem key={place} value={place} onSelect={() => addPlace(place)} className="py-2.5">
+                    <Check className="size-4 opacity-0" />
+                    {place}
+                  </CommandItem>
+                ))}
+                {search.trim() && !suggestions.some((place) => place.toLowerCase() === search.trim().toLowerCase()) && (
+                  <CommandItem value={`add-${search}`} onSelect={() => addPlace(search)} className="py-2.5 text-primary">
+                    Add "{search.trim()}"
+                  </CommandItem>
+                )}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      {values.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {values.map((place) => (
+            <span key={place} className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              <span className="truncate">{place}</span>
+              <button type="button" onClick={() => onChange(values.filter((value) => value !== place))} className="rounded-full p-0.5 hover:bg-primary/10" aria-label={`Remove ${place}`}>
+                <X className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <p className="mt-1 text-[11px] text-muted-foreground">Up to 10 places. Type a place and press Enter to add it.</p>
+    </div>
   );
 }
 
