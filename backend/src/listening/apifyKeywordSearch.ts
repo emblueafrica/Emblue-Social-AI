@@ -1,7 +1,7 @@
 import { ApifyClient } from 'apify-client';
 import { Platform } from '../types';
 import { KeywordSearchResult, NormalizedSearchItem } from './types';
-import { buildXRecentSearchKeywordQuery, evaluateStrictKeywordMatch, validateKeywordGuardrails } from '../campaigns/keywordGuardrails';
+import { buildXRecentSearchKeywordQuery, evaluateStrictKeywordMatch, validateKeywordGuardrails, XLocationFilter } from '../campaigns/keywordGuardrails';
 
 const ACTOR_IDS: Record<Platform, string | null> = {
   instagram: 'apify/instagram-search-scraper',
@@ -18,6 +18,7 @@ interface PlatformKeywordSearchInput {
   dateFrom?: Date | null;
   dateTo?: Date | null;
   maxItems?: number;
+  location?: XLocationFilter;
 }
 
 function asString(value: unknown): string | null {
@@ -127,6 +128,7 @@ function normalizeApifyItems(item: Record<string, unknown>, platform: Platform, 
 function normalizeXRecentSearchTweet(
   tweet: Record<string, unknown>,
   users: Map<string, Record<string, unknown>>,
+  places: Map<string, Record<string, unknown>>,
   matchedKeyword: string,
 ): NormalizedSearchItem | null {
   const text = asString(tweet['text']);
@@ -139,6 +141,9 @@ function normalizeXRecentSearchTweet(
   const publicMetrics = typeof tweet['public_metrics'] === 'object' && tweet['public_metrics'] !== null && !Array.isArray(tweet['public_metrics'])
     ? tweet['public_metrics'] as Record<string, unknown>
     : {};
+  const geo = nestedRecord(tweet, 'geo');
+  const placeId = asString(geo['place_id']);
+  const place = placeId ? places.get(placeId) : undefined;
 
   return {
     platform: 'x',
@@ -152,7 +157,7 @@ function normalizeXRecentSearchTweet(
     repliesCount: asNumber(publicMetrics['reply_count']),
     shares: asNumber(publicMetrics['retweet_count']),
     views: asNumber(publicMetrics['impression_count']),
-    raw: tweet,
+    raw: { ...tweet, author: user ?? null, place: place ?? null },
   };
 }
 
@@ -163,6 +168,7 @@ async function runXRecentSearchForKeyword(input: PlatformKeywordSearchInput): Pr
   try {
     const requested = Math.max(1, input.maxItems ?? 100);
     const users = new Map<string, Record<string, unknown>>();
+    const places = new Map<string, Record<string, unknown>>();
     const items: NormalizedSearchItem[] = [];
     let nextToken: string | undefined;
 
@@ -170,11 +176,12 @@ async function runXRecentSearchForKeyword(input: PlatformKeywordSearchInput): Pr
       const remaining = requested - items.length;
       const maxResults = Math.max(10, Math.min(100, remaining));
       const params = new URLSearchParams({
-        query: buildXRecentSearchKeywordQuery(input.keyword),
+        query: buildXRecentSearchKeywordQuery(input.keyword, input.location),
         max_results: String(maxResults),
-        'tweet.fields': 'author_id,created_at,conversation_id,public_metrics',
-        expansions: 'author_id',
-        'user.fields': 'username,name,verified,public_metrics,created_at',
+        'tweet.fields': 'author_id,created_at,conversation_id,public_metrics,geo',
+        expansions: 'author_id,geo.place_id',
+        'user.fields': 'username,name,verified,public_metrics,created_at,location',
+        'place.fields': 'id,name,full_name,country,country_code,place_type,geo',
       });
       const startDate = input.dateFrom?.toISOString();
       const endDate = input.dateTo?.toISOString();
@@ -187,7 +194,7 @@ async function runXRecentSearchForKeyword(input: PlatformKeywordSearchInput): Pr
       });
       const body = await response.json() as {
         data?: Record<string, unknown>[];
-        includes?: { users?: Record<string, unknown>[] };
+        includes?: { users?: Record<string, unknown>[]; places?: Record<string, unknown>[] };
         errors?: { message?: string; detail?: string }[];
         meta?: { next_token?: string };
         title?: string;
@@ -206,9 +213,13 @@ async function runXRecentSearchForKeyword(input: PlatformKeywordSearchInput): Pr
         const id = asString(user['id']);
         if (id) users.set(id, user);
       }
+      for (const place of body.includes?.places ?? []) {
+        const id = asString(place['id']);
+        if (id) places.set(id, place);
+      }
 
       const pageItems = (body.data ?? [])
-        .map(tweet => normalizeXRecentSearchTweet(tweet, users, input.keyword))
+        .map(tweet => normalizeXRecentSearchTweet(tweet, users, places, input.keyword))
         .filter((item): item is NormalizedSearchItem => Boolean(item));
       items.push(...pageItems);
       nextToken = body.meta?.next_token;
@@ -275,8 +286,8 @@ export async function searchInstagramKeyword(keyword: string, dateFrom?: Date | 
   return runActorForKeyword('instagram', { keyword, dateFrom, dateTo, maxItems });
 }
 
-export async function searchXKeyword(keyword: string, dateFrom?: Date | null, dateTo?: Date | null, maxItems?: number): Promise<KeywordSearchResult> {
-  return runXRecentSearchForKeyword({ keyword, dateFrom, dateTo, maxItems });
+export async function searchXKeyword(keyword: string, dateFrom?: Date | null, dateTo?: Date | null, maxItems?: number, location?: XLocationFilter): Promise<KeywordSearchResult> {
+  return runXRecentSearchForKeyword({ keyword, dateFrom, dateTo, maxItems, location });
 }
 
 export async function searchRedditKeyword(keyword: string, dateFrom?: Date | null, dateTo?: Date | null, maxItems?: number): Promise<KeywordSearchResult> {
@@ -301,6 +312,7 @@ export async function runKeywordSearch(params: {
   dateFrom?: Date | null;
   dateTo?: Date | null;
   maxItemsPerPlatform?: number;
+  xLocation?: XLocationFilter;
 }): Promise<KeywordSearchResult> {
   const items: NormalizedSearchItem[] = [];
   const errors: string[] = [];
@@ -316,7 +328,7 @@ export async function runKeywordSearch(params: {
     for (const platform of params.platforms) {
       const result =
         platform === 'instagram' ? await searchInstagramKeyword(keyword, params.dateFrom, params.dateTo, params.maxItemsPerPlatform) :
-        platform === 'x' ? await searchXKeyword(keyword, params.dateFrom, params.dateTo, params.maxItemsPerPlatform) :
+        platform === 'x' ? await searchXKeyword(keyword, params.dateFrom, params.dateTo, params.maxItemsPerPlatform, params.xLocation) :
         platform === 'reddit' ? await searchRedditKeyword(keyword, params.dateFrom, params.dateTo, params.maxItemsPerPlatform) :
         platform === 'youtube' ? await searchYouTubeKeyword(keyword, params.dateFrom, params.dateTo, params.maxItemsPerPlatform) :
         platform === 'tiktok' ? await searchTikTokKeyword(keyword, params.dateFrom, params.dateTo, params.maxItemsPerPlatform) :

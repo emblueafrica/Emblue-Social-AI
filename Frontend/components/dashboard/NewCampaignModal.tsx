@@ -2,6 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Eye, FileUp, Pause, Trash2, X } from "lucide-react";
 import { PlatformLogo } from "@/components/PlatformLogo";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   uploadCampaignMedia,
   type CampaignEventSettings,
   type CampaignMedia,
@@ -10,6 +17,7 @@ import {
   CAMPAIGN_REPLY_TEMPLATE_LIMIT,
   clampCampaignReplyTemplate,
 } from "@/lib/campaign-limits";
+import { ISO_COUNTRIES } from "@/lib/countries";
 
 export type Platform = "instagram" | "facebook" | "tiktok" | "x";
 export type CampaignDraft = {
@@ -45,6 +53,8 @@ export type CampaignDraft = {
   skipVerified: boolean;
   skipReposts: boolean;
   skipNewAccountsDays: number;
+  locationCountry: string;
+  locationPlace: string;
 };
 
 const PLATFORM_OPTIONS: { id: Platform; label: string }[] = [
@@ -124,6 +134,8 @@ function blankDraft(): CampaignDraft {
     skipVerified: false,
     skipReposts: true,
     skipNewAccountsDays: 0,
+    locationCountry: "",
+    locationPlace: "",
   };
 }
 
@@ -820,6 +832,44 @@ export function NewCampaignModal({
                     onChange={() => update("skipReposts", !draft.skipReposts)}
                   />
                 </div>
+                {draft.platforms.includes("x") && (
+                  <div className="mt-4 rounded-lg border bg-muted/20 p-4">
+                    <p className="mb-3 text-sm font-semibold">X location targeting</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-muted-foreground">Country code</label>
+                        <Select
+                          value={draft.locationCountry || "worldwide"}
+                          onValueChange={(value) => update("locationCountry", value === "worldwide" ? "" : value)}
+                        >
+                          <SelectTrigger className="h-11 rounded-lg border-border bg-background px-3 shadow-none focus:ring-2 focus:ring-primary/20" aria-label="X location country">
+                            <SelectValue placeholder="Select country" />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-72 rounded-lg border-border shadow-xl">
+                            <SelectItem value="worldwide" className="rounded-md py-2.5 font-medium">Worldwide</SelectItem>
+                            {ISO_COUNTRIES.map((country) => (
+                              <SelectItem key={country.code} value={country.code} className="rounded-md py-2.5">
+                                {country.name} ({country.code})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-muted-foreground">City or place</label>
+                        <input
+                          value={draft.locationPlace}
+                          onChange={(event) => update("locationPlace", event.target.value.slice(0, 80))}
+                          className="input"
+                          maxLength={80}
+                          placeholder="Lagos"
+                          aria-label="X city or place"
+                        />
+                      </div>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">Uses location metadata attached to X posts. Leave both fields empty to search worldwide.</p>
+                  </div>
+                )}
               </Field>
             )}
 

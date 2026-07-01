@@ -256,8 +256,18 @@ async function broadcastSearchAlerts(
 export async function runListeningSearch(runId: number): Promise<void> {
   const run = await prisma.searchRun.findUnique({ where: { runId: BigInt(runId) } });
   if (!run) throw new Error(`Search run ${runId} not found`);
-  const group = run.groupId ? await prisma.keywordGroup.findUnique({ where: { groupId: run.groupId }, select: { source: true } }) : null;
+  const group = run.groupId ? await prisma.keywordGroup.findUnique({ where: { groupId: run.groupId }, select: { source: true, campaignId: true } }) : null;
   const campaignOwned = group?.source === 'campaign';
+  const campaign = campaignOwned && group?.campaignId
+    ? await prisma.engageCampaign.findUnique({ where: { campaignId: group.campaignId }, select: { modeConfig: true } })
+    : null;
+  const modeConfig = campaign?.modeConfig && typeof campaign.modeConfig === 'object' && !Array.isArray(campaign.modeConfig)
+    ? campaign.modeConfig as Record<string, unknown>
+    : {};
+  const xLocation = {
+    country: typeof modeConfig['location_country'] === 'string' ? modeConfig['location_country'] : undefined,
+    place: typeof modeConfig['location_place'] === 'string' ? modeConfig['location_place'] : undefined,
+  };
 
   await prisma.searchRun.update({
     where: { runId: BigInt(runId) },
@@ -272,6 +282,7 @@ export async function runListeningSearch(runId: number): Promise<void> {
       dateFrom: run.dateFrom,
       dateTo: run.dateTo,
       maxItemsPerPlatform: campaignOwned ? 10 : run.mode === 'historical' ? 300 : 75,
+      xLocation: campaignOwned ? xLocation : undefined,
     });
 
     const rawItems = dedupeItems(keywordResult.items);

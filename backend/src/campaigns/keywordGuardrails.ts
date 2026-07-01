@@ -27,6 +27,16 @@ export type KeywordMatchDecision = {
   reason?: string;
 };
 
+export type XLocationFilter = {
+  country?: string | null;
+  place?: string | null;
+};
+
+export type ValidatedXLocationFilter = {
+  country?: string;
+  place?: string;
+};
+
 function normalizeForMatch(value: string): string {
   return value
     .toLowerCase()
@@ -73,11 +83,38 @@ function containsTerm(text: string, term: string): boolean {
   return new RegExp(`(^|[^a-z0-9_])${normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9_]|$)`, 'i').test(text);
 }
 
-export function buildXRecentSearchKeywordQuery(keyword: string): string {
+export function validateXLocationFilter(location: XLocationFilter):
+  | { ok: true; location: ValidatedXLocationFilter }
+  | { ok: false; message: string } {
+  const country = location.country?.trim().toUpperCase() ?? '';
+  const place = location.place?.trim().replace(/\s+/g, ' ') ?? '';
+  if (country && !/^[A-Z]{2}$/.test(country)) {
+    return { ok: false, message: 'Country must be a two-letter ISO country code, for example NG.' };
+  }
+  if (place.length > 80) {
+    return { ok: false, message: 'City or place must be 80 characters or fewer.' };
+  }
+  return {
+    ok: true,
+    location: {
+      ...(country ? { country } : {}),
+      ...(place ? { place } : {}),
+    },
+  };
+}
+
+export function buildXRecentSearchKeywordQuery(keyword: string, location: XLocationFilter = {}): string {
   const clean = normalizeCampaignKeyword(keyword);
   const phrase = unquote(clean);
   const searchTerm = isPhrase(clean) ? `"${phrase.replace(/"/g, '\\"')}"` : phrase;
-  return `${searchTerm} -is:retweet`;
+  const validated = validateXLocationFilter(location);
+  const filters = validated.ok
+    ? [
+        validated.location.country ? `place_country:${validated.location.country}` : '',
+        validated.location.place ? `place:"${validated.location.place.replace(/["\\]/g, '\\$&')}"` : '',
+      ].filter(Boolean)
+    : [];
+  return [searchTerm, ...filters, '-is:retweet'].join(' ');
 }
 
 export function validateKeywordGuardrails(keywords: string[]): { ok: boolean; message?: string; normalized: string[] } {
