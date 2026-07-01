@@ -16,7 +16,7 @@ import { fetchPostUrlCampaignPreview, runPostUrlCampaignPreview } from '../campa
 import { prepareCampaignDelivery } from '../campaigns/deliveryWorker';
 import { enqueueCampaignDelivery, isBullEnabled } from '../queue/jobs';
 import { withSchedulerLease } from '../automation/schedulerLease';
-import { normalizeCampaignKeyword, validateKeywordGuardrails } from '../campaigns/keywordGuardrails';
+import { normalizeCampaignKeyword, validateKeywordGuardrails, validateXLocationFilter } from '../campaigns/keywordGuardrails';
 import { validateCampaignReplyTemplates } from '../campaigns/templateValidation';
 import { CampaignConfig, PostUrlItem, Credentials, Intent, Platform } from '../types';
 import {
@@ -90,7 +90,23 @@ function cleanModeConfig(value: unknown): Prisma.InputJsonObject {
     const parsed = boundedInteger(input[key], 0, 0, max);
     if (parsed !== null) output[key] = parsed;
   }
+  const location = validateXLocationFilter({
+    country: typeof input['location_country'] === 'string' ? input['location_country'] : undefined,
+    place: typeof input['location_place'] === 'string' ? input['location_place'] : undefined,
+  });
+  if (location.ok) {
+    if (location.location.country) output['location_country'] = location.location.country;
+    if (location.location.place) output['location_place'] = location.location.place;
+  }
   return output as Prisma.InputJsonObject;
+}
+
+function validateCampaignLocationModeConfig(value: unknown) {
+  const config = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return validateXLocationFilter({
+    country: typeof config['location_country'] === 'string' ? config['location_country'] : undefined,
+    place: typeof config['location_place'] === 'string' ? config['location_place'] : undefined,
+  });
 }
 
 function csvCell(value: unknown): string {
@@ -384,11 +400,13 @@ router.post('/keyword', requireBrandRole('client_owner'), requireBrandAccess, re
   const ctaLink = typeof body.cta_link === 'string' ? body.cta_link.trim().slice(0, 2048) : '';
   const imageUrl = typeof body.image_url === 'string' ? body.image_url.trim().slice(0, 2048) : '';
   const templateValidation = validateCampaignReplyTemplates(body);
+  const locationValidation = validateCampaignLocationModeConfig(req.body?.mode_config);
   if (!brandId) { sendValidationError(res, 'brand_id must be a positive integer'); return; }
   if (maxDmPerDay === null || spacingMinutes === null || priority === null) { sendValidationError(res, 'Keyword campaign limits are outside the supported range'); return; }
   if (body.campaign_id !== undefined && !campaignId) { sendValidationError(res, 'campaign_id must be a positive integer'); return; }
   if (!name || name.length > 120) { sendValidationError(res, 'name is required and must be 120 characters or fewer'); return; }
   if (!templateValidation.ok) { sendValidationError(res, templateValidation.message); return; }
+  if (!locationValidation.ok) { sendValidationError(res, locationValidation.message); return; }
   const validation = validateKeywordCampaignInput({ keywords, platforms, intent_filter: intents, confidence_threshold: confidenceThreshold, urgency_threshold: urgencyThreshold, max_per_day: maxPerDay, public_reply_enabled: publicReplyEnabled, direct_message_enabled: directMessageEnabled });
   if (!validation.ok) { sendValidationError(res, validation.message ?? 'Invalid keyword campaign'); return; }
   const replyTemplateId = body.reply_template_id === null || body.reply_template_id === undefined ? null : getRequiredBrandId(body.reply_template_id);

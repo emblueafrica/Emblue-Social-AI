@@ -5,13 +5,13 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
-  Search,
-  Layers,
+  // Search,
+  // Layers,
   MessageSquare,
   MessageCircle,
-  Link2,
-  Palette,
-  Lightbulb,
+  // Link2,
+  // Palette,
+  // Lightbulb,
   Gauge,
   Users,
   Settings,
@@ -35,13 +35,14 @@ const navGroups: NavGroup[] = [
       { icon: Gauge, label: "Social Response", to: "/social-response", toolId: "tool_5" },
     ],
   },
-  {
-    label: "LISTEN",
-    items: [
-      { icon: Search, label: "Advanced Listening", to: "/listening", toolId: "tool_1" },
-      { icon: Layers, label: "Search & Clustering", to: "/search-clustering", toolId: "tool_2" },
-    ],
-  },
+  // Hidden for TikTok approval: these tools currently use shared workspace pages.
+  // {
+  //   label: "LISTEN",
+  //   items: [
+  //     { icon: Search, label: "Advanced Listening", to: "/listening", toolId: "tool_1" },
+  //     { icon: Layers, label: "Search & Clustering", to: "/search-clustering", toolId: "tool_2" },
+  //   ],
+  // },
   {
     label: "RESPOND",
     items: [
@@ -49,24 +50,26 @@ const navGroups: NavGroup[] = [
       { icon: MessageSquare, label: "Approval Queue", to: "/approval-queue", toolId: "tool_3" },
     ],
   },
-  {
-    label: "CONVERT",
-    items: [
-      { icon: MessageSquare, label: "Comment to DM Funnel", to: "/funnels", toolId: "tool_4" },
-      { icon: Link2, label: "Attribution & Links", to: "/attribution", toolId: "tool_6" },
-    ],
-  },
-  {
-    label: "CREATE & INSIGHTS",
-    items: [
-      { icon: Palette, label: "Creative Predictor", to: "/creative-predictor", toolId: "tool_7" },
-      { icon: Lightbulb, label: "Comment Mining", to: "/comment-mining", toolId: "tool_8" },
-    ],
-  },
+  // Hidden for TikTok approval: these tools currently use shared workspace pages.
+  // {
+  //   label: "CONVERT",
+  //   items: [
+  //     { icon: MessageSquare, label: "Comment to DM Funnel", to: "/funnels", toolId: "tool_4" },
+  //     { icon: Link2, label: "Attribution & Links", to: "/attribution", toolId: "tool_6" },
+  //   ],
+  // },
+  // {
+  //   label: "CREATE & INSIGHTS",
+  //   items: [
+  //     { icon: Palette, label: "Creative Predictor", to: "/creative-predictor", toolId: "tool_7" },
+  //     { icon: Lightbulb, label: "Comment Mining", to: "/comment-mining", toolId: "tool_8" },
+  //   ],
+  // },
   {
     label: "OPERATIONS",
     items: [
-      { icon: Gauge, label: "Campaign War Room", to: "/war-room", toolId: "tool_9" },
+      // Hidden for TikTok approval: this tool currently uses a shared workspace page.
+      // { icon: Gauge, label: "Campaign War Room", to: "/war-room", toolId: "tool_9" },
       { icon: Users, label: "Engage the Engager", to: "/engage-the-engager", toolId: "tool_10" },
     ],
   },
